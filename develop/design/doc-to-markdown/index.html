@@ -1464,6 +1464,23 @@ best-effort — see below), and an opt-in comments section.</p>
   next to ordinary text in the same paragraph — the one case it can't resolve (a paragraph
   containing <em>only</em> a single inline code span, nothing else) is the genuinely ambiguous case
   documented above, not a bug in the heuristic.</li>
+<li><strong>Code delimiters</strong> (#923, #940, #938): a code span's content is literal, so the serializer
+  can only pick a delimiter and padding. A fenced block's fence and an inline span's delimiter
+  are one backtick longer than the longest backtick run in the content (fences at least 3).
+  An inline span is padded with one space a side when its content starts or ends with a
+  backtick, or starts <em>and</em> ends with a space (CommonMark strips one space from each end in that
+  case). Adjacent code runs sharing a link merge into one span, since two spans side by side
+  would read as one. An inline code run's line breaks become <code>&lt;br&gt;</code> between separate spans: a
+  span can't hold a line break, and a raw newline could start a new block. In a table cell, a
+  code line containing <code>|</code> renders as raw HTML <code>&lt;code&gt;</code>, because the GFM <code>\|</code> escape shows its
+  backslash in renderers that don't implement it. Text inside raw HTML is still parsed as
+  Markdown, so every ASCII punctuation character in that line becomes a numeric entity
+  (<code>&amp;#124;</code>, <code>&amp;#42;</code>, <code>&amp;#92;</code>, ...). Line breaks at either end of a linked code run go outside the
+  link. Because the exporter writes its own <code>&lt;br&gt;</code>/<code>&lt;code&gt;</code> HTML, plain text escapes <code>~</code>, a <code>&lt;</code>
+  that could open a tag, and an <code>&amp;</code> that starts an entity, so typed markup can't pass for
+  exporter markup. The export tests
+  check these against a strict CommonMark parser (<code>markdown-it-py</code>), since Python-Markdown
+  strips whitespace in code spans and closes a fence only on an exact-length match.</li>
 <li><strong>Tight vs. loose lists</strong>: consecutive <code>BulletItem</code> nodes are joined with a single <code>"\n"</code>
   rather than the <code>"\n\n"</code> used between other block types — CommonMark still parses a
   blank-line-separated run of list items as one list either way (just "loose", wrapped in <code>&lt;p&gt;</code>
