@@ -21,11 +21,21 @@ Known, deliberate gaps (documented rather than silently dropped):
 from __future__ import annotations
 
 import re
+import string
 
 from .ast import BulletItem, Cell, DocNode, Heading, Image, NamedBlock, Paragraph, Run, Table
 from .emitter import _build_phantom_set
 
-_MD_ESCAPE = re.compile(r"([\\`*_\[\]])")
+# Characters in plain text that Markdown would otherwise read as syntax. "~" is
+# GFM strikethrough. "<" only when it could open an HTML tag or autolink, and
+# "&" only when it starts an entity reference, so ordinary prose ("a < b",
+# "AT&T") stays readable. Exported text must not be mistaken for the <br> and
+# <code> HTML the exporter writes itself (#938).
+_MD_ESCAPE = re.compile(
+    r"[\\`*_\[\]~]"
+    r"|<(?=[A-Za-z/!?])"
+    r"|&(?=#[0-9]{1,7};|#[xX][0-9a-fA-F]{1,6};|[A-Za-z][A-Za-z0-9]*;)"
+)
 _BACKTICK_RUN = re.compile(r"`+")
 
 # A paragraph whose rendered text starts with one of these (unescaped) would be
@@ -93,23 +103,16 @@ def _render_code_block(node: Paragraph) -> str:
     Run text did."""
     segments: list[str] = []
     buffer = ""
-
-    def fenced(text: str) -> str:
-        # Literal fences in the content must never close the surrounding block.
-        ticks = max((len(match.group()) for match in _BACKTICK_RUN.finditer(text)), default=0)
-        fence = "`" * max(3, ticks + 1)
-        return f"{fence}\n{text}\n{fence}"
-
     for item in node.runs:
         if isinstance(item, Run):
             buffer += item.text
         else:
             if buffer:
-                segments.append(fenced(buffer))
+                segments.append(_fenced_code_block(buffer))
                 buffer = ""
             segments.append(f"![{_escape(item.alt or '')}]({_md_link_dest(item.src)})")
     if buffer:
-        segments.append(fenced(buffer))
+        segments.append(_fenced_code_block(buffer))
     return "\n\n".join(segments)
 
 
@@ -171,7 +174,7 @@ def _md_link_dest(url: str) -> str:
 
 def _render_inline(items: list[Run | Image]) -> str:
     parts: list[str] = []
-    for item in items:
+    for item in _coalesce_code_runs(items):
         if isinstance(item, Image):
             parts.append(f"![{_escape(item.alt or '')}]({_md_link_dest(item.src)})")
         else:
@@ -179,22 +182,63 @@ def _render_inline(items: list[Run | Image]) -> str:
     return "".join(parts)
 
 
-def _render_run(run: Run) -> str:
+def _is_code_run(item: Run | Image | Table) -> bool:
+    return isinstance(item, Run) and item.font_family == "Courier New"
+
+
+def _coalesce_code_runs(items: list) -> list:
+    """Merge adjacent code runs that share a link. Docs splits a run at any
+    style change (bold, color), but rendered side by side two code spans
+    would read as one: `` `a``b` `` parses as the single span "a``b", since
+    the first span's closing delimiter and the second's opening one form one
+    backtick run. A code span can't carry those styles anyway, so the merge
+    loses nothing. Runs with different links stay apart; the link brackets
+    already separate them."""
+    merged: list = []
+    for item in items:
+        prev = merged[-1] if merged else None
+        if (
+            _is_code_run(item)
+            and prev is not None
+            and _is_code_run(prev)
+            and prev.link_url == item.link_url
+        ):
+            merged[-1] = Run(
+                text=prev.text + item.text, font_family="Courier New", link_url=prev.link_url
+            )
+        else:
+            merged.append(item)
+    return merged
+
+
+def _render_run(run: Run, in_table: bool = False) -> str:
+    """Markdown for one run. `in_table` makes the result safe inside a
+    pipe-table cell (see `_table_safe`)."""
     if run.text == "":
         return ""
     if run.font_family == "Courier New":
-        # Use a delimiter longer than any literal backtick sequence in the
-        # content, and separate edge backticks from that delimiter.
-        ticks = (
-            max((len(match.group()) for match in _BACKTICK_RUN.finditer(run.text)), default=0) + 1
-        )
-        fence = "`" * ticks
-        content = run.text
-        if content.startswith("`") or content.endswith("`"):
-            content = f" {content} "
-        body = f"{fence}{content}{fence}"
-        return f"[{body}]({_md_link_dest(run.link_url)})" if run.link_url else body
+        return _render_code_run(run, in_table)
+    body = _render_plain_run(run)
+    return _table_safe(body) if in_table else body
 
+
+def _render_code_run(run: Run, in_table: bool) -> str:
+    # Line breaks at either end go outside the link, so a cell's paragraph
+    # break (a leading "\n" from doc_to_ast) or a trailing soft break doesn't
+    # render as a <br> inside the <a>.
+    inner = run.text.strip("\n")
+    if not inner:
+        return "<br>" * len(run.text)
+    lead = "<br>" * (len(run.text) - len(run.text.lstrip("\n")))
+    trail = "<br>" * (len(run.text) - len(run.text.rstrip("\n")))
+    body = _render_code_run_text(inner, in_table)
+    if run.link_url:
+        dest = _md_link_dest(run.link_url)
+        body = f"[{body}]({_table_safe(dest) if in_table else dest})"
+    return f"{lead}{body}{trail}"
+
+
+def _render_plain_run(run: Run) -> str:
     # CommonMark emphasis delimiters can't have whitespace on the inner side
     # (e.g. "**Bold **" doesn't close — the space right before "**" means it
     # renders as literal asterisks, not bold). Keep leading/trailing
@@ -220,7 +264,64 @@ def _render_run(run: Run) -> str:
 
 
 def _escape(text: str) -> str:
-    return _MD_ESCAPE.sub(r"\\\1", text)
+    return _MD_ESCAPE.sub(lambda m: "\\" + m.group(), text)
+
+
+def _longest_backtick_run(text: str) -> int:
+    return max((len(match.group()) for match in _BACKTICK_RUN.finditer(text)), default=0)
+
+
+def _fenced_code_block(text: str) -> str:
+    # A fence must be longer than any backtick run in the content, or a
+    # literal ``` line inside the block would close it early.
+    fence = "`" * max(3, _longest_backtick_run(text) + 1)
+    return f"{fence}\n{text}\n{fence}"
+
+
+def _code_span(text: str) -> str:
+    """One CommonMark code span for `text` (which has no newline).
+
+    A code span's content is literal: backslash escapes don't work inside
+    it, so the only tools are the delimiter length and padding. The
+    delimiter is one backtick longer than the longest run in the content, so
+    no literal run can close the span. Padding is exactly one space a side
+    because CommonMark strips exactly one space from each end when both ends
+    have one (and the content isn't all spaces). That stripping is what
+    separates an edge backtick from the delimiter, and it would also eat a
+    real leading and trailing space, so both cases get padded."""
+    fence = "`" * (_longest_backtick_run(text) + 1)
+    pad = text.startswith("`") or text.endswith("`")
+    pad = pad or (text.startswith(" ") and text.endswith(" ") and text.strip(" ") != "")
+    if pad:
+        text = f" {text} "
+    return f"{fence}{text}{fence}"
+
+
+def _render_code_run_text(text: str, in_table: bool) -> str:
+    """Inline code for `text`, which may span lines.
+
+    A code span can't hold a line break: CommonMark turns one into a space,
+    and in a paragraph a raw newline can start a new block (a "# " heading,
+    a "- " item) before the span is parsed. So each line becomes its own
+    span, joined by <br> the same way a table cell joins its lines.
+
+    In a table cell, a "|" splits the cell before inline parsing, and the
+    GFM `\\|` escape inside a code span shows its backslash in renderers
+    that don't implement that rule. A line holding a "|" is written as raw
+    HTML <code> instead, which no table parser splits on. Text inside raw
+    HTML is still parsed as Markdown, so every ASCII punctuation character
+    becomes a numeric entity: an entity is never Markdown syntax, and a
+    backslash can't escape the "&" that starts one."""
+    spans: list[str] = []
+    for line in text.split("\n"):
+        if not line:
+            spans.append("")
+        elif in_table and "|" in line:
+            escaped = "".join(f"&#{ord(c)};" if c in string.punctuation else c for c in line)
+            spans.append(f"<code>{escaped}</code>")
+        else:
+            spans.append(_code_span(line))
+    return "<br>".join(spans)
 
 
 def _render_table(table: Table) -> str:
@@ -249,29 +350,38 @@ def _render_table(table: Table) -> str:
 
 def _render_cell(cell: Cell) -> str:
     parts: list[str] = []
-    for child in cell.children:
+    for child in _coalesce_code_runs(cell.children):
         if isinstance(child, Table):
             parts.append(_NESTED_TABLE_PLACEHOLDER)
         elif isinstance(child, Image):
-            parts.append(f"![{_escape(child.alt or '')}]({_md_link_dest(child.src)})")
+            parts.append(_table_safe(f"![{_escape(child.alt or '')}]({_md_link_dest(child.src)})"))
         else:
-            parts.append(_render_run(child))
-    # Pipe-table cells are single-line: a literal newline (from a multi-
-    # paragraph cell, see doc_to_ast.py's _cell_content_to_children) would
-    # break the table's row structure, so it becomes a <br> instead. "|" is
-    # escaped for the same structural reason.
-    #
-    # \n -> <br> conversion must happen BEFORE strip(), not after (#594 QA
-    # round 2): a spacer paragraph at the very start or end of a cell (as
-    # opposed to one sandwiched between two real lines) shows up here as a
-    # leading/trailing "\n" on the joined text — stripping first, as an
-    # earlier version of this function did, silently ate exactly that
-    # newline, making an edge spacer indistinguishable from a cell with no
-    # spacer at all. "<br>" is not whitespace, so converting first means
-    # strip() only removes genuine incidental whitespace, never a spacer
-    # that's already been turned into a <br> marker.
-    text = "".join(parts).replace("\n", "<br>").replace("|", "\\|")
-    return text.strip()
+            parts.append(_render_run(child, in_table=True))
+    # Every part is already table-safe, with its newlines turned into <br>,
+    # so strip() here only removes incidental whitespace, never an edge
+    # spacer paragraph (#594 QA round 2; see _table_safe).
+    return "".join(parts).strip()
+
+
+def _table_safe(text: str) -> str:
+    """Make rendered non-code Markdown safe inside a pipe-table cell.
+
+    Pipe-table cells are single-line: a literal newline (from a multi-
+    paragraph cell, see doc_to_ast.py's _cell_content_to_children) would
+    break the table's row structure, so it becomes a <br> instead. "|" is
+    escaped for the same structural reason.
+
+    This runs per part, before _render_cell's strip(), not on the joined
+    cell text after it (#594 QA round 2): a spacer paragraph at the very
+    start or end of a cell shows up as a leading/trailing "\\n", and
+    stripping first silently ate exactly that newline. "<br>" is not
+    whitespace, so converting first keeps the spacer.
+
+    Code runs never go through this: _render_code_run_text writes its own
+    <br> and table-safe <code>, and escaping its output again would put a
+    literal backslash inside the code (#938). Only a code link's
+    destination is passed through here."""
+    return text.replace("\n", "<br>").replace("|", "\\|")
 
 
 def _render_comment(comment: dict) -> str:

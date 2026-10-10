@@ -3541,6 +3541,69 @@ Edge spacers (single <br> each): markdown = "| Trailing test<br> |\n| --- |\n| <
 
 ---
 
+### TC-DOC206: Inline code keeps a space at both ends, and adjacent code runs export as one span (#938)
+**Setup:** raw HTML via `write_doc_content(doc_id={DOC_ID}, content_format='html', content="<p>pad <code> both ends </code> end</p><p>adj <code>x`</code><b><code>`y</code></b> end</p>")`. The bold change splits the second paragraph's code into two Courier New runs.
+
+**Prompt**
+> "Export doc {DOC_ID} as Markdown"
+
+**Checks**
+- `markdown` contains ``pad `  both ends  ` end``: one extra space a side, since CommonMark strips one space from each end when both ends have one
+- `markdown` contains ```` adj ```x``y``` end ````: the two runs merge into one span, with a three-backtick delimiter around the two-backtick run
+- Rendering `markdown` with a strict CommonMark renderer (e.g. `markdown-it-py`'s `commonmark` preset, not Python `markdown`, which strips code-span whitespace) gives `<code> both ends </code>` and `<code>x``y</code>`
+
+**Cleanup:** write fixture content back over `{DOC_ID}`
+
+**Result (2026-10-10) ✅ PASS — Kit, PR #968 round 1 (`d2449f7`).** `get_doc_as_markdown` returned ``pad `  both ends  ` end\n\nadj ```x``y``` end``. markdown-it-py 4.2.0's `commonmark` preset rendered `<code> both ends </code>` and `<code>x``y</code>`. Fixture content was written back.
+
+**Result (2026-10-10) ✅ PASS — Kit, PR #968 round 2 (`759362a`).** Re-run because the fix changed `_render_run`. Output was identical to round 1. Fixture content was written back.
+
+---
+
+### TC-DOC207: Inline code in a table cell keeps a literal `|` and puts line breaks outside the code (#938)
+**Setup:** raw HTML via `write_doc_content(doc_id={DOC_ID}, content_format='html', content="<table><tr><td>Head</td></tr><tr><td>pipe <code>a|b</code> and a|b</td></tr><tr><td><code>x</code><br><code>y|z</code></td></tr></table>")`. The last cell has two code-styled paragraphs.
+
+**Prompt**
+> "Export doc {DOC_ID} as Markdown"
+
+**Checks**
+- `markdown` contains the row `| pipe <code>a&#124;b</code> and a\|b |`: the code's pipe is an HTML entity inside raw `<code>`, with no backslash, and the plain-text pipe is still escaped
+- `markdown` contains the row `` | `x`<br><code>y&#124;z</code> | ``: the cell's paragraph break is a `<br>` between two code elements, not inside one
+- Rendering `markdown` with a GFM-table renderer (e.g. `markdown-it-py`'s `commonmark` preset with `table` enabled) gives a one-column table whose cells contain `<code>a|b</code>` and `<code>x</code><br><code>y|z</code>`. No cell shows a backslash
+
+Not covered live: a soft break (Shift+Enter) inside an inline code run in a paragraph that also has plain text. No tool can build one (`style_doc_range` doesn't set a font), so unit tests cover it (`TestInlineCodeCommonMark::test_newline_in_inline_code_does_not_start_a_new_block`).
+
+**Cleanup:** write fixture content back over `{DOC_ID}`
+
+**Result (2026-10-10) ✅ PASS (checks as written); ❌ probe beyond the case — Kit, PR #968 round 1 (`d2449f7`).** `get_doc_as_markdown` returned both expected rows exactly: `| pipe <code>a&#124;b</code> and a\|b |` and `` | `x`<br><code>y&#124;z</code> | ``. markdown-it-py's `commonmark` preset with `table` enabled rendered a one-column table with `<code>a|b</code>` and `<code>x</code><br><code>y|z</code>`, and no backslash. Probe: a cell with code `a|*b* _c_` exported as `<code>a&#124;*b* _c_</code>`, which renders `<em>` inside the `<code>`. A cell with code `C:\|x` exported as `<code>C:\&#124;x</code>`, which renders as `C:&amp;#124;x`. Both are sent back on the PR. Fixture content was written back.
+
+**Result (2026-10-10) ✅ PASS — Kit, PR #968 round 2 (`759362a`).** Re-run because the fix changed the table-cell `<code>` path. Both expected rows came back exactly, and the render was the same as round 1. The round 1 probe is now TC-DOC208, which passes. Fixture content was written back.
+
+---
+
+### TC-DOC208: Markdown punctuation inside table-cell `<code>`, linked code after a cell break, and HTML-like plain text all export literally (#938)
+**Setup:** raw HTML via `write_doc_content(doc_id={DOC_ID}, content_format='html', content=...)` with this content. The `\` in `C:\|x` is one literal backslash character.
+
+```html
+<table><tr><td>Head</td></tr><tr><td><code>a|*b* _c_</code></td></tr><tr><td><code>C:\|x</code></td></tr><tr><td><code>x</code><br><a href="https://example.com/b"><code>b</code></a></td></tr></table><p>Use &lt;br&gt; or &amp;#124; and ~~old~~, AT&amp;T a &lt; b</p>
+```
+
+**Prompt**
+> "Export doc {DOC_ID} as Markdown"
+
+**Checks**
+- `markdown` contains the row `| <code>a&#124;&#42;b&#42; &#95;c&#95;</code> |`: every punctuation character inside raw `<code>` is a numeric entity
+- `markdown` contains the row `| <code>C&#58;&#92;&#124;x</code> |`: the backslash is an entity too, so it can't escape the pipe's `&`
+- `markdown` contains the row `` | `x`<br>[`b`](https://example.com/b) | ``: the `<br>` from the cell's paragraph break is outside the link
+- `markdown` contains the paragraph `Use \<br> or \&#124; and \~\~old\~\~, AT&T a < b`: `<` before a tag, `&` starting an entity, and `~` are escaped; `AT&T` and `a < b` are not
+- Rendering `markdown` with `markdown-it-py`'s `commonmark` preset with `table` enabled gives cells `<code>a|*b* _c_</code>`, `<code>C:\|x</code>`, and `<code>x</code><br><a href="https://example.com/b"><code>b</code></a>`, with no `<em>` inside any `<code>`, and the paragraph renders as literal text (no line break, no `|`, no strikethrough)
+
+**Cleanup:** write fixture content back over `{DOC_ID}`
+
+**Result (2026-10-10) ✅ PASS — Kit, PR #968 round 2 (`759362a`).** `get_doc_as_markdown` returned all four expected lines exactly. markdown-it-py 4.2.0 (`commonmark` + `table` + `strikethrough`) rendered the cells `<code>a|*b* _c_</code>`, `<code>C:\|x</code>`, and `<code>x</code><br><a href="https://example.com/b"><code>b</code></a>`, and the paragraph `Use &lt;br&gt; or &amp;#124; and ~~old~~, AT&amp;T a &lt; b`, with no `<em>`, `<del>`, or line break. Fixture content was written back.
+
+---
+
 ## Orphan fileId on inline-image sharing failure (#649)
 
 Mirrors #420's fix in `drive/transfer.py` (see TC-D249/TC-D250 in `docs/qa/tests/drive_transfer.md`) applied to the same create()-succeeds-but-follow-up-fails shape in `docs/images.py`'s `upload_and_share_image` and `docs/content.py`'s `_resolve_image_source`: a transient failure in the `permissions().create()`/`files().get()` sharing step, after `files().create()` (or an already-uploaded `_upload_local_file`) had already succeeded, previously returned a bare `{"error": ...}` with no way to find the Drive file that now genuinely exists. Not reliably reproducible live (would require forcing a transient API failure in the exact window between create and share); verified by unit test instead, matching TC-D249/TC-D250's own convention.
