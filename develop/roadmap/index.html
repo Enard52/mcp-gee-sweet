@@ -2117,7 +2117,7 @@
 - [ ] Raw <code>batchUpdate</code> passthrough for Docs (escape hatch, mirroring Sheets' <code>batch_update</code>); triaged out of <code>backlog</code> 2026-09-11 (<a href="https://github.com/khuisman/mcp-gee-sweet/issues/339">#339</a>)
 - [ ] Read/list/delete tools for named ranges (asymmetric with existing <code>create_named_range</code>); triaged out of <code>backlog</code> 2026-09-11 (<a href="https://github.com/khuisman/mcp-gee-sweet/issues/340">#340</a>)</p>
 <p><strong>Drive</strong>
-- [ ] File comments — list and add comments on Drive files (<a href="https://github.com/khuisman/mcp-gee-sweet/issues/142">#142</a>)
+- [x] File comments — list and add comments on Drive files — closed as superseded: <code>list_doc_comments</code>/<code>add_doc_comment</code> (#151, PR #324) already call the generic Drive <code>comments</code> resource and work on any file type; the rename to file-generic names is #663 and the rest of CRUD is #664, both v0.9.3 (<a href="https://github.com/khuisman/mcp-gee-sweet/issues/142">#142</a>)
 - [ ] Watch notifications — webhook push on file changes (<a href="https://github.com/khuisman/mcp-gee-sweet/issues/143">#143</a>)
 - [ ] Labels API — custom metadata labels on Drive files (<a href="https://github.com/khuisman/mcp-gee-sweet/issues/144">#144</a>)
 - [ ] <code>empty_trash</code> — optional fan-out across all accessible Shared Drives in one call, instead of one call per drive; considered and deliberately deferred during #386's review (<a href="https://github.com/khuisman/mcp-gee-sweet/issues/389">#389</a>)</p>
@@ -2132,7 +2132,6 @@
 </ul>
 <h3 id="tier-4-nice-to-have-niche-no-assigned-version">Tier 4 — Nice to have / niche <em>(no assigned version)</em><a class="headerlink" href="#tier-4-nice-to-have-niche-no-assigned-version" title="Permanent link">&para;</a></h3>
 <p><strong>Sheets</strong>
-- [ ] Sheet comments and cell notes (add/get/list/reply/resolve/delete) — we have zero comment tooling on Sheets today <em>(a-bonus/google-docs-mcp)</em>
 - [ ] Conditional formatting rules — add/get/delete <em>(a-bonus/google-docs-mcp)</em>
 - [ ] Protected ranges — protect/unprotect a range <em>(a-bonus/google-docs-mcp)</em>
 - [ ] Dropdown / data validation on a range <em>(a-bonus/google-docs-mcp)</em>
@@ -2142,7 +2141,6 @@
 - [ ] Native Sheets "Tables" object support (create/list/get/delete/update a structured Table, distinct from a plain range) — a newer Sheets API feature we don't touch at all <em>(a-bonus/google-docs-mcp)</em>
 - [ ] Copy formatting only, without values (paste-special-style) <em>(a-bonus/google-docs-mcp)</em></p>
 <p><strong>Docs</strong>
-- [ ] Doc comments (add/get/list/reply/resolve/delete) — we have zero comment tooling on Docs today <em>(a-bonus/google-docs-mcp)</em>
 - [ ] Multi-tab document support (list/add/rename tabs) — Google Docs' newer per-document tabs feature <em>(a-bonus/google-docs-mcp)</em>
 - [ ] Smart chips — date chips, person chips, rich links; <code>list_smart_chips</code> to enumerate existing ones <em>(a-bonus/google-docs-mcp)</em>
 - [ ] Section breaks and per-section page styling <em>(a-bonus/google-docs-mcp)</em>
