@@ -31,11 +31,22 @@ from .emitter import _build_phantom_set
 # "&" only when it starts an entity reference, so ordinary prose ("a < b",
 # "AT&T") stays readable. Exported text must not be mistaken for the <br> and
 # <code> HTML the exporter writes itself (#938).
+_LT_OPENS_SYNTAX = r"[A-Za-z/!?]"
+_AMP_OPENS_SYNTAX = r"#[0-9]{1,7};|#[xX][0-9a-fA-F]{1,6};|[A-Za-z][A-Za-z0-9]*;"
 _MD_ESCAPE = re.compile(
     r"[\\`*_\[\]~]"
-    r"|<(?=[A-Za-z/!?])"
-    r"|&(?=#[0-9]{1,7};|#[xX][0-9a-fA-F]{1,6};|[A-Za-z][A-Za-z0-9]*;)"
+    rf"|<(?={_LT_OPENS_SYNTAX})"
+    rf"|&(?={_AMP_OPENS_SYNTAX})"
 )
+# Characters that are syntax only when certain text follows them, and that
+# text. Each run is escaped on its own, so when the following text comes from
+# the next part, _join_inline has to make the call (#969). "!" is left
+# unescaped in plain text and is syntax only right before a "[" (an image).
+_BOUNDARY_SYNTAX = {
+    "!": re.compile(r"\["),
+    "<": re.compile(_LT_OPENS_SYNTAX),
+    "&": re.compile(_AMP_OPENS_SYNTAX),
+}
 _BACKTICK_RUN = re.compile(r"`+")
 
 # A paragraph whose rendered text starts with one of these (unescaped) would be
@@ -190,7 +201,53 @@ def _render_inline(items: list[Run | Image]) -> str:
             parts.append(_render_image(item))
         else:
             parts.append(_render_run(item))
-    return "".join(parts)
+    return _join_inline(parts)
+
+
+def _join_inline(parts: list[str]) -> str:
+    """Join rendered inline parts, escaping a character that the next part
+    turns into syntax. Each part is rendered on its own, so a part ending in
+    "!" followed by a link exported as "wow![x](url)", an image (#969). "<"
+    and "&" have the same problem: `_escape` checks what follows them, and at
+    the end of a run nothing does, so "a <" then "b> text" exported a raw
+    <b> tag and "AT&" then "amp;T" an entity (PR #981 QA round 1). The check
+    runs against the text joined so far and everything after it, so an empty
+    part, or an entity split across several runs, can't hide the boundary."""
+    out = ""
+    for i, part in enumerate(parts):
+        if (
+            part
+            and _ends_with_unescaped(out, _BOUNDARY_SYNTAX)
+            and _BOUNDARY_SYNTAX[out[-1]].match(_text_ahead(parts, i))
+        ):
+            out = out[:-1] + "\\" + out[-1]
+        out += part
+    return out
+
+
+# Longer than the longest match any _BOUNDARY_SYNTAX pattern needs (a named
+# entity is the longest; HTML's longest name is 31 characters plus ";").
+_LOOKAHEAD_CHARS = 64
+
+
+def _text_ahead(parts: list[str], start: int) -> str:
+    # Enough of parts[start:] for a _BOUNDARY_SYNTAX match, without joining
+    # the whole rest of the paragraph at every boundary.
+    ahead = ""
+    for part in parts[start:]:
+        ahead += part
+        if len(ahead) >= _LOOKAHEAD_CHARS:
+            break
+    return ahead
+
+
+def _ends_with_unescaped(text: str, chars) -> bool:
+    # An odd number of backslashes right before the character escapes it; an
+    # even number is escaped backslashes, leaving the character itself live.
+    if not text or text[-1] not in chars:
+        return False
+    backslashes = len(text[:-1]) - len(text[:-1].rstrip("\\"))
+    return backslashes % 2 == 0
 
 
 def _render_image(image: Image) -> str:
@@ -381,7 +438,7 @@ def _render_cell(cell: Cell) -> str:
     # Every part is already table-safe, with its newlines turned into <br>,
     # so strip() here only removes incidental whitespace, never an edge
     # spacer paragraph (#594 QA round 2; see _table_safe).
-    return "".join(parts).strip()
+    return _join_inline(parts).strip()
 
 
 def _table_safe(text: str) -> str:

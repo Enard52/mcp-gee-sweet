@@ -3664,6 +3664,50 @@ Not covered live: a soft break (Shift+Enter) inside an inline code run in a para
 
 **Result (2026-10-10) ✅ PASS — Kit, PR #976 round 2 (`fcf45d8`).** Ran on the same scratch doc as TC-DOC210 (trashed afterwards). The Playwright profile was signed into the fixture-owning account: the page title matched the doc name. `{HID}` was `h.ys7n1h73fcgv`. Step 3 in practice: double-click `jump` to select it. Cmd+K opens a dialog whose list already shows the heading (`Tт Target`), with no need to go through "Headings, bookmarks, and tabs". Click that dialog option, `li[role=option]`, not the left sidebar's `Target` outline entry: the outline entry only navigates, and clicking it first linked nothing. Then click the image and repeat. `get_doc_as_markdown` returned `[jump](https://docs.google.com/document/d/{DOC_ID}/edit?tab=t.0#heading=h.ys7n1h73fcgv) [![](<contentUri>)](…same URL…)`. Navigating to that URL opened the doc with the cursor at the start of `Target` (toolbar showed Heading 1).
 
+### TC-DOC212: Text ending in `!` right before a link exports as text plus a link, not as an image (#969)
+**Background:** each run is rendered on its own, so `wow!` followed by a linked `x` exported as `wow![x](https://example.com/a)`, which CommonMark reads as an image: the link becomes an `<img>` and the `!` disappears. Linked code (`` wow![`y`](...) ``) and table cells did the same.
+
+**Setup:**
+1. `write_doc_content(doc_id={DOC_ID}, content_format='html', content=...)` with:
+   ```html
+   <p>wow!<a href="https://example.com/a">x</a></p><p>hey!<a href="https://example.com/b"><code>y</code></a></p><p>fine! plain</p><table><tr><td>cell!<a href="https://example.com/c">z</a></td></tr><tr><td>b</td></tr></table>
+   ```
+
+**Prompt**
+> "Export doc {DOC_ID} as Markdown"
+
+**Checks**
+- `markdown` contains `wow\![x](https://example.com/a)` and `` hey\![`y`](https://example.com/b) ``
+- `markdown` contains `fine! plain`, with no backslash: a `!` that isn't right before a link is left alone
+- The table's first cell is `cell\![z](https://example.com/c)`
+- Rendering `markdown` with `markdown-it-py`'s `commonmark` preset (with `table` enabled) gives `wow!<a href="https://example.com/a">x</a>`, `hey!<a href="https://example.com/b"><code>y</code></a>`, and `cell!<a href="https://example.com/c">z</a>`, and no `<img>` anywhere
+
+**Cleanup:** write fixture content back over `{DOC_ID}`
+
+**Result (2026-10-10) ✅ PASS — Kit, PR #981 round 1 (`307e47c`).** Ran on a scratch doc (created with `create_doc` from the setup HTML, trashed afterwards) instead of `{DOC_ID}`. `get_doc_as_markdown` returned `wow\![x](https://example.com/a)`, `` hey\![`y`](https://example.com/b) ``, `fine! plain`, and the cell `cell\![z](https://example.com/c)`. markdown-it-py `commonmark` + `table` rendered `wow!<a href="https://example.com/a">x</a>`, `hey!<a href="https://example.com/b"><code>y</code></a>`, `fine! plain`, and `cell!<a href="https://example.com/c">z</a>`, with no `<img>`. Off-script probe on the same doc: `a <b> text` and `AT&amp;T` written as one run each, with `style_doc_range` setting `foreground_color` on `b> text` and `amp;T` to split each into two runs. Export was `a <b> text` (a raw HTML tag in CommonMark) and `AT&amp;T` (renders `AT&T`). As single runs, the same text exports escaped (`a \<b> text`, `AT\&amp;T`). Sent back in round 1.
+
+**Result (2026-10-10) ✅ PASS — Kit, PR #981 round 2 (`b2bfafe`).** Re-run after the fix rewrote `_join_inline`'s `!` check into the shared `_BOUNDARY_SYNTAX` table, on a scratch doc (trashed afterwards). The export was byte-identical to round 1's: `wow\![x](https://example.com/a)`, `` hey\![`y`](https://example.com/b) ``, `fine! plain`, and `cell\![z](https://example.com/c)`.
+
+### TC-DOC214: `<` and `&` split from the rest of a tag or entity by a color change still export literally (PR #981 QA round 1)
+**Background:** `<` is escaped only when a tag or autolink could follow it, and `&` only when an entity could. Each run was escaped on its own, so a run boundary right after the `<` or `&` hid what followed. A color change splits a run without changing anything Markdown renders, so `a <b> text` exported as a raw `<b>` tag and `AT&amp;T` as the entity for `&`.
+
+**Setup:**
+1. `write_doc_content(doc_id={DOC_ID}, content_format='html', content='<p>a &lt;b&gt; text</p><p>AT&amp;amp;T</p><p>see &lt;https://x.io&gt;</p><p>a &lt; b and AT&amp;T</p>')`
+2. `find_in_doc(doc_id={DOC_ID}, query="b> text")`, `find_in_doc(doc_id={DOC_ID}, query="amp;T")`, and `find_in_doc(doc_id={DOC_ID}, query="https://x.io>")`, noting each match's `start_index`/`end_index`
+3. `style_doc_range(doc_id={DOC_ID}, ranges=[...])` with one range per match from step 2, each with `"foreground_color": {"red": 1, "green": 0, "blue": 0}`
+
+**Prompt**
+> "Export doc {DOC_ID} as Markdown"
+
+**Checks**
+- `markdown` contains `a \<b> text`, `AT\&amp;T`, and `see \<https://x.io>`
+- `markdown` contains `a < b and AT&T` unchanged: a `<` or `&` that can't start syntax stays unescaped
+- Rendering `markdown` with `markdown-it-py`'s `commonmark` preset gives `a &lt;b&gt; text`, `AT&amp;amp;T`, and `see &lt;https://x.io&gt;` as paragraph text, with no `<b>` tag and no `<a>`
+
+**Cleanup:** write fixture content back over `{DOC_ID}`
+
+**Result (2026-10-10) ✅ PASS — Kit, PR #981 round 2 (`b2bfafe`).** Ran on a scratch doc (created with `create_doc` from the step 1 HTML, trashed afterwards) instead of `{DOC_ID}`. Step 2 used one `find_in_doc(regex=True)` call for all three queries: matches at 4–11, 15–20 and 26–39. After step 3, `get_doc_structure` showed each of the first three paragraphs as two runs split at the `<`/`&` (`a <` | `b> text`, `AT&` | `amp;T`, `see <` | `https://x.io>`). `get_doc_as_markdown` returned `a \<b> text`, `AT\&amp;T`, `see \<https://x.io>`, and `a < b and AT&T` unchanged. markdown-it-py `commonmark` rendered `a &lt;b&gt; text`, `AT&amp;amp;T`, `see &lt;https://x.io&gt;`, and `a &lt; b and AT&amp;T`, with no `<b>` and no `<a>`. Round 1 got `a <b> text` and `AT&amp;T` unescaped from the same kind of split, on pre-fix code (`307e47c`).
+
 ---
 
 ## Orphan fileId on inline-image sharing failure (#649)
@@ -4095,23 +4139,23 @@ All files from both probes and the three steps, and the doc, were trashed.
 
 Both tools read the local file through the shared `_read_doc_source_file` helper. Before PR #961's round 2, a path that existed but wasn't a readable UTF-8 regular file raised out of the tool (`[Errno 21] Is a directory`, `'utf-8' codec can't decode byte 0xe9 ...`) instead of returning `{"error": ...}`.
 
-### TC-DOC208: A directory or non-UTF-8 source file returns `{"error": ...}`, and nothing is created or edited
+### TC-DOC213: A directory or non-UTF-8 source file returns `{"error": ...}`, and nothing is created or edited
 **Setup:**
-- `mkdir -p /tmp/tc-doc208/dir.md`
-- `python3 -c "open('/tmp/tc-doc208/latin1.html','wb').write('<p>caf\xe9</p>'.encode('latin-1'))"`
+- `mkdir -p /tmp/tc-doc213/dir.md`
+- `python3 -c "open('/tmp/tc-doc213/latin1.html','wb').write('<p>caf\xe9</p>'.encode('latin-1'))"`
 - `get_doc_content(file_id={DOC_ID})`, note the content for comparison afterward
 
 **Steps**
-1. `create_doc_from_file(local_path="/tmp/tc-doc208/dir.md", folder_id={FOLDER_ID})`
-2. `create_doc_from_file(local_path="/tmp/tc-doc208/latin1.html", folder_id={FOLDER_ID})`
-3. `update_doc_from_file(doc_id={DOC_ID}, local_path="/tmp/tc-doc208/dir.md")`
-4. `update_doc_from_file(doc_id={DOC_ID}, local_path="/tmp/tc-doc208/latin1.html")`
+1. `create_doc_from_file(local_path="/tmp/tc-doc213/dir.md", folder_id={FOLDER_ID})`
+2. `create_doc_from_file(local_path="/tmp/tc-doc213/latin1.html", folder_id={FOLDER_ID})`
+3. `update_doc_from_file(doc_id={DOC_ID}, local_path="/tmp/tc-doc213/dir.md")`
+4. `update_doc_from_file(doc_id={DOC_ID}, local_path="/tmp/tc-doc213/latin1.html")`
 
 **Checks**
 - Each call returns a dict with an `error` key naming the path (any wording). None comes back as `Error executing tool ...`
 - `list_files(folder_id={FOLDER_ID})` shows no new Doc named `dir` or `latin1` (the filename stem `create_doc_from_file` uses as the default title; steps 1–2 fail before the Drive `create`)
 - `get_doc_content(file_id={DOC_ID})` matches the Setup snapshot (steps 3–4 fail before any Docs API call)
 
-**Cleanup:** `rm -rf /tmp/tc-doc208`
+**Cleanup:** `rm -rf /tmp/tc-doc213`
 
-**Result (2026-10-10) ✅ PASS — Sky, PR #961 round 2 (`849f0bb`).** Ran with the fixtures under this job's scratch dir instead of `/tmp/tc-doc208`. Steps 1 and 3 returned `{"error": "Not a regular file: <path>/dir.md"}`; steps 2 and 4 returned `{"error": "File is not valid UTF-8: <path>/latin1.html (invalid continuation byte at byte 6)"}`. No call surfaced as `Error executing tool`. `list_files({FOLDER_ID})` showed only the three standing fixtures. After `refresh_cache`, `get_doc_content({DOC_ID})` matched the Setup snapshot. Round 1 reproduced both raises on the pre-fix code (`075ce99`).
+**Result (2026-10-10) ✅ PASS — Sky, PR #961 round 2 (`849f0bb`).** Ran with the fixtures under this job's scratch dir instead of `/tmp/tc-doc213`. Steps 1 and 3 returned `{"error": "Not a regular file: <path>/dir.md"}`; steps 2 and 4 returned `{"error": "File is not valid UTF-8: <path>/latin1.html (invalid continuation byte at byte 6)"}`. No call surfaced as `Error executing tool`. `list_files({FOLDER_ID})` showed only the three standing fixtures. After `refresh_cache`, `get_doc_content({DOC_ID})` matched the Setup snapshot. Round 1 reproduced both raises on the pre-fix code (`075ce99`).

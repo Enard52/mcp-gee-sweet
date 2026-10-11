@@ -1349,3 +1349,96 @@ class TestPlainTextEscapingCommonMark:
         assert _COMMONMARK.render(rendered) == (
             f'<p>a <a href="{url}"><code>x</code></a><br>b</p>\n'
         )
+
+
+class TestBangBeforeLinkCommonMark:
+    """#969: a run ending in "!" followed by a linked run exported as
+    "wow![x](url)", which CommonMark reads as an image."""
+
+    URL = "https://e.example"
+
+    def _html(self, runs):
+        return _COMMONMARK.render(ast_to_markdown([Paragraph(runs=runs)]))
+
+    def test_plain_bang_before_link_stays_text(self):
+        runs = [Run(text="wow!"), Run(text="x", link_url=self.URL)]
+        assert ast_to_markdown([Paragraph(runs=runs)]) == f"wow\\![x]({self.URL})\n"
+        assert self._html(runs) == f'<p>wow!<a href="{self.URL}">x</a></p>\n'
+
+    def test_plain_bang_before_linked_code(self):
+        runs = [Run(text="wow!"), _code("x", link_url=self.URL)]
+        assert self._html(runs) == f'<p>wow!<a href="{self.URL}"><code>x</code></a></p>\n'
+
+    def test_plain_bang_before_linked_image(self):
+        runs = [Run(text="wow!"), Image(src="https://i.example/p.png", alt="p", link_url=self.URL)]
+        assert self._html(runs) == (
+            f'<p>wow!<a href="{self.URL}"><img src="https://i.example/p.png" alt="p" /></a></p>\n'
+        )
+
+    def test_empty_run_between_does_not_hide_the_boundary(self):
+        runs = [Run(text="wow!"), Run(text=""), Run(text="x", link_url=self.URL)]
+        assert self._html(runs) == f'<p>wow!<a href="{self.URL}">x</a></p>\n'
+
+    def test_literal_backslash_before_bang(self):
+        # "a\" escapes to "a\\", which leaves the "!" live, so it still needs one.
+        runs = [Run(text="a\\!"), Run(text="x", link_url=self.URL)]
+        assert self._html(runs) == f'<p>a\\!<a href="{self.URL}">x</a></p>\n'
+
+    def test_bang_not_before_link_is_left_alone(self):
+        assert ast_to_markdown([Paragraph(runs=[Run(text="wow! "), Run(text="ok!")])]) == (
+            "wow! ok!\n"
+        )
+        runs = [Run(text="wow!"), Image(src="https://i.example/p.png", alt="p")]
+        assert ast_to_markdown([Paragraph(runs=runs)]) == "wow!![p](https://i.example/p.png)\n"
+        assert self._html(runs) == '<p>wow!<img src="https://i.example/p.png" alt="p" /></p>\n'
+
+    def test_table_cell(self):
+        cell = Cell(children=[Run(text="wow!"), Run(text="x", link_url=self.URL)])
+        table = Table(rows=[Row(cells=[cell]), Row(cells=[Cell(children=[Run(text="b")])])])
+        html = _COMMONMARK.render(ast_to_markdown([table]))
+        assert f'<th>wow!<a href="{self.URL}">x</a></th>' in html
+
+
+class TestLookaheadEscapeAcrossRunsCommonMark:
+    """PR #981 QA round 1: "<" and "&" are escaped only when the text after
+    them would make a tag, autolink, or entity. A run boundary (e.g. a color
+    change mid-word, which Markdown doesn't render) hid that text."""
+
+    def _render(self, *texts):
+        rendered = ast_to_markdown([Paragraph(runs=[Run(text=t) for t in texts])])
+        inline = next(t for t in _COMMONMARK.parse(rendered) if t.type == "inline")
+        return rendered, inline
+
+    @pytest.mark.parametrize(
+        "texts",
+        [
+            ("a <", "b> text"),
+            ("AT&", "amp;T"),
+            ("see <", "https://x.io>"),
+            ("x &", "#124; y"),
+            ("&", "am", "p; split three ways"),
+            ("a <", "", "b> empty run between"),
+        ],
+    )
+    def test_split_syntax_renders_literally(self, texts):
+        _, inline = self._render(*texts)
+        assert [t.type for t in inline.children] == ["text"]
+        assert inline.children[0].content == "".join(texts)
+
+    @pytest.mark.parametrize(
+        "texts",
+        [("a <", " b"), ("AT&", "T"), ("a &", " b"), ("1 <", "2")],
+    )
+    def test_prose_stays_unescaped(self, texts):
+        rendered, _ = self._render(*texts)
+        assert rendered == "".join(texts) + "\n"
+
+    def test_less_than_before_inline_code_is_left_alone(self):
+        rendered = ast_to_markdown([Paragraph(runs=[Run(text="a <"), _code("b")])])
+        assert rendered == "a <`b`\n"
+
+    def test_table_cell(self):
+        cell = Cell(children=[Run(text="a <"), Run(text="b> text")])
+        table = Table(rows=[Row(cells=[cell]), Row(cells=[Cell(children=[Run(text="c")])])])
+        html = _COMMONMARK.render(ast_to_markdown([table]))
+        assert "<th>a &lt;b&gt; text</th>" in html
