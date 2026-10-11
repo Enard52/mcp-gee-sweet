@@ -12,10 +12,12 @@ from markdown_it import MarkdownIt
 from mcp_gee_sweet.tools import docs as docs_module
 from mcp_gee_sweet.tools.docs.ast import (
     BulletItem,
+    Cell,
     Heading,
     Image,
     NamedBlock,
     Paragraph,
+    Row,
     Run,
     Table,
 )
@@ -248,6 +250,72 @@ class TestDocToAstBlockquote:
         assert node.blockquote_depth == 2
 
 
+class TestDocToAstLinks:
+    """PR #976 QA round 1: Docs reports a same-document link by ID, with no
+    url (live shape: `{"headingId": "h.x"}`), on text runs and images alike."""
+
+    _BASE = "https://docs.google.com/document/d/DOC/edit"
+
+    def _doc(self, link):
+        return {
+            "documentId": "DOC",
+            "body": {
+                "content": [
+                    {
+                        "paragraph": {
+                            "elements": [
+                                {"textRun": {"content": "jump", "textStyle": {"link": link}}},
+                                {
+                                    "inlineObjectElement": {
+                                        "inlineObjectId": "img1",
+                                        "textStyle": {"link": link},
+                                    }
+                                },
+                                {"textRun": {"content": "\n", "textStyle": {}}},
+                            ]
+                        }
+                    }
+                ]
+            },
+            "inlineObjects": {
+                "img1": {
+                    "inlineObjectProperties": {
+                        "embeddedObject": {"imageProperties": {"contentUri": "https://i/p.png"}}
+                    }
+                }
+            },
+        }
+
+    @pytest.mark.parametrize(
+        "link, expected",
+        [
+            ({"url": "https://example.com"}, "https://example.com"),
+            ({"headingId": "h.abc"}, f"{_BASE}?tab=t.0#heading=h.abc"),
+            ({"heading": {"id": "h.abc", "tabId": "t.7"}}, f"{_BASE}?tab=t.7#heading=h.abc"),
+            ({"bookmarkId": "id.xyz"}, f"{_BASE}?tab=t.0#bookmark=id.xyz"),
+            ({"bookmark": {"id": "id.xyz", "tabId": "t.2"}}, f"{_BASE}?tab=t.2#bookmark=id.xyz"),
+            ({"headingId": "h.abc", "tabId": "t.3"}, f"{_BASE}?tab=t.3#heading=h.abc"),
+        ],
+    )
+    def test_link_url_on_run_and_image(self, link, expected):
+        run, image = document_to_ast(self._doc(link))[0].runs
+        assert run.link_url == expected
+        assert isinstance(image, Image)
+        assert image.link_url == expected
+
+    def test_internal_link_without_document_id_is_dropped(self):
+        doc = self._doc({"headingId": "h.abc"})
+        del doc["documentId"]
+        run, image = document_to_ast(doc)[0].runs
+        assert run.link_url is None
+        assert image.link_url is None
+
+    def test_heading_link_exports_as_markdown_link(self):
+        md = ast_to_markdown(document_to_ast(self._doc({"headingId": "h.abc"})))
+        url = f"{self._BASE}?tab=t.0#heading=h.abc"
+        assert md == f"[jump]({url})[![](https://i/p.png)]({url})\n"
+
+
 class TestDocToAstImages:
     def test_inline_object_resolves_to_image(self):
         doc = {
@@ -284,6 +352,44 @@ class TestDocToAstImages:
         assert image.src == "https://example.com/img.png"
         assert image.alt == "A photo"
         assert image.width == 100.0
+        assert image.link_url is None
+
+    def test_linked_inline_object_carries_link_url(self):
+        # #951: shape confirmed live, the link sits on the element's own textStyle.
+        doc = {
+            "body": {
+                "content": [
+                    {
+                        "paragraph": {
+                            "elements": [
+                                {
+                                    "inlineObjectElement": {
+                                        "inlineObjectId": "img1",
+                                        "textStyle": {"link": {"url": "https://x.com/t"}},
+                                    }
+                                },
+                                {"textRun": {"content": "\n", "textStyle": {}}},
+                            ]
+                        }
+                    }
+                ]
+            },
+            "inlineObjects": {
+                "img1": {
+                    "inlineObjectProperties": {
+                        "embeddedObject": {
+                            "imageProperties": {"contentUri": "https://example.com/img.png"},
+                        }
+                    }
+                }
+            },
+        }
+        image = document_to_ast(doc)[0].runs[0]
+        assert isinstance(image, Image)
+        assert image.link_url == "https://x.com/t"
+        assert ast_to_markdown(document_to_ast(doc)) == (
+            "[![](https://example.com/img.png)](https://x.com/t)\n"
+        )
 
     def test_inline_object_with_no_content_uri_is_dropped(self):
         doc = {
@@ -683,6 +789,113 @@ class TestAstToMarkdownInline:
         url = "https://x.com/i(1).png"
         nodes = [Paragraph(runs=[Image(src=url, alt="pic")])]
         assert ast_to_markdown(nodes) == f"![pic](<{url}>)\n"
+
+
+def _links(markdown_text):
+    """Every (href, child token types) pair CommonMark parses out of `markdown_text`."""
+    found = []
+    for block in _COMMONMARK.parse(markdown_text):
+        children = block.children or []
+        for i, tok in enumerate(children):
+            if tok.type == "link_open":
+                inner = []
+                for t in children[i + 1 :]:
+                    if t.type == "link_close":
+                        break
+                    inner.append(t.type)
+                found.append((tok.attrs["href"], inner))
+    return found
+
+
+class TestCodeBlockLinks:
+    """#951: a fenced block's content is literal, so a link inside one was lost."""
+
+    def test_linked_code_only_paragraph_keeps_link_as_inline_code(self):
+        nodes = [Paragraph(runs=[_code("pkg", link_url="https://pypi.org/p/pkg")])]
+        md = ast_to_markdown(nodes)
+        assert md == "[`pkg`](https://pypi.org/p/pkg)\n"
+        assert _links(md) == [("https://pypi.org/p/pkg", ["code_inline"])]
+
+    def test_partly_linked_code_paragraph_keeps_every_run(self):
+        nodes = [
+            Paragraph(
+                runs=[
+                    _code("pip install "),
+                    _code("pkg", link_url="https://pypi.org/p/pkg"),
+                ]
+            )
+        ]
+        md = ast_to_markdown(nodes)
+        assert md == "`pip install `[`pkg`](https://pypi.org/p/pkg)\n"
+        assert not any(t.type == "fence" for t in _COMMONMARK.parse(md))
+        assert _links(md) == [("https://pypi.org/p/pkg", ["code_inline"])]
+
+    def test_multiline_linked_code_paragraph_stays_one_paragraph(self):
+        # Each line becomes its own span joined by <br>; a raw newline could
+        # start a new block ("# x" as a heading).
+        nodes = [Paragraph(runs=[_code("a\n# b", link_url="https://x.com")])]
+        md = ast_to_markdown(nodes)
+        assert md == "[`a`<br>`# b`](https://x.com)\n"
+        tokens = _COMMONMARK.parse(md)
+        assert [t.type for t in tokens] == ["paragraph_open", "inline", "paragraph_close"]
+
+    def test_link_on_only_a_line_break_keeps_the_fence(self):
+        # PR #976 QA round 1: a link covering just the soft break renders as
+        # bare <br> with no link, so it must not cost the paragraph its fence.
+        nodes = [Paragraph(runs=[_code("a"), _code("\n", link_url="https://x.com"), _code("b")])]
+        assert ast_to_markdown(nodes) == "```\na\nb\n```\n"
+
+    def test_unlinked_code_paragraph_still_fenced(self):
+        nodes = [Paragraph(runs=[_code("x = 1")])]
+        assert ast_to_markdown(nodes) == "```\nx = 1\n```\n"
+
+    def test_linked_image_in_code_paragraph_keeps_link_and_fence(self):
+        nodes = [
+            Paragraph(
+                runs=[
+                    _code("x = 1"),
+                    Image(src="https://x.com/i.png", alt="pic", link_url="https://x.com/target"),
+                ]
+            )
+        ]
+        md = ast_to_markdown(nodes)
+        assert md == "```\nx = 1\n```\n\n[![pic](https://x.com/i.png)](https://x.com/target)\n"
+        assert _links(md) == [("https://x.com/target", ["image"])]
+
+    def test_linked_image_in_plain_paragraph_keeps_link(self):
+        url = "https://x.com/Foo_(bar)"
+        nodes = [Paragraph(runs=[Image(src="https://x.com/i.png", alt="pic", link_url=url)])]
+        md = ast_to_markdown(nodes)
+        assert md == f"[![pic](https://x.com/i.png)](<{url}>)\n"
+        assert _links(md) == [(url, ["image"])]
+
+    def test_linked_image_in_table_cell_keeps_link(self):
+        nodes = [
+            Table(
+                rows=[
+                    Row(
+                        cells=[
+                            Cell(
+                                children=[
+                                    Image(
+                                        src="https://x.com/i.png",
+                                        alt="pic",
+                                        link_url="https://x.com/t",
+                                    )
+                                ]
+                            )
+                        ]
+                    )
+                ]
+            )
+        ]
+        md = ast_to_markdown(nodes)
+        assert "[![pic](https://x.com/i.png)](https://x.com/t)" in md
+        assert _links(md) == [("https://x.com/t", ["image"])]
+
+    def test_blockquoted_linked_code_paragraph(self):
+        nodes = [Paragraph(runs=[_code("pkg", link_url="https://x.com")], blockquote_depth=1)]
+        assert ast_to_markdown(nodes) == "> [`pkg`](https://x.com)\n"
 
 
 class TestAstToMarkdownBlocks:
