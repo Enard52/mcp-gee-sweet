@@ -224,6 +224,7 @@ Same shape as v0.8.1 — stabilize on defects that surfaced since v0.9.0 shipped
 - [x] `add_chart`: a cell-to-row (`B2:5`) or row-only (`1:5`) range silently charts one column — `_per_column_ranges` defaults `endColumnIndex` to start+1. Found reviewing #931 — lane A, after #917 (PR #983) ([#954](https://github.com/khuisman/mcp-gee-sweet/issues/954))
 - [ ] `_parse_a1_notation` hardening: one compiled grammar, index bounds, validate before the sheet-ID fetch. #931 review follow-ups, no behavior change for valid input — lane A, after #954 (same A1 area) ([#955](https://github.com/khuisman/mcp-gee-sweet/issues/955))
 - [ ] Write side drops image links: `[![alt](src)](url)` (or `<a href><img></a>`) imports through `create_doc`/`create_doc_from_file`/`write_doc_content` without its URL, so it doesn't round-trip with #951's export. Found in PR #976 — lane A, after #955 ([#977](https://github.com/khuisman/mcp-gee-sweet/issues/977))
+- [ ] Comment quoted text comes back HTML-escaped (`Caf&#233;`) from `add_doc_comment`, `list_doc_comments`, and `get_doc_as_markdown(include_comments=True)`: `comments.py` passes Drive's escaped `quotedFileContent.value` through unchanged. Found reviewing #958 — lane B, after #959 (defect, next pick) ([#984](https://github.com/khuisman/mcp-gee-sweet/issues/984))
 
 **Sheets hardening** _(triaged out of `backlog` 2026-09-11 — see the "Backlog triage" note below)_
 - [x] `update_sheet_properties`/dimension-tool hardening + dedup follow-ups from PR #321's review ([#323](https://github.com/khuisman/mcp-gee-sweet/issues/323)) (PR #734)
