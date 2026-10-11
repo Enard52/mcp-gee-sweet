@@ -104,11 +104,70 @@ class TestAddChart:
         ]
         assert col_starts == [1, 2]
 
-    async def test_single_column_range_succeeds(self):
-        """A single-column range (no separate series) must not error."""
+    @pytest.mark.parametrize("chart_type", ["COLUMN", "BAR", "LINE", "AREA", "SCATTER", "COMBO"])
+    async def test_single_column_range_returns_error(self, chart_type):
+        """PR #983 QA round 1: one column used to chart the column against itself."""
         svc = self._sheets_service()
-        result = await self._call(svc, "LINE", "B1:B10")
+        result = await self._call(svc, chart_type, "B1:B10")
+        assert "error" in result
+        assert "at least 2" in result["error"]
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+        assert not svc.spreadsheets.return_value.get.called
+
+    async def test_two_column_range_has_one_series(self):
+        svc = self._sheets_service()
+        result = await self._call(svc, "COMBO", "A1:B5")
         assert "error" not in result
+        series = self._chart_spec(svc)["basicChart"]["series"]
+        assert len(series) == 1
+        assert series[0]["series"]["sourceRange"]["sources"][0]["startColumnIndex"] == 1
+
+    async def test_histogram_single_column_succeeds(self):
+        svc = self._sheets_service()
+        result = await self._call(svc, "HISTOGRAM", "B2:B5")
+        assert "error" not in result
+
+    async def test_source_ranges_carry_only_their_own_column(self):
+        svc = self._sheets_service()
+        await self._call(svc, "COLUMN", "B2:D5")
+        spec = self._chart_spec(svc)
+        domain = spec["basicChart"]["domains"][0]["domain"]["sourceRange"]["sources"][0]
+        assert domain == {
+            "sheetId": 0,
+            "startRowIndex": 1,
+            "endRowIndex": 5,
+            "startColumnIndex": 1,
+            "endColumnIndex": 2,
+        }
+
+    # #954 — a range with no end column must error, not chart one column
+
+    @pytest.mark.parametrize("data_range", ["B2:5", "1:5", "2:2"])
+    async def test_range_without_end_column_returns_error_without_api_call(self, data_range):
+        svc = self._sheets_service()
+        result = await self._call(svc, "COLUMN", data_range)
+        assert "error" in result
+        assert data_range in result["error"]
+        assert "end column" in result["error"]
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+        # Cheap param check runs before the sheet-name lookup (#330 convention).
+        assert not svc.spreadsheets.return_value.get.called
+
+    async def test_column_only_range_succeeds(self):
+        """'A:C' names its end column, so it isn't caught by the #954 check."""
+        svc = self._sheets_service()
+        result = await self._call(svc, "COLUMN", "A:C")
+        assert "error" not in result
+        spec = self._chart_spec(svc)
+        assert len(spec["basicChart"]["series"]) == 2
+
+    async def test_open_ended_row_range_succeeds(self):
+        """'B2:D' has no end row but does name its end column."""
+        svc = self._sheets_service()
+        result = await self._call(svc, "LINE", "B2:D")
+        assert "error" not in result
+        spec = self._chart_spec(svc)
+        assert len(spec["basicChart"]["series"]) == 2
 
     # BUG-2 — HISTOGRAM spec
 
@@ -143,6 +202,16 @@ class TestAddChart:
         src = spec["pieChart"]["series"]["sourceRange"]["sources"][0]
         assert src["startColumnIndex"] == 1
         assert src["endColumnIndex"] == 2
+
+    @pytest.mark.parametrize("data_range,num_cols", [("A1:D5", 4), ("A1:C5", 3), ("B1:B5", 1)])
+    async def test_pie_without_exactly_two_columns_returns_error(self, data_range, num_cols):
+        """PR #983 QA round 1: PIE used to chart column B and drop the rest silently."""
+        svc = self._sheets_service()
+        result = await self._call(svc, "PIE", data_range)
+        assert "error" in result
+        assert f"spans {num_cols} column(s)" in result["error"]
+        assert "exactly 2" in result["error"]
+        assert not svc.spreadsheets.return_value.batchUpdate.called
 
     # BUG-3 — BAR targetAxis
 

@@ -1,6 +1,6 @@
 # Chart Tools — QA Test Cases
 
-Source: `src/mcp_gee_sweet/tools/charts.py`
+Source: `src/mcp_gee_sweet/tools/sheets/structure.py` (`add_chart`)
 
 Fixtures: see [`docs/qa/setup.md`](../setup.md). Substitute your `{SPREADSHEET_ID}` from `fixtures.local.md`.
 
@@ -206,3 +206,69 @@ add_chart(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found in sp
 **Result (2026-09-04) ✅ PASS**
 add_chart(LINE, position_x=100,position_y=200,width=400,height=300) → chartId 1652849479, overlayPosition={offsetXPixels:100,offsetYPixels:200,widthPixels:400,heightPixels:300} — confirms values are pixels (field names say so directly). Deleted after
 
+---
+
+### TC-C13: Range with no end column is rejected (#954)
+
+**Tool calls**
+1. `add_chart(spreadsheet_id="{SPREADSHEET_ID}", sheet="Sales", chart_type="COLUMN", data_range="B2:5")`
+2. `add_chart(spreadsheet_id="{SPREADSHEET_ID}", sheet="Sales", chart_type="COLUMN", data_range="1:5")`
+
+**Checks**
+- Each call returns `{"error": ...}` naming its `data_range` and saying it has no end column
+- Neither call creates a chart: the error is returned before any API call (the range is validated ahead of the sheet lookup), so neither response carries a `chartId` or `result`. Previously both succeeded and silently charted a single column with no real series
+
+**Result (2026-10-11) ✅ PASS** (PR #983 @ 5b85357)
+add_chart(data_range="B2:5") → {"error":"data_range 'B2:5' has no end column; add_chart needs explicit column bounds (e.g. 'A1:C10' or 'A:C')"}; add_chart(data_range="1:5") → same error naming '1:5'. Neither response carries a chartId
+
+---
+
+### TC-C14: Column-only range still charts every column (#954)
+
+**Tool calls**
+1. `add_chart(spreadsheet_id="{SPREADSHEET_ID}", sheet="Sales", chart_type="COLUMN", data_range="A:D")`
+
+**Checks**
+- Response includes a `chartId` (an open row end is fine; only an open column end is rejected)
+- In the response's `result.replies[0].addChart.chart.spec`, `basicChart.domains` has one source (column A) and `basicChart.series` has three (columns B, C, D)
+
+**Cleanup:** delete the chart via `batch_update` with `requests=[{"deleteEmbeddedObject": {"objectId": <chartId>}}]`
+
+**Result (2026-10-11) ✅ PASS** (PR #983 @ 5b85357)
+add_chart(COLUMN, data_range="A:D") → chartId 563506711; spec.basicChart.domains = 1 source (col 0), series = 3 sources (cols 1, 2, 3), rows 0–996 (open row end accepted). Deleted after
+
+**Result (2026-10-11) ✅ PASS** (PR #983 @ af3fea8, round 2 regression)
+add_chart(COLUMN, data_range="A:D") → chartId 915893384; domains = col 0, series = cols 1, 2, 3. Deleted after
+
+
+---
+
+### TC-C15: PIE range without exactly 2 columns is rejected (PR #983)
+
+**Tool calls**
+1. `add_chart(spreadsheet_id="{SPREADSHEET_ID}", sheet="Sales", chart_type="PIE", data_range="A1:D5")`
+2. `add_chart(spreadsheet_id="{SPREADSHEET_ID}", sheet="Sales", chart_type="PIE", data_range="B1:B5")`
+
+**Checks**
+- Call 1 returns `{"error": ...}` saying `'A1:D5'` spans 4 column(s) and a PIE chart needs exactly 2; call 2 says `'B1:B5'` spans 1 column(s)
+- Neither response carries a `chartId` or `result`: the error is returned before any API call. Previously call 1 succeeded and charted only column B, silently dropping C and D
+
+**Result (2026-10-11) ✅ PASS** (PR #983 @ af3fea8)
+add_chart(PIE, "A1:D5") → {"error":"data_range 'A1:D5' spans 4 column(s); a PIE chart needs exactly 2 (labels, then values)"}; add_chart(PIE, "B1:B5") → same error with "spans 1 column(s)". No chartId in either. Regression: add_chart(PIE, "A1:B5") still succeeds (chartId 774316831, domain col 0, series col 1). Deleted after
+
+---
+
+### TC-C16: Single-column range for a domain-based chart is rejected; HISTOGRAM still accepts one (PR #983)
+
+**Tool calls**
+1. `add_chart(spreadsheet_id="{SPREADSHEET_ID}", sheet="Sales", chart_type="COLUMN", data_range="B2:B5")`
+2. `add_chart(spreadsheet_id="{SPREADSHEET_ID}", sheet="Sales", chart_type="HISTOGRAM", data_range="B2:B5")`
+
+**Checks**
+- Call 1 returns `{"error": ...}` saying `'B2:B5'` spans 1 column and a COLUMN chart needs at least 2, with no `chartId` or `result`. Previously it succeeded with column B as both the domain and the only series
+- Call 2 returns a `chartId`, and `result.replies[0].addChart.chart.spec` has a `histogramChart` key with one series (column B)
+
+**Cleanup:** delete call 2's chart via `batch_update` with `requests=[{"deleteEmbeddedObject": {"objectId": <chartId>}}]`
+
+**Result (2026-10-11) ✅ PASS** (PR #983 @ af3fea8)
+add_chart(COLUMN, "B2:B5") → {"error":"data_range 'B2:B5' spans 1 column; a COLUMN chart needs at least 2 (the first column is the domain, the rest are series)"}, no chartId. add_chart(HISTOGRAM, "B2:B5") → chartId 1594431116, spec.histogramChart.series = 1 source (col 1, rows 1–5). Deleted after
