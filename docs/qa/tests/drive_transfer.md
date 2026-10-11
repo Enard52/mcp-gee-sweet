@@ -1933,8 +1933,199 @@ export_revision(rev 6, no range) → sheet="Sheet1", range=null, values = full 5
 - Returns a clear error: "No XLSX export available for this revision"
 - Does not crash
 
+**Superseded by #959:** a Google Doc revision now exports as Markdown (TC-D280), so this case
+checks a file that is neither a Sheet nor a Doc. Run it as:
+
+**Setup:** Create a scratch Google Slides file named `qa-959-slides` in `DRIVE_FOLDER_ID`, and
+type one word on its first slide in the Slides UI (Playwright) so it has a revision.
+
+**Tool calls**
+1. `list_revisions(file_id="<slides-id>")`, then
+   `export_revision(file_id="<slides-id>", revision_id="<last revisionId>")`
+
+**Checks**
+- Raises a clear error: "No XLSX or DOCX export available for revision <id>. export_revision
+  supports Google Sheets and Google Docs files only."
+- Does not crash
+
+**Teardown:** `delete_file(file_id="<slides-id>")`.
+
+The 2026-09-04 Result below predates #959 and tested a Google Doc.
+
+**Result (2026-10-11, PR #988 round 1, `8b223c5`) ✅ PASS** — Ran via `mcp-gee-sweet-kit` (OAuth). The Slides file was created blank by a scratch-script `files().create(mimeType=presentation)` rather than through the Slides UI; `list_revisions` still listed revision 1. `export_revision` raised exactly "No XLSX or DOCX export available for revision 1. export_revision supports Google Sheets and Google Docs files only." Slides file trashed.
+
 **Result (2026-09-04) ✅ PASS**
 export_revision({DOC_ID}, rev 3) → error "No XLSX export available for revision 3. The file may not be a Google Sheets file." Clear error, no crash.
+
+---
+
+### TC-D280: Export two Google Doc revisions as Markdown; the diff shows only the edit (issue #959) ⚠️ requires-oauth
+
+**Background:** The Docs API can't read an old revision, so `export_revision` exports it as DOCX,
+imports that into a temporary Doc, and converts it with `get_doc_as_markdown`'s own converter.
+Docs folds the latest revision into the next one while editing continues: during #959, edits 90
+seconds and 5 minutes later both merged it. A Doc created by Drive import keeps its import
+revision separate (#814), so the diff below uses one.
+
+**Setup**
+1. `create_doc(title="qa-959-rev", content_format="markdown", content=<below>)` with:
+   ````
+   # Release Notes
+
+   Intro with **bold**, *italic*, `inline code`, and [external](https://example.com).
+
+   ## Setup
+
+   ```
+   pip install thing
+   thing --init
+   ```
+
+   > A quoted note.
+
+   1. First step
+   2. Second step
+
+   - [ ] open task
+   - [x] done task
+
+   | Key | Value |
+   |-----|-------|
+   | a   | 1     |
+
+   ![logo](https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png)
+   ````
+   Then `list_revisions(file_id="<rev-id>")` and take the last `revisionId` as R.
+2. `upload_file(name="qa-959-diff.md", source_format="markdown", convert_to_doc=True,
+   content="# Notes\n\nIntro with **bold** text.\n\n## Next\n\nClosing paragraph.\n")`.
+   Then `find_in_doc(doc_id="<diff-id>", query="Intro with")` and
+   `insert_doc_text(doc_id="<diff-id>", insertions=[{"index": <start_index + 6>, "text": "EDITED "}])`.
+3. Wait about a minute, then `list_revisions(file_id="<diff-id>")`: A is the first revision
+   (the import), B the last. If only one revision is listed, wait another minute and re-list.
+
+**Tool calls**
+1. `export_revision(file_id="<rev-id>", revision_id="<R>")`
+2. `get_doc_as_markdown(doc_id="<rev-id>")`
+3. `export_revision(file_id="<diff-id>", revision_id="<A>")`
+4. `export_revision(file_id="<diff-id>", revision_id="<B>")`
+5. `search_files(query="export_revision temp")`
+
+**Checks**
+- Call 1's `markdown` has the heading, bold/italic, `` `inline code` ``, a fenced code block, a
+  `> ` blockquote, the numbered list, both task items, the table, and the image as
+  `![](image:sha256-<16 hex>)`. The result has no `images` key: the temporary Doc's image URLs
+  stop serving once it's deleted, so none is returned (PR #988 round 1).
+- Call 2's `markdown` equals call 1's except the image line (call 2 has a URL).
+- Diffing call 3's `markdown` against call 4's shows exactly one changed line: `Intro with` →
+  `Intro EDITED with`.
+- Call 5 returns no temporary Doc for `<rev-id>` or `<diff-id>`: each was removed. `search_files`
+  also lists trashed files, so a hit from an earlier run is fine if `get_file_metadata` shows
+  `trashed: true`.
+
+**Teardown:** `delete_file` on both `<rev-id>` and `<diff-id>`.
+
+**Result (2026-10-11, PR #988 round 1, `8b223c5`) ❌ FAIL (sent back)** — Ran via `mcp-gee-sweet-kit` (OAuth). `qa-959-rev` listed revisions 1 and 5; R=5. `qa-959-diff.md` listed revisions 1 and 2 about 10 seconds after the edit (no wait needed). Call 1's `markdown` had every listed construct and the image as `![](image:sha256-9237fdb37f9592f6)`. Call 2's `markdown` matched it byte for byte except the image line. Calls 3 and 4 differed in exactly one line, `Intro with` → `Intro EDITED with`. Call 5 returned `[]`. **Failed check:** the `images[0].url` from call 1 returned **HTTP 404** both to an anonymous `curl` and to an OAuth-authenticated `AuthorizedSession.get`, while the live Doc's own image URL from call 2 returned 200 `image/png` anonymously. A repeat export, fetched within seconds of the call returning, also returned 404. The temporary Doc's `contentUri` stops serving once that Doc is deleted, so every `images` URL is already dead when the tool returns (contradicts `docs/design/doc-revision-export.md`'s "the URL still serves after the temporary Doc is deleted"). Both Docs trashed.
+
+**Result (2026-10-11, PR #988 round 2, `15d778d`) ✅ PASS** — Ran via `mcp-gee-sweet-kit` (OAuth). `qa-959-rev` listed revisions 1 and 5; R=5. `qa-959-diff.md` listed 1 and 2 about 10 seconds after the edit. Call 1 returned `revisionId`, `modifiedTime`, `markdown` and no `images` key; `markdown` had every listed construct and the image as `![](image:sha256-9237fdb37f9592f6)` (same hash as round 1). Call 2 matched call 1 byte for byte except the image line. Calls 3 and 4 differed in exactly one line, `Intro with` → `Intro EDITED with`. Call 5 listed no temporary Doc from this pass; its one hit was a temporary Doc from the Dev's 15:15 probe of another Doc, already `trashed: true` (the trash branch working; `search_files` lists trashed files, so the check now says so). Both Docs trashed.
+
+---
+
+### TC-D281: Doc revision heading links render as `#slug` and stay stable (issue #959) ⚠️ requires-oauth
+
+**Setup**
+1. `create_doc(title="qa-959-links", content_format="markdown", content="# Top\n\n## Setup\n\nFirst.\n\n## Setup\n\nJump here and back here.\n")`
+2. Link text to the headings by ID, the way the Docs UI does. No tool sets an ID-only link
+   (`style_doc_range`'s `link_url` sets a URL), so use the Docs UI in Playwright (select "Jump",
+   Insert link → Headings → the first `Setup`; "back" → the second `Setup`), or a scratch script
+   per `CLAUDE.md`'s "MCP restart" note sending `updateTextStyle` with
+   `textStyle: {"link": {"headingId": "<id>"}}`. `get_doc_structure(doc_id="<id>")` gives both
+   headings' `headingId`s.
+3. `list_revisions(file_id="<id>")` and take the last `revisionId`.
+4. Make a second Doc, `qa-959-bullet`, the same way (steps 1–2), then turn its first `## Setup`
+   into a bulleted list item: `create_paragraph_bullets` over that heading's range (indices from
+   `get_doc_structure`). `list_revisions` on it and take the last `revisionId`.
+
+**Tool calls**
+1. `export_revision(file_id="<id>", revision_id="<last>")`
+2. The same call again.
+3. `export_revision(file_id="<bullet-id>", revision_id="<bullet last>")`
+
+**Checks**
+- Call 1's `markdown` contains `[Jump](#setup)` and `[back](#setup-1)`, and no
+  `docs.google.com` URL.
+- Call 2's `markdown` is identical to call 1's.
+- Call 3's `markdown` renders the first `Setup` as a list item (`- Setup`), leaves "Jump" as
+  plain text (its target doesn't render as a heading), and contains `[back](#setup)`: the
+  bulleted heading takes no slug (PR #988 round 1).
+
+**Teardown:** `delete_file` on both Docs.
+
+**Result (2026-10-11, PR #988 round 1, `8b223c5`) ✅ PASS** — Ran via `mcp-gee-sweet-kit` (OAuth). Links set by a scratch script (`updateTextStyle` with `link: {headingId}`). Revision 4: both calls returned `[Jump](#setup) here and [back](#setup-1) here.` with no `docs.google.com` URL, byte-identical. **Extra probe (sent back as a review finding):** a second Doc with the first `## Setup` turned into a bulleted list item (`createParagraphBullets`) and the same two links exported as `- Setup\n\n## Setup\n\n[Jump](#setup) here and [back](#setup-1) here.` The bulleted heading renders as a list item, not a heading, but still takes a slug. `#setup` now names the wrong heading and `#setup-1` names none. Both Docs trashed.
+
+**Result (2026-10-11, PR #988 round 2, `15d778d`) ✅ PASS** — Ran via `mcp-gee-sweet-kit` (OAuth). Links set by a scratch script (`updateTextStyle` with `link: {headingId}`). Calls 1 and 2 (revision 4) both returned `[Jump](#setup) here and [back](#setup-1) here.`, byte-identical, no `docs.google.com` URL. Call 3 (`qa-959-bullet`, revision 5) returned `# Top\n\n- Setup\n\nFirst.\n\n## Setup\n\nJump here and [back](#setup) here.`: the bulleted heading takes no slug and the link to it is dropped. **Extra probe:** a Doc with `## Setup`, then a table whose first cell is a HEADING_2 `Setup`, then a second body `## Setup`; "Jump" linked to the last body heading and "here" to the cell heading. The export was `[Jump](#setup-1) here.`: the cell heading is skipped when counting duplicates (it was `#setup-2` before the fix), and the link to it is dropped. All three Docs trashed.
+
+---
+
+### TC-D282: Doc revision `local_path`, and arguments that don't apply to the file's type (issue #959) ⚠️ local-filesystem ⚠️ requires-oauth
+
+**Setup:** `mkdir -p /tmp/qa-959` (the directory must exist: a `local_path` naming a missing
+directory, even with a trailing `/`, is written as a file of that name).
+`create_doc(title="qa-959-args", content="<p>Saved to disk</p>")`, then
+`list_revisions` on it and on `TEST_SPREADSHEET_ID`, taking each one's last `revisionId`.
+
+**Tool calls**
+1. `export_revision(file_id="<doc-id>", revision_id="<doc rev>", local_path="/tmp/qa-959/")`
+2. `export_revision(file_id="<doc-id>", revision_id="<doc rev>", range="A1:B2")`
+3. `export_revision(file_id="<TEST_SPREADSHEET_ID>", revision_id="<sheet rev>", local_path="/tmp/qa-959/")`
+4. `export_revision(file_id="<TEST_SPREADSHEET_ID>", revision_id="<sheet rev>", range="A1:B2")`
+5. `export_revision(file_id="<doc-id>", revision_id="999999")`
+6. `export_revision(file_id="<doc-id>_WRONG", revision_id="<doc rev>")`
+7. `export_revision(file_id="<doc-id>", revision_id="<doc rev>", local_path="/etc/hosts/x.md")`,
+   then `search_files(query="export_revision temp")`
+
+**Checks**
+- Call 1 returns `local_path` ending `/tmp/qa-959/<doc-id>-r<doc rev>.md`, `bytes_written`,
+  `revisionId`, `modifiedTime`, and no `markdown` or `images`. The file holds raw Markdown
+  (`Saved to disk`), not JSON.
+- Call 2 raises "…is a Google Doc; range and sheet apply only to Google Sheets."
+- Call 3 raises "…is a Google Sheet; local_path applies only to Google Docs."
+- Call 4 returns `sheet`, `range`, and `values` exactly as before #959.
+- Call 5 raises "Revision 999999 of <doc-id> not found…call list_revisions again…".
+- Call 6 raises Drive's own 404 ("File not found: <doc-id>_WRONG"), not the merged-revision
+  message (PR #988 round 1).
+- Call 7 raises "local_path '/etc/hosts/x.md' has a non-directory path component at
+  '/etc/hosts'", and `search_files` finds no temporary Doc for `<doc-id>`: the destination is checked
+  before the export (PR #988 round 1).
+
+**Teardown:** remove `/tmp/qa-959/`; `delete_file(file_id="<doc-id>")`.
+
+**Result (2026-10-11, PR #988 round 1, `8b223c5`) ✅ PASS** — Ran via `mcp-gee-sweet-kit` (OAuth). The first attempt at call 1 ran without `/tmp/qa-959` existing and wrote a 15-byte *file* named `/tmp/qa-959` (`local_path: "/tmp/qa-959"`); that comes from the shared `write_capped_result_to_disk`, which this PR doesn't touch, so it's ticketed separately and the setup now creates the directory. Rerun with the directory present: call 1 returned `local_path` `/tmp/qa-959/<doc-id>-r3.md`, `bytes_written: 15`, `revisionId`, `modifiedTime`, `images: []`, no `markdown`; the file held `Saved to disk\n\n`, raw Markdown. Calls 2, 3, and 5 raised the expected messages. Call 4 returned `sheet: "Sales"`, `range: "A1:B2"`, `values: [["Product", null], ["Widget", 100]]`. **Extra probe (sent back as a review finding):** `file_id="<doc-id>_WRONG"` raised the same "Revision 3 of … not found. Drive merges a recent revision…" message, misdiagnosing a bad file ID as a merged revision.
+
+**Result (2026-10-11, PR #988 round 2, `15d778d`) ✅ PASS** — Ran via `mcp-gee-sweet-kit` (OAuth), `/tmp/qa-959` created first. Call 1 returned `local_path` `/tmp/qa-959/<doc-id>-r3.md`, `bytes_written: 15`, `revisionId`, `modifiedTime`, and no `markdown` or `images`; the file held `Saved to disk\n\n`. Calls 2, 3, and 5 raised the expected messages. Call 4 returned `sheet: "Sales"`, `range: "A1:B2"`, `values: [["Product", null], ["Widget", 100]]` (revision 342). Call 6 raised Drive's own `HttpError 404 … "File not found: <doc-id>_WRONG."`, not the merged-revision message. Call 7 raised `local_path '/etc/hosts/x.md' has a non-directory path component at '/etc/hosts'`, and `search_files` found no temporary Doc for `<doc-id>` (only the earlier trashed one noted in TC-D280). Doc trashed, `/tmp/qa-959` removed.
+
+---
+
+### TC-D283: A service account (Content manager) exports a Doc revision; the temporary Doc is trashed (issue #959)
+
+**Background:** A Content manager on a Shared Drive can trash but not permanently delete (#876),
+so the temporary Doc is trashed instead. Use the `mcp-gee-sweet-sa` server, whose default folder
+is the Shared Drive.
+
+**Setup:** On the SA server, `create_doc(title="qa-959-sa", content="<p>SA revision</p>")`, then
+`list_revisions(file_id="<id>")` and take the last `revisionId`.
+
+**Tool calls**
+1. `export_revision(file_id="<id>", revision_id="<last>")` on the SA server
+2. `search_files(query="export_revision temp")` on the SA server
+
+**Checks**
+- Call 1 returns `markdown` containing `SA revision` and no `warning`.
+- Call 2 finds no live file. If the client can show trashed files, the temporary Doc is in the
+  Shared Drive's trash.
+
+**Teardown:** `delete_file(file_id="<id>")` on the SA server.
+
+**Result (2026-10-11, PR #988 round 1, `8b223c5`) ⏭️ SKIP** — Not run: a lane QA session may call only its own `mcp-gee-sweet-kit` server, and the case needs `mcp-gee-sweet-sa`. Pending for a release pass (Aziz may use the `-sa` slot). The trash branch is unit-tested only so far.
 
 ---
 

@@ -120,6 +120,37 @@ raw Docs API via `batch_update` passthrough) instead. Related: docs/design/doc-t
 
 ---
 
+### `export_revision` on a Google Doc — links, images, and vanishing revision IDs
+
+**What:** `export_revision` (#959) returns a Doc revision as Markdown through the same converter
+as `get_doc_as_markdown`, with these differences and gaps:
+
+1. A link to a heading renders as a GitHub-style `#slug` anchor, not as a docs.google.com URL.
+   A link to a bookmark, or to a heading that doesn't render as one (a bulleted heading, or one
+   in a table cell), is dropped and leaves its text. An image renders as
+   `image:sha256-<hash>`, with no viewable URL: the temporary Doc's image URLs stop working
+   once it's deleted, so an old revision's images can't be viewed this way.
+2. The export doesn't include comments, which aren't part of a revision.
+3. A revision ID from `list_revisions` can stop existing: Docs folds a recent revision into the
+   next one while editing continues (measured: edits 90 seconds and 5 minutes later both merged it).
+   The export then fails with an error saying to list revisions again.
+4. Each call creates and removes a temporary Google Doc in the default folder, which takes
+   several seconds and needs storage there (a service account needs a Shared Drive default
+   folder). If removal fails, the result's `warning` names the Doc to delete by hand.
+
+**Why:** The Docs API reads only a document's current state, so the revision is exported as DOCX
+and imported into a temporary Doc to be read. That Doc's ID, heading IDs, and image URLs are new
+on every import, so (1) replaces them with values that stay the same between exports and keep
+diffs clean. A bookmark has no text to make a stable anchor from, and an invented one could be
+matched to the wrong heading if the Markdown is written back. (3) is how Drive keeps Docs
+revision history.
+
+**Workaround:** For (1), diff one revision's export against another's, not against
+`get_doc_as_markdown` output. For (3), export a revision only after editing has settled.
+Related: docs/design/doc-revision-export.md.
+
+---
+
 ## Google Drive
 
 ### Service account cannot create files in personal Drive
