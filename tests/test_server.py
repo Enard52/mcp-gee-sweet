@@ -18,6 +18,7 @@ from httplib2 import Response
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ResourceError, ToolError, UnexpectedToolError
 from pydantic import ValidationError
+from uvicorn.importer import import_from_string
 
 from mcp_gee_sweet import auth as auth_module
 from mcp_gee_sweet import server
@@ -761,6 +762,90 @@ class TestMainAuthAndTransport:
         assert isinstance(server.app, SingleResponseGuard)
         assert config.app is server.app
         assert (config.host, config.port, config.log_level) == ("127.0.0.9", 47123, "debug")
+
+    def test_streamable_http_serves_a_guarded_app_like_run_streamable_http_async(self, monkeypatch):
+        # #917: mcp.run(transport="streamable-http") builds its own unguarded app, so
+        # main() wraps mcp's streamable_http_app and launches it the same way as SSE.
+        monkeypatch.setattr(sys, "argv", ["mcp-gee-sweet", "--transport", "streamable-http"])
+        monkeypatch.setattr(server, "_resolved_host", "127.0.0.9")
+        monkeypatch.setattr(server, "_resolved_port", 47123)
+        monkeypatch.setattr(mcp.settings, "log_level", "DEBUG")
+        built = MagicMock(name="streamable_http_app")
+        build = MagicMock(return_value=built)
+        mcp_run, uvicorn_run, anyio_run = MagicMock(), MagicMock(), MagicMock()
+        monkeypatch.setattr(mcp, "streamable_http_app", build)
+        monkeypatch.setattr(mcp, "run", mcp_run)
+        monkeypatch.setattr(uvicorn, "run", uvicorn_run)
+        monkeypatch.setattr(anyio, "run", anyio_run)
+        main()
+        mcp_run.assert_not_called()
+        uvicorn_run.assert_not_called()
+        build.assert_called_once_with(host="127.0.0.9")
+        (serve,) = anyio_run.call_args.args
+        assert serve.__func__ is uvicorn.Server.serve
+        config = serve.__self__.config
+        assert isinstance(config.app, SingleResponseGuard)
+        assert config.app.app is built
+        assert (config.host, config.port, config.log_level) == ("127.0.0.9", 47123, "debug")
+        assert auth_module._interactive_consent is True
+        assert auth_module._raise_auth_failures is False
+
+    def test_unknown_transport_exits_with_a_message(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["mcp-gee-sweet", "--transport", "websocket"])
+        mcp_run, uvicorn_run, anyio_run = MagicMock(), MagicMock(), MagicMock()
+        monkeypatch.setattr(mcp, "run", mcp_run)
+        monkeypatch.setattr(uvicorn, "run", uvicorn_run)
+        monkeypatch.setattr(anyio, "run", anyio_run)
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert "unknown --transport 'websocket'" in str(exc.value.code)
+        mcp_run.assert_not_called()
+        uvicorn_run.assert_not_called()
+        anyio_run.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("transport", "target", "factory"),
+        [
+            ("sse", "mcp_gee_sweet.server:app", False),
+            ("streamable-http", "mcp_gee_sweet.server:_streamable_http_app", True),
+        ],
+    )
+    def test_reload_serves_the_guarded_app_for_each_http_transport(
+        self, monkeypatch, transport, target, factory
+    ):
+        # --reload used to be honored for sse only and silently dropped for
+        # streamable-http (PR #975 QA round 1).
+        monkeypatch.setattr(sys, "argv", ["mcp-gee-sweet", "--transport", transport, "--reload"])
+        monkeypatch.setattr(server, "_resolved_host", "127.0.0.9")
+        monkeypatch.setattr(server, "_resolved_port", 47123)
+        uvicorn_run, anyio_run = MagicMock(), MagicMock()
+        monkeypatch.setattr(uvicorn, "run", uvicorn_run)
+        monkeypatch.setattr(anyio, "run", anyio_run)
+        main()
+        anyio_run.assert_not_called()
+        uvicorn_run.assert_called_once_with(
+            target, factory=factory, host="127.0.0.9", port=47123, reload=True
+        )
+
+    def test_reload_target_factory_builds_a_guarded_streamable_http_app(self, monkeypatch):
+        built = MagicMock(name="streamable_http_app")
+        monkeypatch.setattr(mcp, "streamable_http_app", MagicMock(return_value=built))
+        # Resolve the reload target the way uvicorn's reloader worker does.
+        factory = import_from_string("mcp_gee_sweet.server:_streamable_http_app")
+        guarded = factory()
+        assert isinstance(guarded, SingleResponseGuard)
+        assert guarded.app is built
+
+    def test_reload_with_stdio_warns_and_runs_stdio(self, monkeypatch, caplog):
+        monkeypatch.setattr(sys, "argv", ["mcp-gee-sweet", "--reload"])
+        mcp_run, uvicorn_run = MagicMock(), MagicMock()
+        monkeypatch.setattr(mcp, "run", mcp_run)
+        monkeypatch.setattr(uvicorn, "run", uvicorn_run)
+        with caplog.at_level(logging.WARNING, logger=server.logger.name):
+            main()
+        uvicorn_run.assert_not_called()
+        mcp_run.assert_called_once_with(transport="stdio")
+        assert "--reload applies only to the sse and streamable-http transports" in caplog.text
 
 
 class TestMainLogsVersion:

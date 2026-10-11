@@ -1364,3 +1364,36 @@ Start a stdio session against `uv run mcp-gee-sweet` with `AUTH_METHOD=oauth`, `
 **Result (2026-10-08, PR #925 round 3 @ e5f6fed, Sky) ✅ PASS**
 mcp 2.3.0, stdio, fresh `CACHE_DB_PATH`. Step 1: `Google rejected the OAuth token refresh: invalid_grant ...`, link 1 `within 24s`, port 63319. Step 2 at +16.1s: a different link, port 63322, `within 24s`. Step 3 at +18.1s: both ports open (round 2 had link 1 closed by now). Step 4 at +26.0s (link 1's deadline +24s): link 1 refused, link 2 open. 0 `Please visit`.
 Extra check (the fix's "either link completes" claim, TC-I51-style): `OAUTH_CONSENT_TIMEOUT_SECONDS=120` (threshold 60s). Link 1 `within 119s`. At +61.6s a second `list_files` gave link 2 (a different port), with both ports open. Playwright, under the mutex, after the fixture-doc sign-in check, then completed consent through **link 1** (the replaced one): account chooser, the Workspace account, **Allow**, and the callback page on link 1's port read `The authentication flow has completed. You may close this window.` The scratch token's `refresh_token` changed and its mode is `0o600`. Link 1's port then closed, and the retried `list_files` succeeded. Link 2's port stayed open after the consent completed, as designed: it listens until its own deadline. 0 `Please visit`. Scratch files deleted.
+
+---
+
+### TC-I55: SIGTERM with a streamable-http `GET /mcp` stream open closes the stream cleanly (issue #917) ⚠️ local-filesystem
+
+**Background:** TC-I47's sibling on the other HTTP transport. On SIGTERM, sse_starlette cancels the open `GET /mcp` event stream without its closing chunk, and mcp's handler then simply returns. Nothing follows the cut-off body, so uvicorn logged `ASGI callable returned without completing response.` and the client got a chunked body that never terminated (`IncompleteRead(0 bytes read)`). `SingleResponseGuard` (`sse_shutdown.py`) now sends the missing closing body when the app returns during shutdown with a started, unfinished response. Outside shutdown it leaves that alone, so uvicorn still reports a genuine incomplete response. `main()` serves `--transport streamable-http` through the guard with the same launch as `--transport sse` (`anyio.run(uvicorn.Server(config).serve)`), instead of `mcp.run(transport="streamable-http")`, which builds its own unguarded app.
+
+**Setup:** none beyond a checkout of this branch. No Google credentials are needed: the case only needs an initialized session with its GET stream open.
+
+**Action**
+Start `uv run mcp-gee-sweet --transport streamable-http` with `HOST=127.0.0.1`, `PORT=<free port>`, `AUTH_METHOD=oauth`, `CREDENTIALS_PATH=<nonexistent>`, `TOKEN_PATH=<nonexistent>`, `DEBUG_LEVEL=DEBUG`, `PYTHONUNBUFFERED=1`, stdout and stderr to one file.
+1. With Python `http.client`: `POST /mcp` a JSON-RPC `initialize` (`Content-Type: application/json`, `Accept: application/json, text/event-stream`) and keep the returned `mcp-session-id` header. `POST /mcp` `notifications/initialized` with that session ID (expect `202`). Then, on a separate connection, open `GET /mcp` with `Accept: text/event-stream` and the session ID, and read the response status (expect `200`). Wait 2 seconds
+2. Send the server process `SIGTERM` (not SIGKILL) and time its exit. Then read the GET response to EOF
+3. Repeat steps 1–2 two more times against a fresh server, then once more with `--reload` added to the command line
+4. Start a fresh server the same way; with the `mcp` SDK's `streamable_http_client` + `ClientSession`, `initialize` and `list_tools`, close the session, then SIGTERM the server
+5. Run `uv run mcp-gee-sweet --transport websocket`
+
+**Checks**
+- 2, 3: reading the GET response to the end ends with a clean EOF (an empty body), not an `IncompleteRead`
+- 2, 3: the log has no `ASGI callable returned without completing response`, no `Exception in ASGI application`, and no `RuntimeError: Expected ASGI message`. (The nonexistent `CREDENTIALS_PATH` logs the expected `Auth failure detail` traceback ending in `RuntimeError: '<path>' not found`, as in TC-I47.) With `DEBUG_LEVEL=DEBUG` it has `DEBUG mcp_gee_sweet.sse_shutdown Closing a response cut off on /mcp during shutdown (#917)`
+- 2, 3: the server exits within a few seconds of SIGTERM, and `lsof -i :<port>` is empty afterwards
+- 3 (`--reload` run): the log has `Started reloader process`, so `--reload` is honored for streamable-http rather than silently ignored
+- 4: `initialize` and `list_tools` succeed (the guard doesn't touch a normal session), and the log has no ASGI error and no `Closing a response cut off` line
+- 5: exits non-zero with `mcp-gee-sweet: unknown --transport 'websocket' (use stdio, sse, or streamable-http)` on stderr, and no traceback
+- Re-run TC-I47's steps 1–2 once: `--transport sse` still passes, since it shares the guard and the launch helper
+
+**Cleanup:** SIGKILL any server still running (and record the case as failed).
+
+**Result (2026-10-10, PR #975 round 1 @ 5e3fad2, Sky) ✅ PASS**
+uvicorn 0.47.0, mcp 2.3.0, run through `uv run` (exit code 143 is uv forwarding SIGTERM). Steps 1–3 (three fresh servers, `http.client`): `initialize` 200, `notifications/initialized` 202, `GET /mcp` 200. After SIGTERM each GET read to a clean EOF (0 bytes, no `IncompleteRead`). Every log has `Closing a response cut off on /mcp during shutdown (#917)` and none of the three error strings. The servers exited 0.55s, 0.61s, and 0.55s after SIGTERM. `lsof -i :<port>` showed only the driver's own client sockets in `CLOSE_WAIT`, with no server process or listener. Step 4: SDK `streamable_http_client` `initialize` + `list_tools` returned 139 tools, with no ASGI error and no `Closing a response cut off` line; exit 0.13s, port free. TC-I47 recheck: steps 1–2 once (`event: endpoint`, `Dropping a second response on /sse during shutdown (#868)`, clean EOF, exit 0.18s, port free) and step 4 once (139 tools, no `Dropping` line), all passing. Side check outside the case: `--transport streamable-http --reload` starts with no reloader and no warning that `--reload` is ignored (sent back on the PR).
+
+**Result (2026-10-10, PR #975 round 2 @ f5987b8, Sky) ✅ PASS**
+Same driver as round 1 (uvicorn 0.47.0, mcp 2.3.0, `uv run`). Steps 1–3 (three plain runs): `initialize` 200, `notifications/initialized` 202, `GET /mcp` 200. Each GET read to a clean EOF (0 bytes), and each log has the `#917` close line and none of the three error strings. The servers exited 0.60–0.61s after SIGTERM, with no listener left. Step 3 `--reload` run: `Started reloader process ... using StatReload`, the same `#917` close line, a clean EOF, and exit 0.76s (uvicorn's reloader exits 0). Extra check: touching `src/mcp_gee_sweet/sse_shutdown.py` under `--reload` logged `StatReload detected changes ... Reloading...` and started a new server process, so the reload works and isn't only a banner. Step 4: SDK session, 139 tools, no close line and no ASGI error, exit 0.23s. Step 5: `mcp-gee-sweet: unknown --transport 'websocket' (use stdio, sse, or streamable-http)`, exit 1, no traceback. Extra check: `--reload` with stdio logs `WARNING ... --reload applies only to the sse and streamable-http transports; ignoring it`. TC-I47 recheck: steps 1–2 once (`#868` drop line, clean EOF, exit 0.60s, port free).
