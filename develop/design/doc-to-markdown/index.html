@@ -1463,7 +1463,24 @@ best-effort — see below), and an opt-in comments section.</p>
   distinguishes a genuine <code>```code block```</code> paragraph from <code>`inline code`</code> sitting
   next to ordinary text in the same paragraph — the one case it can't resolve (a paragraph
   containing <em>only</em> a single inline code span, nothing else) is the genuinely ambiguous case
-  documented above, not a bug in the heuristic.</li>
+  documented above, not a bug in the heuristic. One exception (#951): a fenced block's content
+  is literal and can't carry a link, so an all-code paragraph with any linked run renders as
+  inline code spans (each line its own span, joined by <code>&lt;br&gt;</code>) instead of a fence, keeping the
+  link. Only a link that actually renders counts: a linked run that is only line breaks renders
+  as bare <code>&lt;br&gt;</code>, so it keeps the fence (PR #976 QA round 1). A linked image doesn't trigger
+  this either, since images render outside the fence anyway.</li>
+<li><strong>Linked images</strong> (#951): Docs puts an image's link on its <code>inlineObjectElement</code>'s own
+  <code>textStyle.link</code>, the same as a text run (confirmed live). <code>doc_to_ast</code> reads it into
+  <code>Image.link_url</code>, and every image renders through <code>_render_image</code> as <code>[![alt](src)](url)</code>, in
+  ordinary text, a code paragraph, and a table cell alike. The write side doesn't set
+  <code>Image.link_url</code> yet (#977).</li>
+<li><strong>Same-document links</strong> (PR #976 QA round 1): Docs reports a link to a heading or bookmark by
+  ID with no <code>url</code> (confirmed live for a heading: <code>{"headingId": "h.x"}</code>, on a text run and an
+  image alike). <code>doc_to_ast._link_url</code>, shared by both, rebuilds it as
+  <code>https://docs.google.com/document/d/&lt;id&gt;/edit?tab=&lt;tab&gt;#heading=&lt;id&gt;</code> (or <code>#bookmark=</code>),
+  the form <code>get_doc_structure</code>'s docstring documents. The tab comes from the newer
+  <code>heading</code>/<code>bookmark</code> object's <code>tabId</code>, else <code>t.0</code>. The bookmark form follows the Docs UI's
+  own URLs; the API can't create a bookmark, so it isn't verified live.</li>
 <li><strong>Code delimiters</strong> (#923, #940, #938): a code span's content is literal, so the serializer
   can only pick a delimiter and padding. A fenced block's fence and an inline span's delimiter
   are one backtick longer than the longest backtick run in the content (fences at least 3).

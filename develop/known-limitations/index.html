@@ -1437,7 +1437,8 @@ Markdown-format or Docs-API constraint rather than missing implementation:</p>
    apart on read. <code>get_doc_as_markdown</code> treats a paragraph as a fenced block only when <em>every</em>
    run in it is code-styled; a paragraph containing nothing but a single inline code span (no
    surrounding text) is indistinguishable from a one-line code block and renders as a fenced
-   block either way.</li>
+   block either way. An all-code paragraph with a linked run renders as inline code spans
+   instead, since a fenced block can't carry a link.</li>
 </ol>
 <p><strong>Why:</strong> (1) and (3) are Docs-representation-level ambiguities, not gaps in this tool's
 traversal; (2) is inherent to how Drive serves inline image bytes.</p>
