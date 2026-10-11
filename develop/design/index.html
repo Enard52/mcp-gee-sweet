@@ -1418,6 +1418,11 @@
 <td>2026-10-06</td>
 <td>#873/#906: a revoked or missing token offers the consent link from the failing call (URL elicitation, or the link in the <code>ToolError</code>), detected at <code>thread_http</code>'s transport so tools that catch errors are covered, adopted in place on every connection</td>
 </tr>
+<tr>
+<td><a href="local-file-access-policy/">Local-File Access Policy</a></td>
+<td>2026-10-10</td>
+<td>#796: <code>LOCAL_FILE_ACCESS=full\|roots\|off</code> resolved at import from argv (plus an HTTP-request tripwire for launches argv can't see), one <code>check_read</code>/<code>check_write</code> at each choke point and per entry in folder walks, an identity-based (<code>samefile</code>) deny-list of the server's own credential/config/cache/log files, <code>@tool(local_only=True)</code> unregistering nine tools in <code>off</code> mode, mode and roots reported in <code>server://auth-status</code> and the refusal</td>
+</tr>
 </tbody>
 </table>
 
