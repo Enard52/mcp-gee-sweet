@@ -30,12 +30,15 @@ _VALID_BORDER_STYLES = [
 
 _VALID_SORT_ORDERS = ["ASCENDING", "DESCENDING"]
 
+# Only the BooleanCondition types setDataValidation accepts. BLANK, NOT_BLANK,
+# TEXT_STARTS_WITH and TEXT_ENDS_WITH are conditional-formatting/filter-only
+# (the discovery doc's enum descriptions say so), and the API rejects each
+# with "ConditionType '<type>' is not supported in data validation" (live-
+# confirmed, PR #986 QA round 2), so they're rejected locally instead.
 _VALID_CONDITION_TYPES = [
     "BOOLEAN",
     "TEXT_CONTAINS",
     "TEXT_NOT_CONTAINS",
-    "TEXT_STARTS_WITH",
-    "TEXT_ENDS_WITH",
     "TEXT_EQ",
     "TEXT_IS_EMAIL",
     "TEXT_IS_URL",
@@ -57,8 +60,6 @@ _VALID_CONDITION_TYPES = [
     "NUMBER_NOT_BETWEEN",
     "ONE_OF_RANGE",
     "ONE_OF_LIST",
-    "BLANK",
-    "NOT_BLANK",
     "CUSTOM_FORMULA",
 ]
 
@@ -73,8 +74,9 @@ class _ConditionSpec(NamedTuple):
     which docstring line this condition_type renders on — deliberately
     independent of (counts, doc) equality. Two condition_types can end up
     with identical counts and doc text while remaining semantically distinct
-    (TEXT_IS_EMAIL/TEXT_IS_URL vs. BLANK/NOT_BLANK both render "no values",
-    but text-format validity and blank-cell checks aren't the same concept)
+    (TEXT_IS_EMAIL/TEXT_IS_URL and the since-removed BLANK/NOT_BLANK both
+    rendered "no values", but text-format validity and blank-cell checks
+    aren't the same concept)
     — grouping on the explicit tag instead of incidental text equality means
     the two can never silently merge onto one line just because their
     rendered text happens to coincide (PR #759 review, live-confirmed
@@ -128,13 +130,9 @@ _CONDITION_SPECS: dict[str, _ConditionSpec] = {
     "DATE_IS_VALID": _ConditionSpec((0,), "no values; any parseable date passes", "date_valid"),
     "TEXT_CONTAINS": _ConditionSpec((1,), "one text value", "text_single"),
     "TEXT_NOT_CONTAINS": _ConditionSpec((1,), "one text value", "text_single"),
-    "TEXT_STARTS_WITH": _ConditionSpec((1,), "one text value", "text_single"),
-    "TEXT_ENDS_WITH": _ConditionSpec((1,), "one text value", "text_single"),
     "TEXT_EQ": _ConditionSpec((1,), "one text value", "text_single"),
     "TEXT_IS_EMAIL": _ConditionSpec((0,), "no values", "text_format"),
     "TEXT_IS_URL": _ConditionSpec((0,), "no values", "text_format"),
-    "BLANK": _ConditionSpec((0,), "no values", "blank"),
-    "NOT_BLANK": _ConditionSpec((0,), "no values", "blank"),
     "CUSTOM_FORMULA": _ConditionSpec((1,), 'one formula string, e.g. "=A1>0"', "custom_formula"),
 }
 
@@ -251,11 +249,12 @@ def _border_spec(border: dict) -> dict[str, Any]:
     return spec
 
 
-def _grid_range(sheet_id: int, range_str: str) -> dict[str, Any]:
-    """Build a Sheets API GridRange dict from an A1 notation range string."""
+def _grid_range(range_str: str) -> dict[str, Any]:
+    """Build a Sheets API GridRange dict, minus its sheetId, from an A1
+    notation range string. Only _resolve_grid_range calls this; it adds the
+    sheetId."""
     indices = _parse_a1_notation(range_str)
     grid_range: dict[str, Any] = {
-        "sheetId": sheet_id,
         "startRowIndex": indices.get("startRowIndex", 0),
         "startColumnIndex": indices.get("startColumnIndex", 0),
     }
@@ -266,21 +265,36 @@ def _grid_range(sheet_id: int, range_str: str) -> dict[str, Any]:
     return grid_range
 
 
-def _grid_range_or_error(
-    sheet_id: int, range_str: str
+async def _resolve_grid_range(
+    sheets_service: Any,
+    spreadsheet_id: str,
+    sheet: str,
+    range_str: str,
+    cache: Any,
+    drive_service: Any,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    """Same as _grid_range, but returns (error, None) on invalid A1 notation
-    instead of raising, matching _parse_a1_notation_or_error's shape and
-    this codebase's established error-or-None convention (_enum_value_error,
-    _resolve_end_index_or_error above) instead of requiring every call site
-    to wrap this in its own try/except ValueError (issue #747 QA round 1).
+    """Parse range_str, resolve `sheet`, and return a complete GridRange.
 
-    Returns (None, grid_range) on success, or (error, None) on failure.
+    The range is parsed first, so a malformed range is rejected before the
+    sheet lookup, which is an API call when the structure cache is cold
+    (#955). The sheetId is set here, in one place, because a GridRange
+    without one silently targets the first tab (sheet 0) instead of failing
+    (PR #986 QA round 1).
+
+    Returns (None, grid_range) on success, or (error, None) for invalid A1
+    notation (issue #747) or a sheet that isn't found, matching this
+    codebase's error-or-None convention (_enum_value_error,
+    _resolve_end_index_or_error above).
     """
     try:
-        return None, _grid_range(sheet_id, range_str)
+        grid_range = _grid_range(range_str)
     except ValueError as e:
         return {"error": str(e)}, None
+
+    sheet_id = await _get_sheet_id(sheets_service, spreadsheet_id, sheet, cache, drive_service)
+    if sheet_id is None:
+        return {"error": f"Sheet '{sheet}' not found"}, None
+    return None, {"sheetId": sheet_id, **grid_range}
 
 
 async def _apply_data_validation(
@@ -300,11 +314,9 @@ async def _apply_data_validation(
     duplicating this sheet-resolution + _grid_range + batchUpdate block
     almost verbatim.
     """
-    sheet_id = await _get_sheet_id(sheets_service, spreadsheet_id, sheet, cache, drive_service)
-    if sheet_id is None:
-        return {"error": f"Sheet '{sheet}' not found"}
-
-    error, grid_range = _grid_range_or_error(sheet_id, range_str)
+    error, grid_range = await _resolve_grid_range(
+        sheets_service, spreadsheet_id, sheet, range_str, cache, drive_service
+    )
     if error:
         return error
 
@@ -1449,12 +1461,6 @@ def register(tool):
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
 
-        sheet_id = await _get_sheet_id(
-            sheets_service, spreadsheet_id, sheet, lc.cache, lc.drive_service
-        )
-        if sheet_id is None:
-            return {"error": f"Sheet '{sheet}' not found"}
-
         cell_format: dict[str, Any] = {}
         fields: list[str] = []
 
@@ -1497,7 +1503,9 @@ def register(tool):
         if not fields:
             return {"error": "No formatting parameters provided"}
 
-        error, grid_range = _grid_range_or_error(sheet_id, range)
+        error, grid_range = await _resolve_grid_range(
+            sheets_service, spreadsheet_id, sheet, range, lc.cache, lc.drive_service
+        )
         if error:
             return error
 
@@ -1586,13 +1594,9 @@ def register(tool):
                 return error
             update_borders_request[key] = _border_spec(border)
 
-        sheet_id = await _get_sheet_id(
-            sheets_service, spreadsheet_id, sheet, lc.cache, lc.drive_service
+        error, grid_range = await _resolve_grid_range(
+            sheets_service, spreadsheet_id, sheet, range, lc.cache, lc.drive_service
         )
-        if sheet_id is None:
-            return {"error": f"Sheet '{sheet}' not found"}
-
-        error, grid_range = _grid_range_or_error(sheet_id, range)
         if error:
             return error
         update_borders_request["range"] = grid_range
@@ -1786,13 +1790,9 @@ def register(tool):
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
 
-        sheet_id = await _get_sheet_id(
-            sheets_service, spreadsheet_id, sheet, lc.cache, lc.drive_service
+        error, grid_range = await _resolve_grid_range(
+            sheets_service, spreadsheet_id, sheet, range, lc.cache, lc.drive_service
         )
-        if sheet_id is None:
-            return {"error": f"Sheet '{sheet}' not found"}
-
-        error, grid_range = _grid_range_or_error(sheet_id, range)
         if error:
             return error
 
@@ -1836,13 +1836,9 @@ def register(tool):
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
 
-        sheet_id = await _get_sheet_id(
-            sheets_service, spreadsheet_id, sheet, lc.cache, lc.drive_service
+        error, grid_range = await _resolve_grid_range(
+            sheets_service, spreadsheet_id, sheet, range, lc.cache, lc.drive_service
         )
-        if sheet_id is None:
-            return {"error": f"Sheet '{sheet}' not found"}
-
-        error, grid_range = _grid_range_or_error(sheet_id, range)
         if error:
             return error
 
@@ -2018,21 +2014,13 @@ def register(tool):
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
 
-        sheet_id = await _get_sheet_id(
-            sheets_service, spreadsheet_id, sheet, lc.cache, lc.drive_service
-        )
-        if sheet_id is None:
-            return {"error": f"Sheet '{sheet}' not found"}
-
-        error, grid_range = _grid_range_or_error(sheet_id, range)
-        if error:
-            return error
-        col_start = grid_range["startColumnIndex"]
-
         if sort_order is None:
             sort_order = [{"column_index": 0, "order": "ASCENDING"}]
 
-        sort_specs = []
+        # Validated before _resolve_grid_range so a bad spec costs no sheet
+        # lookup; dimensionIndex needs the range's start column, so the specs
+        # themselves are built after it.
+        validated_orders: list[tuple[int, str]] = []
         for i, s in enumerate(sort_order):
             if "column_index" not in s:
                 return {"error": f"Sort spec at index {i} is missing required 'column_index' key"}
@@ -2051,12 +2039,19 @@ def register(tool):
             if error:
                 return error
 
-            sort_specs.append(
-                {
-                    "dimensionIndex": col_start + s["column_index"],
-                    "sortOrder": order.upper(),
-                }
-            )
+            validated_orders.append((s["column_index"], order.upper()))
+
+        error, grid_range = await _resolve_grid_range(
+            sheets_service, spreadsheet_id, sheet, range, lc.cache, lc.drive_service
+        )
+        if error:
+            return error
+
+        col_start = grid_range["startColumnIndex"]
+        sort_specs = [
+            {"dimensionIndex": col_start + column_index, "sortOrder": order}
+            for column_index, order in validated_orders
+        ]
 
         return await execute_in_thread(
             sheets_service.spreadsheets()

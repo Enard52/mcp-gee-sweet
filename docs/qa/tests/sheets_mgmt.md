@@ -1594,12 +1594,12 @@ add_data_validation(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not f
 
 ### TC-S122: add_data_validation — values count/shape mismatch per condition_type returns a local error (unit test)
 
-**Background:** Issue #366 — before this, a mismatched `values` count reached the real Sheets API and got a clean 400 back (e.g. `NUMBER_BETWEEN` with 1 value: `"requires exactly two ConditionValues, but 1 value was supplied"`), which was already safe, just a round-trip later than necessary. Now caught locally via `_condition_value_count_error` before any API call, covering all five value-count shapes: zero-only (`NOT_BLANK`, `BLANK`, `DATE_IS_VALID`, `TEXT_IS_EMAIL`, `TEXT_IS_URL`), zero-or-two (`BOOLEAN`), exactly-one (`NUMBER_GREATER`, `CUSTOM_FORMULA`, `ONE_OF_RANGE`, and the other single-value TEXT_*/DATE_*/NUMBER_* types), exactly-two (`NUMBER_BETWEEN`, `NUMBER_NOT_BETWEEN`, `DATE_BETWEEN`, `DATE_NOT_BETWEEN`), and at-least-one (`ONE_OF_LIST`).
+**Background:** Issue #366 — before this, a mismatched `values` count reached the real Sheets API and got a clean 400 back (e.g. `NUMBER_BETWEEN` with 1 value: `"requires exactly two ConditionValues, but 1 value was supplied"`), which was already safe, just a round-trip later than necessary. Now caught locally via `_condition_value_count_error` before any API call, covering all five value-count shapes: zero-only (`DATE_IS_VALID`, `TEXT_IS_EMAIL`, `TEXT_IS_URL`; `BLANK`/`NOT_BLANK` were removed in PR #986 as unsupported by data validation, see TC-S134), zero-or-two (`BOOLEAN`), exactly-one (`NUMBER_GREATER`, `CUSTOM_FORMULA`, `ONE_OF_RANGE`, and the other single-value TEXT_*/DATE_*/NUMBER_* types), exactly-two (`NUMBER_BETWEEN`, `NUMBER_NOT_BETWEEN`, `DATE_BETWEEN`, `DATE_NOT_BETWEEN`), and at-least-one (`ONE_OF_LIST`).
 
 **Checks (unit test)**
 - `NUMBER_BETWEEN` with 1 value → `{"error": ...}`, before any API call (the issue's own example)
 - `BOOLEAN` accepts 0 or 2 values (a plain checkbox or custom checked/unchecked labels), rejects exactly 1
-- A zero-value type (`NOT_BLANK`) rejects any supplied value
+- A zero-value type (`DATE_IS_VALID`) rejects any supplied value
 - `ONE_OF_LIST` rejects an empty/omitted `values`
 - Exactly-one types (`NUMBER_GREATER`, `CUSTOM_FORMULA`, `ONE_OF_RANGE`) reject 0 or 2 values
 - Exactly-two types (`NUMBER_BETWEEN`, `DATE_BETWEEN`) reject 1 or 3 values
@@ -1689,7 +1689,7 @@ Same as TC-S100 — re-confirms clean-error fix (duplicate coverage in test file
 ### TC-S126: add_data_validation — invalid A1 notation range returns a clean error (issue #747, unit test)
 
 **Checks (unit test)**
-- `add_data_validation(spreadsheet_id, sheet="Sheet1", range="Sheet1!A1", condition_type="NOT_BLANK")` → `{"error": "Invalid A1 notation: Sheet1!A1"}`, not an uncaught `ValueError`
+- `add_data_validation(spreadsheet_id, sheet="Sheet1", range="Sheet1!A1", condition_type="DATE_IS_VALID")` → `{"error": "Invalid A1 notation: Sheet1!A1"}`, not an uncaught `ValueError`
 - No `batchUpdate` API call is made
 - Covered by `test_invalid_range_returns_error_without_api_call` in `TestAddDataValidation` — exercises the shared `_apply_data_validation` helper's `_grid_range` call
 
@@ -2083,3 +2083,94 @@ Separately, `update_cells`'s two `_parse_a1_notation` call sites (mixed-cell bra
 - All TC-S123–TC-S130/TC-W40 error-path unit tests still pass through the shared helpers
 - `uv run python -m pytest tests/sheets/` passes in full
 
+
+---
+
+### TC-S133: GridRange tools reject an out-of-bounds or malformed range before any API call (issue #955)
+
+**Background:** `_parse_a1_notation` had no upper limit on column letters or row numbers, so `ZZZZZZZZ1` or `A99999999999` reached the Sheets API and came back as a raw `HttpError`, and a row string over 4300 digits made `int()` raise without the `Invalid A1 notation` prefix. Separately, `sort_range`, `merge_cells`, `unmerge_cells`, `format_cells`, `update_borders`, `add_data_validation` and `clear_data_validation` resolved the sheet ID, which is an API call on a cold cache, before parsing the range. #955 rejects columns past `ZZZ` and rows past 10,000,000 (Sheets' grid limits) locally, and parses the range before the sheet lookup. The nonexistent spreadsheet ID and sheet name below prove the ordering: a build that looks up the sheet first returns a 404 or `Sheet 'NoSuchSheet' not found`, not the A1 error.
+
+**Fixture:** none. `spreadsheet_id="tc-s133-no-such-spreadsheet"`, `sheet="NoSuchSheet"`.
+
+**Prompt**
+> "Call each of these with `spreadsheet_id=\"tc-s133-no-such-spreadsheet\"` and `sheet=\"NoSuchSheet\"`, and report each raw result:
+> 1. `sort_range(range=\"ZZZZZZZZ1\")`
+> 2. `merge_cells(range=\"A99999999999\")`
+> 3. `unmerge_cells(range=\"A1:AAAA2\")`
+> 4. `format_cells(range=\"A:5\", bold=True)`
+> 5. `update_borders(range=\"A:B5\", top={\"style\": \"SOLID\"})`
+> 6. `add_data_validation(range=\"\\u212a1\", condition_type=\"DATE_IS_VALID\")` (the Kelvin sign U+212A, then `1`)
+> 7. `clear_data_validation(range=\"A10000001\")`
+> 8. `sort_range(range=\"ZZZ10000000\")`"
+
+**Checks**
+- 1 → `{"error": "Invalid A1 notation: column is beyond ZZZ: 'ZZZZZZZZ1'"}`
+- 2 → `{"error": "Invalid A1 notation: row is beyond 10,000,000: 'A99999999999'"}`
+- 3 → `{"error": "Invalid A1 notation: column is beyond ZZZ: 'A1:AAAA2'"}`
+- 4 → `{"error": "Invalid A1 notation: 'A:5'"}`
+- 5 → `{"error": "Invalid A1 notation: 'A:B5'"}`
+- 6 → `{"error": "Invalid A1 notation: 'K1'"}` (the error repr shows the Kelvin sign, not an ASCII `K`)
+- 7 → `{"error": "Invalid A1 notation: row is beyond 10,000,000: 'A10000001'"}`
+- 8 (control: the largest valid cell) → **not** an `Invalid A1 notation` error. It reaches the sheet lookup, so it fails on the fake spreadsheet ID instead (an `HttpError` 404 or a `Sheet ... not found` error)
+- None of calls 1–7 returns a 404 or a `Sheet 'NoSuchSheet' not found` error
+
+**Unit coverage:** `TestGridRangeToolsRejectMalformedRange` (`tests/sheets/test_structure.py`) runs every malformed case against all seven tools and asserts neither `spreadsheets().get()` nor `batchUpdate()` is called. `test_column_beyond_zzz_raises`, `test_row_beyond_limit_raises`, `test_row_over_int_digit_limit_keeps_prefix` and `test_last_column_and_row_accepted` in `TestParseA1Notation` (`tests/sheets/test_helpers.py`) cover the bounds.
+
+**Result (2026-10-11, PR #986 round 1, `6d180ec`) ✅ PASS.** Live via `mcp-gee-sweet-sky` after `/mcp reconnect`:
+- 1 → `{"error":"Invalid A1 notation: column is beyond ZZZ: 'ZZZZZZZZ1'"}`
+- 2 → `{"error":"Invalid A1 notation: row is beyond 10,000,000: 'A99999999999'"}`
+- 3 → `{"error":"Invalid A1 notation: column is beyond ZZZ: 'A1:AAAA2'"}`
+- 4 → `{"error":"Invalid A1 notation: 'A:5'"}`
+- 5 → `{"error":"Invalid A1 notation: 'A:B5'"}`
+- 6 → twice returned the `HttpError 404` from the sheet lookup. The Kelvin sign didn't survive the agent's own tool-call input: the call went out as ASCII `K1`, a valid cell. A fresh interpreter on this PR's code confirms `_parse_a1_notation("K1")` raises `Invalid A1 notation: 'K1'` while ASCII `K1` parses (and `"ﬀ1"` raises). When an agent drives this case, verify step 6 that way, not through the tool call.
+- 7 → `{"error":"Invalid A1 notation: row is beyond 10,000,000: 'A10000001'"}`
+- 8 (control) → `HttpError 404` from the sheet lookup, as expected
+- None of calls 1–5 or 7 returned a 404 or `Sheet ... not found` error.
+
+**#953 checks (folded into #955's pass), same round.**
+- **Bogus-ID preflight:** `format_cells(range="A1")` → `HttpError 404` (control). `A1:`, `1:B`, `ß1`, `A١` → `{"error":"Invalid A1 notation: '<range>'"}` each, no 404.
+- **No write on a real sheet** (temporary `sky-pr986-scratch` tab in `mcp-gee-sweet-qa-fixtures`, seeded A1:B6 with unsorted values, deleted afterward): `sort_range(range="A1:")` and `merge_cells(range="5:")` each returned the A1 error; a grid-data read afterward showed the original order and no merges.
+- **`format_cells` regression** (bold applied, bold cells read back with a fresh interpreter, reset between ranges, 1000×26 grid): `A1` → A1 only; `A1:B2` → rows 1–2, cols A–B (4); `A:A` → rows 1–1000, col A; `1:2` → rows 1–2, cols A–Z; `B2:D` → rows 2–1000, cols B–D; `B2:5` → rows 2–5, cols B–Z; `b2:d3` → rows 2–3, cols B–D (6). All exact.
+- **API contract:** `get_sheet_data(range="A:B5")` is accepted by the Sheets values API, which reads it as `A5:B` (returned rows 5–6 of the seeded A:B data). The GridRange tools' rejection of `A:B5` is therefore stricter than Sheets; filed as #987.
+
+**Result (2026-10-11, PR #986 round 2, `da34415`) ✅ PASS (sent back for the BLANK/NOT_BLANK finding below).** Live via `mcp-gee-sweet-sky` after `/mcp reconnect`, verifying fix commit `da34415` (`_resolve_grid_range`):
+- TC-S133 calls 1–5, 7 → same `Invalid A1 notation` errors as round 1; `add_data_validation(range="A1:")` → `Invalid A1 notation: 'A1:'`; call 8 (control) → `HttpError 404` from the sheet lookup.
+- **sheetId lands on the named tab, not sheet 0:** on a temporary non-first tab (`sky-pr986-r2`, index 3, deleted afterward), `format_cells("B1:C2", bold)`, `merge_cells("E1:F2")`, `add_data_validation("H1:H3", ONE_OF_LIST)` and `update_borders("J1:J2", top SOLID)` each landed exactly there, and the `Sales` tab (sheet 0) showed no bold, merges, borders or validation. `unmerge_cells("E1:F2")` removed the merge; `clear_data_validation("H1:H2")` left only H3.
+- **`sort_range`'s rebuilt sort specs:** `sort_range("B1:C4", [{"column_index": 1, "order": "DESCENDING"}])` sorted by column C (`dimensionIndex` = start column B + 1), giving c/4, a/3, d/2, b/1.
+- Side note (pre-existing, sent back to the Dev in round 2): `add_data_validation` with `condition_type="BLANK"` or `"NOT_BLANK"` reaches the API and fails with `HttpError 400 … ConditionType 'NOT_BLANK' is not supported in data validation`. TC-S133 step 6 still works because the range is rejected before the request is built.
+
+**Result (2026-10-11, PR #986 round 3, `44f9360`) ✅ PASS.** Live via `mcp-gee-sweet-sky` after `/mcp reconnect`:
+- 1–5, 7 → the same `Invalid A1 notation` errors as round 1, word for word.
+- 6 (now `DATE_IS_VALID`): the Kelvin sign again can't be sent through an agent's tool call, so it was checked in a fresh interpreter: `_parse_a1_notation("K1")` raises `Invalid A1 notation: 'K1'`. Live, `add_data_validation(range="A1:", condition_type="DATE_IS_VALID")` → `{"error":"Invalid A1 notation: 'A1:'"}`, so the new condition type passes the enum check and the range is still rejected before the sheet lookup.
+- 8 (control) → `HttpError 404` from the sheet lookup.
+- None of calls 1–5 or 7 returned a 404 or `Sheet ... not found` error.
+
+---
+
+### TC-S134: add_data_validation rejects condition types data validation doesn't support, before any API call (PR #986 QA round 2)
+
+**Background:** `add_data_validation` accepted `BLANK`, `NOT_BLANK`, `TEXT_STARTS_WITH` and `TEXT_ENDS_WITH`, but the Sheets API supports these only for conditional formatting and filters (each one's `BooleanCondition.type` enum description in the discovery doc omits data validation). Every call came back as `HttpError 400 … ConditionType '<type>' is not supported in data validation`. A fresh-interpreter probe of `setDataValidation` confirmed all four are rejected and `ONE_OF_LIST` is accepted. All four are now removed from `_VALID_CONDITION_TYPES` and `_CONDITION_SPECS`, so `_enum_value_error` rejects them locally. The nonexistent spreadsheet ID below shows the rejection is local: a build that still accepts them fails at the sheet lookup with a 404.
+
+**Fixture:** none. `spreadsheet_id="tc-s134-no-such-spreadsheet"`, `sheet="NoSuchSheet"`, `range="A1"`.
+
+**Prompt**
+> "Call `add_data_validation(spreadsheet_id=\"tc-s134-no-such-spreadsheet\", sheet=\"NoSuchSheet\", range=\"A1\", condition_type=<type>)` for each `<type>` below, with `values=[\"ab\"]` for the two TEXT_ types and no `values` for the others, and report each raw result:
+> 1. `BLANK`
+> 2. `NOT_BLANK`
+> 3. `TEXT_STARTS_WITH`
+> 4. `TEXT_ENDS_WITH`
+> 5. `DATE_IS_VALID` (control)"
+
+**Checks**
+- 1–4 → `{"error": "Invalid condition_type '<type>'. Must be one of: …"}`, and the listed valid types don't include any of the four
+- 5 (control: a supported zero-value type) → **not** an `Invalid condition_type` error. It reaches the sheet lookup and fails on the fake spreadsheet ID (an `HttpError` 404 or a `Sheet ... not found` error)
+- None of calls 1–4 returns a 404 or a `Sheet ... not found` error
+- The `add_data_validation` tool description served by the MCP server (its `condition_type` list) no longer names any of the four types
+
+**Unit coverage:** `TestAddDataValidation::test_condition_type_unsupported_by_data_validation_rejected_locally` (`tests/sheets/test_structure.py`) asserts the local error and that neither `spreadsheets().get()` nor `batchUpdate()` is called.
+
+**Result (2026-10-11, PR #986 round 3, `44f9360`) ✅ PASS.** Live via `mcp-gee-sweet-sky` after `/mcp reconnect`:
+- 1 `BLANK`, 2 `NOT_BLANK`, 3 `TEXT_STARTS_WITH` (`values=["ab"]`), 4 `TEXT_ENDS_WITH` (`values=["ab"]`) → `{"error":"Invalid condition_type '<type>'. Must be one of: BOOLEAN, TEXT_CONTAINS, TEXT_NOT_CONTAINS, TEXT_EQ, TEXT_IS_EMAIL, TEXT_IS_URL, DATE_EQ, … ONE_OF_RANGE, ONE_OF_LIST, CUSTOM_FORMULA"}` each. The valid-type list names none of the four.
+- 5 `DATE_IS_VALID` (control) → `HttpError 404` from the sheet lookup on the fake ID.
+- None of calls 1–4 returned a 404.
+- The served `add_data_validation` description (re-fetched after the reconnect) lists `DATE_IS_VALID`, `TEXT_CONTAINS`/`TEXT_NOT_CONTAINS`/`TEXT_EQ`, `TEXT_IS_EMAIL`/`TEXT_IS_URL` and the rest, and none of the four removed types.
