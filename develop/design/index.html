@@ -1423,6 +1423,11 @@
 <td>2026-10-10</td>
 <td>#796: <code>LOCAL_FILE_ACCESS=full\|roots\|off</code> resolved at import from argv (plus an HTTP-request tripwire for launches argv can't see), one <code>check_read</code>/<code>check_write</code> at each choke point and per entry in folder walks, an identity-based (<code>samefile</code>) deny-list of the server's own credential/config/cache/log files, <code>@tool(local_only=True)</code> unregistering nine tools in <code>off</code> mode, mode and roots reported in <code>server://auth-status</code> and the refusal</td>
 </tr>
+<tr>
+<td><a href="doc-revision-export/">Google Doc Revisions as Markdown</a></td>
+<td>2026-10-11</td>
+<td>#959: <code>export_revision</code> on a Doc via DOCX export → temporary Doc → <code>get_doc_as_markdown</code>'s own converter (Drive's Markdown and HTML exports measured lossy), heading links and image URLs rewritten so two exports diff cleanly, shielded temp-Doc cleanup</td>
+</tr>
 </tbody>
 </table>
 

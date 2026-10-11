@@ -1445,6 +1445,33 @@ traversal; (2) is inherent to how Drive serves inline image bytes.</p>
 <p><strong>Workaround:</strong> For full fidelity on any of these three cases, use <code>get_doc_structure</code> (or the
 raw Docs API via <code>batch_update</code> passthrough) instead. Related: docs/design/doc-to-markdown.md.</p>
 <hr />
+<h3 id="export_revision-on-a-google-doc-links-images-and-vanishing-revision-ids"><code>export_revision</code> on a Google Doc — links, images, and vanishing revision IDs<a class="headerlink" href="#export_revision-on-a-google-doc-links-images-and-vanishing-revision-ids" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> <code>export_revision</code> (#959) returns a Doc revision as Markdown through the same converter
+as <code>get_doc_as_markdown</code>, with these differences and gaps:</p>
+<ol>
+<li>A link to a heading renders as a GitHub-style <code>#slug</code> anchor, not as a docs.google.com URL.
+   A link to a bookmark, or to a heading that doesn't render as one (a bulleted heading, or one
+   in a table cell), is dropped and leaves its text. An image renders as
+   <code>image:sha256-&lt;hash&gt;</code>, with no viewable URL: the temporary Doc's image URLs stop working
+   once it's deleted, so an old revision's images can't be viewed this way.</li>
+<li>The export doesn't include comments, which aren't part of a revision.</li>
+<li>A revision ID from <code>list_revisions</code> can stop existing: Docs folds a recent revision into the
+   next one while editing continues (measured: edits 90 seconds and 5 minutes later both merged it).
+   The export then fails with an error saying to list revisions again.</li>
+<li>Each call creates and removes a temporary Google Doc in the default folder, which takes
+   several seconds and needs storage there (a service account needs a Shared Drive default
+   folder). If removal fails, the result's <code>warning</code> names the Doc to delete by hand.</li>
+</ol>
+<p><strong>Why:</strong> The Docs API reads only a document's current state, so the revision is exported as DOCX
+and imported into a temporary Doc to be read. That Doc's ID, heading IDs, and image URLs are new
+on every import, so (1) replaces them with values that stay the same between exports and keep
+diffs clean. A bookmark has no text to make a stable anchor from, and an invented one could be
+matched to the wrong heading if the Markdown is written back. (3) is how Drive keeps Docs
+revision history.</p>
+<p><strong>Workaround:</strong> For (1), diff one revision's export against another's, not against
+<code>get_doc_as_markdown</code> output. For (3), export a revision only after editing has settled.
+Related: docs/design/doc-revision-export.md.</p>
+<hr />
 <h2 id="google-drive">Google Drive<a class="headerlink" href="#google-drive" title="Permanent link">&para;</a></h2>
 <h3 id="service-account-cannot-create-files-in-personal-drive">Service account cannot create files in personal Drive<a class="headerlink" href="#service-account-cannot-create-files-in-personal-drive" title="Permanent link">&para;</a></h3>
 <p><strong>What:</strong> When authenticated as a service account (<code>AUTH_METHOD=service_account</code>), tools that

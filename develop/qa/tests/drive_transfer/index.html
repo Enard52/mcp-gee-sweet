@@ -2873,8 +2873,158 @@ export_revision(rev 6, no range) → sheet="Sheet1", range=null, values = full 5
 <p><strong>Checks</strong>
 - Returns a clear error: "No XLSX export available for this revision"
 - Does not crash</p>
+<p><strong>Superseded by #959:</strong> a Google Doc revision now exports as Markdown (TC-D280), so this case
+checks a file that is neither a Sheet nor a Doc. Run it as:</p>
+<p><strong>Setup:</strong> Create a scratch Google Slides file named <code>qa-959-slides</code> in <code>DRIVE_FOLDER_ID</code>, and
+type one word on its first slide in the Slides UI (Playwright) so it has a revision.</p>
+<p><strong>Tool calls</strong>
+1. <code>list_revisions(file_id="&lt;slides-id&gt;")</code>, then
+   <code>export_revision(file_id="&lt;slides-id&gt;", revision_id="&lt;last revisionId&gt;")</code></p>
+<p><strong>Checks</strong>
+- Raises a clear error: "No XLSX or DOCX export available for revision <id>. export_revision
+  supports Google Sheets and Google Docs files only."
+- Does not crash</p>
+<p><strong>Teardown:</strong> <code>delete_file(file_id="&lt;slides-id&gt;")</code>.</p>
+<p>The 2026-09-04 Result below predates #959 and tested a Google Doc.</p>
+<p><strong>Result (2026-10-11, PR #988 round 1, <code>8b223c5</code>) ✅ PASS</strong> — Ran via <code>mcp-gee-sweet-kit</code> (OAuth). The Slides file was created blank by a scratch-script <code>files().create(mimeType=presentation)</code> rather than through the Slides UI; <code>list_revisions</code> still listed revision 1. <code>export_revision</code> raised exactly "No XLSX or DOCX export available for revision 1. export_revision supports Google Sheets and Google Docs files only." Slides file trashed.</p>
 <p><strong>Result (2026-09-04) ✅ PASS</strong>
 export_revision({DOC_ID}, rev 3) → error "No XLSX export available for revision 3. The file may not be a Google Sheets file." Clear error, no crash.</p>
+<hr />
+<h3 id="tc-d280-export-two-google-doc-revisions-as-markdown-the-diff-shows-only-the-edit-issue-959-requires-oauth">TC-D280: Export two Google Doc revisions as Markdown; the diff shows only the edit (issue #959) ⚠️ requires-oauth<a class="headerlink" href="#tc-d280-export-two-google-doc-revisions-as-markdown-the-diff-shows-only-the-edit-issue-959-requires-oauth" title="Permanent link">&para;</a></h3>
+<p><strong>Background:</strong> The Docs API can't read an old revision, so <code>export_revision</code> exports it as DOCX,
+imports that into a temporary Doc, and converts it with <code>get_doc_as_markdown</code>'s own converter.
+Docs folds the latest revision into the next one while editing continues: during #959, edits 90
+seconds and 5 minutes later both merged it. A Doc created by Drive import keeps its import
+revision separate (#814), so the diff below uses one.</p>
+<p><strong>Setup</strong>
+1. <code>create_doc(title="qa-959-rev", content_format="markdown", content=&lt;below&gt;)</code> with:
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a># Release Notes
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>Intro with **bold**, *italic*, `inline code`, and [external](https://example.com).
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>## Setup
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>```
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>pip install thing
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>thing --init
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>```
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>&gt; A quoted note.
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>1. First step
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>2. Second step
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>- [ ] open task
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>- [x] done task
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>| Key | Value |
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>|-----|-------|
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>| a   | 1     |
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>![logo](https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png)
+</code></pre></div>
+   Then <code>list_revisions(file_id="&lt;rev-id&gt;")</code> and take the last <code>revisionId</code> as R.
+2. <code>upload_file(name="qa-959-diff.md", source_format="markdown", convert_to_doc=True,
+   content="# Notes\n\nIntro with **bold** text.\n\n## Next\n\nClosing paragraph.\n")</code>.
+   Then <code>find_in_doc(doc_id="&lt;diff-id&gt;", query="Intro with")</code> and
+   <code>insert_doc_text(doc_id="&lt;diff-id&gt;", insertions=[{"index": &lt;start_index + 6&gt;, "text": "EDITED "}])</code>.
+3. Wait about a minute, then <code>list_revisions(file_id="&lt;diff-id&gt;")</code>: A is the first revision
+   (the import), B the last. If only one revision is listed, wait another minute and re-list.</p>
+<p><strong>Tool calls</strong>
+1. <code>export_revision(file_id="&lt;rev-id&gt;", revision_id="&lt;R&gt;")</code>
+2. <code>get_doc_as_markdown(doc_id="&lt;rev-id&gt;")</code>
+3. <code>export_revision(file_id="&lt;diff-id&gt;", revision_id="&lt;A&gt;")</code>
+4. <code>export_revision(file_id="&lt;diff-id&gt;", revision_id="&lt;B&gt;")</code>
+5. <code>search_files(query="export_revision temp")</code></p>
+<p><strong>Checks</strong>
+- Call 1's <code>markdown</code> has the heading, bold/italic, <code>`inline code`</code>, a fenced code block, a
+  <code>&gt;</code> blockquote, the numbered list, both task items, the table, and the image as
+  <code>![](image:sha256-&lt;16 hex&gt;)</code>. The result has no <code>images</code> key: the temporary Doc's image URLs
+  stop serving once it's deleted, so none is returned (PR #988 round 1).
+- Call 2's <code>markdown</code> equals call 1's except the image line (call 2 has a URL).
+- Diffing call 3's <code>markdown</code> against call 4's shows exactly one changed line: <code>Intro with</code> →
+  <code>Intro EDITED with</code>.
+- Call 5 returns no temporary Doc for <code>&lt;rev-id&gt;</code> or <code>&lt;diff-id&gt;</code>: each was removed. <code>search_files</code>
+  also lists trashed files, so a hit from an earlier run is fine if <code>get_file_metadata</code> shows
+  <code>trashed: true</code>.</p>
+<p><strong>Teardown:</strong> <code>delete_file</code> on both <code>&lt;rev-id&gt;</code> and <code>&lt;diff-id&gt;</code>.</p>
+<p><strong>Result (2026-10-11, PR #988 round 1, <code>8b223c5</code>) ❌ FAIL (sent back)</strong> — Ran via <code>mcp-gee-sweet-kit</code> (OAuth). <code>qa-959-rev</code> listed revisions 1 and 5; R=5. <code>qa-959-diff.md</code> listed revisions 1 and 2 about 10 seconds after the edit (no wait needed). Call 1's <code>markdown</code> had every listed construct and the image as <code>![](image:sha256-9237fdb37f9592f6)</code>. Call 2's <code>markdown</code> matched it byte for byte except the image line. Calls 3 and 4 differed in exactly one line, <code>Intro with</code> → <code>Intro EDITED with</code>. Call 5 returned <code>[]</code>. <strong>Failed check:</strong> the <code>images[0].url</code> from call 1 returned <strong>HTTP 404</strong> both to an anonymous <code>curl</code> and to an OAuth-authenticated <code>AuthorizedSession.get</code>, while the live Doc's own image URL from call 2 returned 200 <code>image/png</code> anonymously. A repeat export, fetched within seconds of the call returning, also returned 404. The temporary Doc's <code>contentUri</code> stops serving once that Doc is deleted, so every <code>images</code> URL is already dead when the tool returns (contradicts <code>docs/design/doc-revision-export.md</code>'s "the URL still serves after the temporary Doc is deleted"). Both Docs trashed.</p>
+<p><strong>Result (2026-10-11, PR #988 round 2, <code>15d778d</code>) ✅ PASS</strong> — Ran via <code>mcp-gee-sweet-kit</code> (OAuth). <code>qa-959-rev</code> listed revisions 1 and 5; R=5. <code>qa-959-diff.md</code> listed 1 and 2 about 10 seconds after the edit. Call 1 returned <code>revisionId</code>, <code>modifiedTime</code>, <code>markdown</code> and no <code>images</code> key; <code>markdown</code> had every listed construct and the image as <code>![](image:sha256-9237fdb37f9592f6)</code> (same hash as round 1). Call 2 matched call 1 byte for byte except the image line. Calls 3 and 4 differed in exactly one line, <code>Intro with</code> → <code>Intro EDITED with</code>. Call 5 listed no temporary Doc from this pass; its one hit was a temporary Doc from the Dev's 15:15 probe of another Doc, already <code>trashed: true</code> (the trash branch working; <code>search_files</code> lists trashed files, so the check now says so). Both Docs trashed.</p>
+<hr />
+<h3 id="tc-d281-doc-revision-heading-links-render-as-slug-and-stay-stable-issue-959-requires-oauth">TC-D281: Doc revision heading links render as <code>#slug</code> and stay stable (issue #959) ⚠️ requires-oauth<a class="headerlink" href="#tc-d281-doc-revision-heading-links-render-as-slug-and-stay-stable-issue-959-requires-oauth" title="Permanent link">&para;</a></h3>
+<p><strong>Setup</strong>
+1. <code>create_doc(title="qa-959-links", content_format="markdown", content="# Top\n\n## Setup\n\nFirst.\n\n## Setup\n\nJump here and back here.\n")</code>
+2. Link text to the headings by ID, the way the Docs UI does. No tool sets an ID-only link
+   (<code>style_doc_range</code>'s <code>link_url</code> sets a URL), so use the Docs UI in Playwright (select "Jump",
+   Insert link → Headings → the first <code>Setup</code>; "back" → the second <code>Setup</code>), or a scratch script
+   per <code>CLAUDE.md</code>'s "MCP restart" note sending <code>updateTextStyle</code> with
+   <code>textStyle: {"link": {"headingId": "&lt;id&gt;"}}</code>. <code>get_doc_structure(doc_id="&lt;id&gt;")</code> gives both
+   headings' <code>headingId</code>s.
+3. <code>list_revisions(file_id="&lt;id&gt;")</code> and take the last <code>revisionId</code>.
+4. Make a second Doc, <code>qa-959-bullet</code>, the same way (steps 1–2), then turn its first <code>## Setup</code>
+   into a bulleted list item: <code>create_paragraph_bullets</code> over that heading's range (indices from
+   <code>get_doc_structure</code>). <code>list_revisions</code> on it and take the last <code>revisionId</code>.</p>
+<p><strong>Tool calls</strong>
+1. <code>export_revision(file_id="&lt;id&gt;", revision_id="&lt;last&gt;")</code>
+2. The same call again.
+3. <code>export_revision(file_id="&lt;bullet-id&gt;", revision_id="&lt;bullet last&gt;")</code></p>
+<p><strong>Checks</strong>
+- Call 1's <code>markdown</code> contains <code>[Jump](#setup)</code> and <code>[back](#setup-1)</code>, and no
+  <code>docs.google.com</code> URL.
+- Call 2's <code>markdown</code> is identical to call 1's.
+- Call 3's <code>markdown</code> renders the first <code>Setup</code> as a list item (<code>- Setup</code>), leaves "Jump" as
+  plain text (its target doesn't render as a heading), and contains <code>[back](#setup)</code>: the
+  bulleted heading takes no slug (PR #988 round 1).</p>
+<p><strong>Teardown:</strong> <code>delete_file</code> on both Docs.</p>
+<p><strong>Result (2026-10-11, PR #988 round 1, <code>8b223c5</code>) ✅ PASS</strong> — Ran via <code>mcp-gee-sweet-kit</code> (OAuth). Links set by a scratch script (<code>updateTextStyle</code> with <code>link: {headingId}</code>). Revision 4: both calls returned <code>[Jump](#setup) here and [back](#setup-1) here.</code> with no <code>docs.google.com</code> URL, byte-identical. <strong>Extra probe (sent back as a review finding):</strong> a second Doc with the first <code>## Setup</code> turned into a bulleted list item (<code>createParagraphBullets</code>) and the same two links exported as <code>- Setup\n\n## Setup\n\n[Jump](#setup) here and [back](#setup-1) here.</code> The bulleted heading renders as a list item, not a heading, but still takes a slug. <code>#setup</code> now names the wrong heading and <code>#setup-1</code> names none. Both Docs trashed.</p>
+<p><strong>Result (2026-10-11, PR #988 round 2, <code>15d778d</code>) ✅ PASS</strong> — Ran via <code>mcp-gee-sweet-kit</code> (OAuth). Links set by a scratch script (<code>updateTextStyle</code> with <code>link: {headingId}</code>). Calls 1 and 2 (revision 4) both returned <code>[Jump](#setup) here and [back](#setup-1) here.</code>, byte-identical, no <code>docs.google.com</code> URL. Call 3 (<code>qa-959-bullet</code>, revision 5) returned <code># Top\n\n- Setup\n\nFirst.\n\n## Setup\n\nJump here and [back](#setup) here.</code>: the bulleted heading takes no slug and the link to it is dropped. <strong>Extra probe:</strong> a Doc with <code>## Setup</code>, then a table whose first cell is a HEADING_2 <code>Setup</code>, then a second body <code>## Setup</code>; "Jump" linked to the last body heading and "here" to the cell heading. The export was <code>[Jump](#setup-1) here.</code>: the cell heading is skipped when counting duplicates (it was <code>#setup-2</code> before the fix), and the link to it is dropped. All three Docs trashed.</p>
+<hr />
+<h3 id="tc-d282-doc-revision-local_path-and-arguments-that-dont-apply-to-the-files-type-issue-959-local-filesystem-requires-oauth">TC-D282: Doc revision <code>local_path</code>, and arguments that don't apply to the file's type (issue #959) ⚠️ local-filesystem ⚠️ requires-oauth<a class="headerlink" href="#tc-d282-doc-revision-local_path-and-arguments-that-dont-apply-to-the-files-type-issue-959-local-filesystem-requires-oauth" title="Permanent link">&para;</a></h3>
+<p><strong>Setup:</strong> <code>mkdir -p /tmp/qa-959</code> (the directory must exist: a <code>local_path</code> naming a missing
+directory, even with a trailing <code>/</code>, is written as a file of that name).
+<code>create_doc(title="qa-959-args", content="&lt;p&gt;Saved to disk&lt;/p&gt;")</code>, then
+<code>list_revisions</code> on it and on <code>TEST_SPREADSHEET_ID</code>, taking each one's last <code>revisionId</code>.</p>
+<p><strong>Tool calls</strong>
+1. <code>export_revision(file_id="&lt;doc-id&gt;", revision_id="&lt;doc rev&gt;", local_path="/tmp/qa-959/")</code>
+2. <code>export_revision(file_id="&lt;doc-id&gt;", revision_id="&lt;doc rev&gt;", range="A1:B2")</code>
+3. <code>export_revision(file_id="&lt;TEST_SPREADSHEET_ID&gt;", revision_id="&lt;sheet rev&gt;", local_path="/tmp/qa-959/")</code>
+4. <code>export_revision(file_id="&lt;TEST_SPREADSHEET_ID&gt;", revision_id="&lt;sheet rev&gt;", range="A1:B2")</code>
+5. <code>export_revision(file_id="&lt;doc-id&gt;", revision_id="999999")</code>
+6. <code>export_revision(file_id="&lt;doc-id&gt;_WRONG", revision_id="&lt;doc rev&gt;")</code>
+7. <code>export_revision(file_id="&lt;doc-id&gt;", revision_id="&lt;doc rev&gt;", local_path="/etc/hosts/x.md")</code>,
+   then <code>search_files(query="export_revision temp")</code></p>
+<p><strong>Checks</strong>
+- Call 1 returns <code>local_path</code> ending <code>/tmp/qa-959/&lt;doc-id&gt;-r&lt;doc rev&gt;.md</code>, <code>bytes_written</code>,
+  <code>revisionId</code>, <code>modifiedTime</code>, and no <code>markdown</code> or <code>images</code>. The file holds raw Markdown
+  (<code>Saved to disk</code>), not JSON.
+- Call 2 raises "…is a Google Doc; range and sheet apply only to Google Sheets."
+- Call 3 raises "…is a Google Sheet; local_path applies only to Google Docs."
+- Call 4 returns <code>sheet</code>, <code>range</code>, and <code>values</code> exactly as before #959.
+- Call 5 raises "Revision 999999 of <doc-id> not found…call list_revisions again…".
+- Call 6 raises Drive's own 404 ("File not found: <doc-id>_WRONG"), not the merged-revision
+  message (PR #988 round 1).
+- Call 7 raises "local_path '/etc/hosts/x.md' has a non-directory path component at
+  '/etc/hosts'", and <code>search_files</code> finds no temporary Doc for <code>&lt;doc-id&gt;</code>: the destination is checked
+  before the export (PR #988 round 1).</p>
+<p><strong>Teardown:</strong> remove <code>/tmp/qa-959/</code>; <code>delete_file(file_id="&lt;doc-id&gt;")</code>.</p>
+<p><strong>Result (2026-10-11, PR #988 round 1, <code>8b223c5</code>) ✅ PASS</strong> — Ran via <code>mcp-gee-sweet-kit</code> (OAuth). The first attempt at call 1 ran without <code>/tmp/qa-959</code> existing and wrote a 15-byte <em>file</em> named <code>/tmp/qa-959</code> (<code>local_path: "/tmp/qa-959"</code>); that comes from the shared <code>write_capped_result_to_disk</code>, which this PR doesn't touch, so it's ticketed separately and the setup now creates the directory. Rerun with the directory present: call 1 returned <code>local_path</code> <code>/tmp/qa-959/&lt;doc-id&gt;-r3.md</code>, <code>bytes_written: 15</code>, <code>revisionId</code>, <code>modifiedTime</code>, <code>images: []</code>, no <code>markdown</code>; the file held <code>Saved to disk\n\n</code>, raw Markdown. Calls 2, 3, and 5 raised the expected messages. Call 4 returned <code>sheet: "Sales"</code>, <code>range: "A1:B2"</code>, <code>values: [["Product", null], ["Widget", 100]]</code>. <strong>Extra probe (sent back as a review finding):</strong> <code>file_id="&lt;doc-id&gt;_WRONG"</code> raised the same "Revision 3 of … not found. Drive merges a recent revision…" message, misdiagnosing a bad file ID as a merged revision.</p>
+<p><strong>Result (2026-10-11, PR #988 round 2, <code>15d778d</code>) ✅ PASS</strong> — Ran via <code>mcp-gee-sweet-kit</code> (OAuth), <code>/tmp/qa-959</code> created first. Call 1 returned <code>local_path</code> <code>/tmp/qa-959/&lt;doc-id&gt;-r3.md</code>, <code>bytes_written: 15</code>, <code>revisionId</code>, <code>modifiedTime</code>, and no <code>markdown</code> or <code>images</code>; the file held <code>Saved to disk\n\n</code>. Calls 2, 3, and 5 raised the expected messages. Call 4 returned <code>sheet: "Sales"</code>, <code>range: "A1:B2"</code>, <code>values: [["Product", null], ["Widget", 100]]</code> (revision 342). Call 6 raised Drive's own <code>HttpError 404 … "File not found: &lt;doc-id&gt;_WRONG."</code>, not the merged-revision message. Call 7 raised <code>local_path '/etc/hosts/x.md' has a non-directory path component at '/etc/hosts'</code>, and <code>search_files</code> found no temporary Doc for <code>&lt;doc-id&gt;</code> (only the earlier trashed one noted in TC-D280). Doc trashed, <code>/tmp/qa-959</code> removed.</p>
+<hr />
+<h3 id="tc-d283-a-service-account-content-manager-exports-a-doc-revision-the-temporary-doc-is-trashed-issue-959">TC-D283: A service account (Content manager) exports a Doc revision; the temporary Doc is trashed (issue #959)<a class="headerlink" href="#tc-d283-a-service-account-content-manager-exports-a-doc-revision-the-temporary-doc-is-trashed-issue-959" title="Permanent link">&para;</a></h3>
+<p><strong>Background:</strong> A Content manager on a Shared Drive can trash but not permanently delete (#876),
+so the temporary Doc is trashed instead. Use the <code>mcp-gee-sweet-sa</code> server, whose default folder
+is the Shared Drive.</p>
+<p><strong>Setup:</strong> On the SA server, <code>create_doc(title="qa-959-sa", content="&lt;p&gt;SA revision&lt;/p&gt;")</code>, then
+<code>list_revisions(file_id="&lt;id&gt;")</code> and take the last <code>revisionId</code>.</p>
+<p><strong>Tool calls</strong>
+1. <code>export_revision(file_id="&lt;id&gt;", revision_id="&lt;last&gt;")</code> on the SA server
+2. <code>search_files(query="export_revision temp")</code> on the SA server</p>
+<p><strong>Checks</strong>
+- Call 1 returns <code>markdown</code> containing <code>SA revision</code> and no <code>warning</code>.
+- Call 2 finds no live file. If the client can show trashed files, the temporary Doc is in the
+  Shared Drive's trash.</p>
+<p><strong>Teardown:</strong> <code>delete_file(file_id="&lt;id&gt;")</code> on the SA server.</p>
+<p><strong>Result (2026-10-11, PR #988 round 1, <code>8b223c5</code>) ⏭️ SKIP</strong> — Not run: a lane QA session may call only its own <code>mcp-gee-sweet-kit</code> server, and the case needs <code>mcp-gee-sweet-sa</code>. Pending for a release pass (Aziz may use the <code>-sa</code> slot). The trash branch is unit-tested only so far.</p>
 <hr />
 <h3 id="tc-d256-download_folders-progress_unitbytes-feeds-byte-totals-into-the-structured-progress-fields-with-a-file-count-fallback-when-sizes-arent-fully-known-issue-741-local-filesystem">TC-D256: <code>download_folder</code>'s <code>progress_unit='bytes'</code> feeds byte totals into the structured progress fields, with a file-count fallback when sizes aren't fully known (issue #741) ⚠️ local-filesystem<a class="headerlink" href="#tc-d256-download_folders-progress_unitbytes-feeds-byte-totals-into-the-structured-progress-fields-with-a-file-count-fallback-when-sizes-arent-fully-known-issue-741-local-filesystem" title="Permanent link">&para;</a></h3>
 <p><strong>Background:</strong> TC-D255 (#352) confirmed the message text carries bytes-transferred-so-far as supplementary context, but the structured <code>progress</code>/<code>total</code> fields passed to <code>ctx.report_progress()</code> stayed file-count-based unconditionally — a client rendering a progress bar from those fields alone (not parsing message text) sees the same one-tick-per-file granularity regardless of individual file size. #741's maintainer decision: keep file-count as the default (<code>progress_unit='files'</code>), but add an opt-in <code>progress_unit='bytes'</code> so a caller can request byte-based structured fields when every candidate's size is known upfront (same <code>bytes_total_known</code> gate TC-D255's message-fallback logic already uses) — falling back to file-count when it isn't, since there's no reliable byte total to report against then. <code>sync_folder</code> is explicitly out of scope for this decision (recursive descent never has a full upfront size list). Unit-tested deterministically against a mocked <code>ctx</code> in <code>tests/drive/test_transfer.py::TestDownloadFolder::test_progress_unit_bytes_reports_byte_totals_when_sizes_known</code>/<code>test_progress_unit_bytes_falls_back_to_files_when_sizes_unknown</code>; this live check confirms both branches against a real API call.</p>
