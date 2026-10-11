@@ -1545,7 +1545,7 @@
 </tr>
 <tr>
 <td>9 tools with the response-cap bypass (<code>get_sheet_data</code>, <code>get_multiple_sheet_data</code>, <code>get_multiple_spreadsheet_summary</code>, <code>find_in_spreadsheet</code>, <code>get_doc_content</code>, <code>find_in_doc</code>, <code>get_doc_as_markdown</code>, <code>get_message</code>, <code>get_thread</code>) and <code>sync_folder(result_local_path=)</code></td>
-<td><code>mkdir</code>, <code>write_text</code></td>
+<td><code>mkdir</code>, <code>_write_atomically</code></td>
 <td><code>response_limits.write_capped_result_to_disk</code>, at the top, before <code>is_dir()</code>. Check the final <code>dest</code> after the directory join too, since <code>default_filename</code> changes the target</td>
 <td>write</td>
 </tr>
