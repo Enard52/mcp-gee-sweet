@@ -368,7 +368,7 @@ Follows the design in [`docs/decisions/decision-comments-first-class.md`](decisi
 
 - [ ] Generalize the three comment tools to `tools/drive/comments.py` and rename `list_doc_comments`/`add_doc_comment`/`resolve_doc_comment` → `list_file_comments`/`add_file_comment`/`resolve_comment` (param `doc_id` → `file_id`); retire `tools/docs/comments.py`. Breaking change. ([#663](https://github.com/khuisman/mcp-gee-sweet/issues/663))
 - [ ] Full `comments`/`replies` CRUD parity — `get`/`update`/`delete` for comments; plain `reply`/`reopen`/`update`/`delete`/`list` for replies. Depends on #663. ([#664](https://github.com/khuisman/mcp-gee-sweet/issues/664))
-- [ ] Fix the stale Tier 4 "zero comment tooling on Docs today" line; close or re-scope #142 (asks for what #151 already shipped under different naming). ([#662](https://github.com/khuisman/mcp-gee-sweet/issues/662))
+- [x] Fix the stale Tier 4 "zero comment tooling on Docs today" line; close or re-scope #142 (asks for what #151 already shipped under different naming). ([#662](https://github.com/khuisman/mcp-gee-sweet/issues/662)) (PR #978)
 - [ ] **Decision needed:** deprecate `share_spreadsheet` in favor of `share_file` (a strict superset over the same `permissions()` resource), or keep both and document why. Same pattern as #151/#142, with a longer compatibility tail. ([#665](https://github.com/khuisman/mcp-gee-sweet/issues/665))
 - [ ] Follow-up cleanup for the docs comments API (`add_doc_comment`/`resolve_doc_comment`/`list_doc_comments`) — same surface #663/#664 generalize, do it there rather than twice; triaged out of `backlog` 2026-09-11 ([#329](https://github.com/khuisman/mcp-gee-sweet/issues/329))
 
