@@ -223,6 +223,7 @@ Same shape as v0.8.1 — stabilize on defects that surfaced since v0.9.0 shipped
 - [ ] `get_doc_as_markdown(local_path=…)` writes the JSON result envelope, not the markdown: `markdown_export.py` routes through the generic JSON-to-disk helper — lane B, after #938 (same read-side area) ([#958](https://github.com/khuisman/mcp-gee-sweet/issues/958))
 - [ ] `add_chart`: a cell-to-row (`B2:5`) or row-only (`1:5`) range silently charts one column — `_per_column_ranges` defaults `endColumnIndex` to start+1. Found reviewing #931 — lane A, after #917 ([#954](https://github.com/khuisman/mcp-gee-sweet/issues/954))
 - [ ] `_parse_a1_notation` hardening: one compiled grammar, index bounds, validate before the sheet-ID fetch. #931 review follow-ups, no behavior change for valid input — lane A, after #954 (same A1 area) ([#955](https://github.com/khuisman/mcp-gee-sweet/issues/955))
+- [ ] Write side drops image links: `[![alt](src)](url)` (or `<a href><img></a>`) imports through `create_doc`/`create_doc_from_file`/`write_doc_content` without its URL, so it doesn't round-trip with #951's export. Found in PR #976 — lane A, after #955 ([#977](https://github.com/khuisman/mcp-gee-sweet/issues/977))
 
 **Sheets hardening** _(triaged out of `backlog` 2026-09-11 — see the "Backlog triage" note below)_
 - [x] `update_sheet_properties`/dimension-tool hardening + dedup follow-ups from PR #321's review ([#323](https://github.com/khuisman/mcp-gee-sweet/issues/323)) (PR #734)
@@ -290,11 +291,13 @@ Same shape as v0.8.1 — stabilize on defects that surfaced since v0.9.0 shipped
 - [x] **Bundle:** test-suite tightening, one PR closing [#392](https://github.com/khuisman/mcp-gee-sweet/issues/392), [#526](https://github.com/khuisman/mcp-gee-sweet/issues/526), [#551](https://github.com/khuisman/mcp-gee-sweet/issues/551), [#561](https://github.com/khuisman/mcp-gee-sweet/issues/561), [#574](https://github.com/khuisman/mcp-gee-sweet/issues/574) — lane B (PR #924) ([#891](https://github.com/khuisman/mcp-gee-sweet/issues/891))
 - [ ] `qa`: `search_files` has no unit test coverage for the error-dict path ([#573](https://github.com/khuisman/mcp-gee-sweet/issues/573))
 - [x] Live verification for PR #922 (reject unbounded A1 ranges); coverage in PR #929 (PR #929) ([#927](https://github.com/khuisman/mcp-gee-sweet/issues/927))
+- [ ] Live verification for community PR #940 (literal fences in code-block exports) ([#952](https://github.com/khuisman/mcp-gee-sweet/issues/952))
+- [ ] Live verification for community PR #931 (reject missing and incompatible A1 bounds) ([#953](https://github.com/khuisman/mcp-gee-sweet/issues/953))
 
 **Infrastructure**
 - [ ] Interaction-log middleware for tool calls — structured, append-only JSONL log per call (inputs, duration, cache hit, error), opt-in ID redaction, swappable backend ([#646](https://github.com/khuisman/mcp-gee-sweet/issues/646))
 - [ ] Automated tooling for dependency-bump security review — today's manual skim can miss a well-disguised supply-chain compromise ([#520](https://github.com/khuisman/mcp-gee-sweet/issues/520))
-- [ ] **Bundle:** CI tidy (on deck, no lane), one PR closing [#536](https://github.com/khuisman/mcp-gee-sweet/issues/536), [#619](https://github.com/khuisman/mcp-gee-sweet/issues/619), [#308](https://github.com/khuisman/mcp-gee-sweet/issues/308), [#708](https://github.com/khuisman/mcp-gee-sweet/issues/708) ([#897](https://github.com/khuisman/mcp-gee-sweet/issues/897))
+- [ ] **Bundle:** CI tidy (on deck, no lane), one PR closing [#536](https://github.com/khuisman/mcp-gee-sweet/issues/536), [#619](https://github.com/khuisman/mcp-gee-sweet/issues/619), [#308](https://github.com/khuisman/mcp-gee-sweet/issues/308), [#708](https://github.com/khuisman/mcp-gee-sweet/issues/708), [#974](https://github.com/khuisman/mcp-gee-sweet/issues/974) ([#897](https://github.com/khuisman/mcp-gee-sweet/issues/897))
 - [ ] Automate the mechanical `release.md` steps as GitHub Actions ([#660](https://github.com/khuisman/mcp-gee-sweet/issues/660))
 - [x] `/release` + `prep-for-pr` backstop checks for README render breakage on PyPI — the human-facing companion to #708's CI guard, routed to Bob ([#709](https://github.com/khuisman/mcp-gee-sweet/issues/709)) (PR #967)
 - [x] `supportsAllDrives=True` is hand-inlined at ~58 Drive call sites — retrofitted twice now (#687 plus its own original miss); wants a shared wrapper or lint guard so a new call site can't omit it ([#696](https://github.com/khuisman/mcp-gee-sweet/issues/696)) (PR #784)
