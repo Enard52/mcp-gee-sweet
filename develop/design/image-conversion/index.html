@@ -1441,6 +1441,35 @@ need K retries. Resending the whole document each time would be K+1 full-size ro
 </ul>
 <p>Confirmed live that the split produces a document structurally identical to the old
 whole-list retry (text, bullets, table, and the surviving image all in place).</p>
+<h2 id="linked-images-977">Linked images (#977)<a class="headerlink" href="#linked-images-977" title="Permanent link">&para;</a></h2>
+<p>An <code>&lt;img&gt;</code> inside <code>&lt;a href&gt;</code> (markdown <code>[![alt](src)](url)</code>) keeps its link: <code>html_parser.py</code>
+copies the open <code>&lt;a&gt;</code>'s href onto <code>Image.link_url</code>. That includes raw HTML with no enclosing
+block: a top-level <code>&lt;img&gt;</code> gets an implicit paragraph even when it's wrapped in inline tags (unlike
+bare text or <code>&lt;hr&gt;</code> in that position), and reads its link from <code>_bare_link_url</code>, a stack separate
+from <code>_link_url</code> so text handling and an unclosed top-level <code>&lt;a&gt;</code> are unaffected. Each open <code>&lt;a&gt;</code>
+records which of the two stacks it pushed onto, or that it pushed nothing (<code>_anchor_pushes</code>), and
+its <code>&lt;/a&gt;</code> pops only that: an href-less <code>&lt;a name&gt;</code> nested in a linked anchor used to pop the outer
+link (#994, PR #992 QA round 2). Docs stores an image's link on its
+<code>inlineObjectElement</code>'s own <code>textStyle.link</code>, so <code>emitter.py</code> follows the image's
+<code>insertInlineImage</code> with an <code>updateTextStyle</code> over its one-character range
+<code>[position, position + 1)</code>. The link has to come right after its own insert, inside the
+descending-position tail: at that point nothing before <code>position</code> has shifted yet. An inserted
+image never inherits a neighboring run's link (confirmed live, both directions), so an unlinked
+image gets no clearing request.</p>
+<p>Inserts that share a position, such as adjacent images with nothing between them, each land in
+front of whatever is already there, so the later one in the document has to be inserted first.
+The descending pass sorts on <code>(position, node order, item order)</code>, all descending; sorting by
+position alone kept source order within a tie and wrote adjacent images reversed (PR #992 QA
+round 1). A table and the image right after it share a position the same way, and still come out
+table first.</p>
+<p>The retry treats the pair as one unit. <code>ast_to_requests(image_links=...)</code> records each
+<code>id(insert request) -&gt; link request</code> as it builds them, and <code>_apply_doc_content</code> uses that record
+rather than matching request shapes. <code>_drop_failed_image</code> pops the link request with its failed
+insert, since a stranded link would land on whatever character now sits at that position.
+<code>_positional_insert_tail_start</code> counts a recorded link request as part of the tail, so the K≥2
+split still applies. A <code>#slug</code> image link goes
+through the heading-anchor pass like a text link: <code>_walk_headings_and_anchor_runs</code> reads the
+<code>inlineObjectElement</code>'s link too, so it's resolved or stripped.</p>
 <h2 id="known-deliberate-gap-table-cell-images">Known, deliberate gap: table-cell images<a class="headerlink" href="#known-deliberate-gap-table-cell-images" title="Permanent link">&para;</a></h2>
 <p><code>html_parser.py</code>'s img-handling only fires when a block context is open at the body level
 (<code>self._block_tag</code> truthy) — explicitly excluded when inside a table cell, where it falls through

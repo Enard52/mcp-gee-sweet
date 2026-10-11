@@ -1472,8 +1472,9 @@ best-effort — see below), and an opt-in comments section.</p>
 <li><strong>Linked images</strong> (#951): Docs puts an image's link on its <code>inlineObjectElement</code>'s own
   <code>textStyle.link</code>, the same as a text run (confirmed live). <code>doc_to_ast</code> reads it into
   <code>Image.link_url</code>, and every image renders through <code>_render_image</code> as <code>[![alt](src)](url)</code>, in
-  ordinary text, a code paragraph, and a table cell alike. The write side doesn't set
-  <code>Image.link_url</code> yet (#977).</li>
+  ordinary text, a code paragraph, and a table cell alike. The write side sets it too (#977;
+  see <a href="../image-conversion/#linked-images-977">image-conversion.md</a>), so a linked image
+  round-trips.</li>
 <li><strong>Same-document links</strong> (PR #976 QA round 1): Docs reports a link to a heading or bookmark by
   ID with no <code>url</code> (confirmed live for a heading: <code>{"headingId": "h.x"}</code>, on a text run and an
   image alike). <code>doc_to_ast._link_url</code>, shared by both, rebuilds it as

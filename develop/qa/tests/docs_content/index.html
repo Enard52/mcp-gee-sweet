@@ -4982,6 +4982,60 @@ Not covered live: a soft break (Shift+Enter) inside an inline code run in a para
 
 **Result (2026-10-10) ✅ PASS — Kit, PR #981 round 2 (`b2bfafe`).** Ran on a scratch doc (created with `create_doc` from the step 1 HTML, trashed afterwards) instead of `{DOC_ID}`. Step 2 used one `find_in_doc(regex=True)` call for all three queries: matches at 4–11, 15–20 and 26–39. After step 3, `get_doc_structure` showed each of the first three paragraphs as two runs split at the `<`/`&` (`a <` | `b> text`, `AT&` | `amp;T`, `see <` | `https://x.io>`). `get_doc_as_markdown` returned `a \<b> text`, `AT\&amp;T`, `see \<https://x.io>`, and `a < b and AT&T` unchanged. markdown-it-py `commonmark` rendered `a &lt;b&gt; text`, `AT&amp;amp;T`, `see &lt;https://x.io&gt;`, and `a &lt; b and AT&amp;T`, with no `<b>` and no `<a>`. Round 1 got `a <b> text` and `AT&amp;T` unescaped from the same kind of split, on pre-fix code (`307e47c`).
 
+
+### TC-DOC216: A linked image written as Markdown or HTML keeps its link and round-trips (#977) ⚠️ requires-oauth
+**Background:** the write side built a linked image with no link, so `[![alt](src)](url)` and `<a href><img></a>` imported as a plain image and didn't round-trip with TC-DOC209's export. The image now gets its link through an `updateTextStyle` over its one-character range, right after its insert. That request has to stay paired with the image when an unreachable image is dropped and retried, and a `#slug` image link goes through the heading-anchor pass.
+
+**Setup:** none. Each step uses a scratch doc.
+
+**Prompt**
+**Playwright: required** (each linked image is clickable to its URL in the rendered doc; the unlinked one isn't)
+1. `create_doc(title="TC-DOC216 md", folder_id={FOLDER_ID}, content_format='markdown', content=...)` with:
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="gh"># Overview</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>Before [<span class="nt">![Logo</span>](<span class="na">https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png</span>)](https://example.com/one) and [<span class="nt">linked text</span>](<span class="na">https://example.com/t</span>)![<span class="nt">Plain</span>](<span class="na">https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png</span>)
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>Jump: [<span class="nt">![A</span>](<span class="na">https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png</span>)](#overview) and [<span class="nt">![B</span>](<span class="na">https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png</span>)](#missing)
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>| a | b |
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>|---|---|
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>| 1 | 2 |
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>[<span class="nt">![C</span>](<span class="na">https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png</span>)](https://example.com/after-table)
+</code></pre></div>
+2. `get_doc_as_markdown(doc_id=<step 1 docId>)`
+3. `create_doc(title="TC-DOC216 retry", folder_id={FOLDER_ID}, content_format='html', content=...)` with:
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">&lt;</span><span class="nt">p</span><span class="p">&gt;&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;https://example.com/b1&quot;</span><span class="p">&gt;&lt;</span><span class="nt">img</span> <span class="na">src</span><span class="o">=</span><span class="s">&quot;https://example.invalid/nope.png?1&quot;</span><span class="p">&gt;&lt;/</span><span class="nt">a</span><span class="p">&gt;&lt;/</span><span class="nt">p</span><span class="p">&gt;&lt;</span><span class="nt">p</span><span class="p">&gt;</span>x <span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;https://example.com/good&quot;</span><span class="p">&gt;&lt;</span><span class="nt">img</span> <span class="na">src</span><span class="o">=</span><span class="s">&quot;https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png&quot;</span><span class="p">&gt;&lt;/</span><span class="nt">a</span><span class="p">&gt;</span> y<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;&lt;</span><span class="nt">p</span><span class="p">&gt;&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;https://example.com/b2&quot;</span><span class="p">&gt;&lt;</span><span class="nt">img</span> <span class="na">src</span><span class="o">=</span><span class="s">&quot;https://example.invalid/nope.png?2&quot;</span><span class="p">&gt;&lt;/</span><span class="nt">a</span><span class="p">&gt;&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+</code></pre></div>
+4. `get_doc_as_markdown(doc_id=<step 3 docId>)`
+5. `create_doc(title="TC-DOC216 adjacent", folder_id={FOLDER_ID}, content_format='html', content=...)` with (raw HTML, the first image wrapped in a top-level `<a>` with no `<p>`):
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;https://example.com/top&quot;</span><span class="p">&gt;&lt;</span><span class="nt">img</span> <span class="na">src</span><span class="o">=</span><span class="s">&quot;https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png&quot;</span> <span class="na">width</span><span class="o">=</span><span class="s">&quot;100&quot;</span><span class="p">&gt;&lt;/</span><span class="nt">a</span><span class="p">&gt;&lt;</span><span class="nt">p</span><span class="p">&gt;</span>x <span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;https://example.com/first&quot;</span><span class="p">&gt;&lt;</span><span class="nt">img</span> <span class="na">src</span><span class="o">=</span><span class="s">&quot;https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png&quot;</span> <span class="na">width</span><span class="o">=</span><span class="s">&quot;40&quot;</span><span class="p">&gt;&lt;/</span><span class="nt">a</span><span class="p">&gt;&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;https://example.com/second&quot;</span><span class="p">&gt;&lt;</span><span class="nt">img</span> <span class="na">src</span><span class="o">=</span><span class="s">&quot;https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png&quot;</span> <span class="na">width</span><span class="o">=</span><span class="s">&quot;80&quot;</span><span class="p">&gt;&lt;/</span><span class="nt">a</span><span class="p">&gt;&lt;</span><span class="nt">img</span> <span class="na">src</span><span class="o">=</span><span class="s">&quot;https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png&quot;</span> <span class="na">width</span><span class="o">=</span><span class="s">&quot;120&quot;</span><span class="p">&gt;</span> y<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+</code></pre></div>
+6. `get_doc_as_markdown(doc_id=<step 5 docId>)`
+7. `create_doc(title="TC-DOC216 nested anchor", folder_id={FOLDER_ID}, content_format='html', content=...)` with an href-less `<a name>` nested inside each linked anchor (#994):
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;https://example.com/bare&quot;</span><span class="p">&gt;&lt;</span><span class="nt">a</span> <span class="na">name</span><span class="o">=</span><span class="s">&quot;n1&quot;</span><span class="p">&gt;&lt;/</span><span class="nt">a</span><span class="p">&gt;&lt;</span><span class="nt">img</span> <span class="na">src</span><span class="o">=</span><span class="s">&quot;https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png&quot;</span><span class="p">&gt;&lt;/</span><span class="nt">a</span><span class="p">&gt;&lt;</span><span class="nt">p</span><span class="p">&gt;&lt;</span><span class="nt">a</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;https://example.com/block&quot;</span><span class="p">&gt;&lt;</span><span class="nt">a</span> <span class="na">name</span><span class="o">=</span><span class="s">&quot;n2&quot;</span><span class="p">&gt;&lt;/</span><span class="nt">a</span><span class="p">&gt;</span>tail<span class="p">&lt;</span><span class="nt">img</span> <span class="na">src</span><span class="o">=</span><span class="s">&quot;https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png&quot;</span><span class="p">&gt;&lt;/</span><span class="nt">a</span><span class="p">&gt;</span> after<span class="p">&lt;/</span><span class="nt">p</span><span class="p">&gt;</span>
+</code></pre></div>
+8. `get_doc_as_markdown(doc_id=<step 7 docId>)`
+
+**Checks**
+- Step 2: `[![](<contentUri>)](https://example.com/one)`
+- Step 2: `[linked text](https://example.com/t)` is followed by an unlinked `![](<contentUri>)`, not one inside the link
+- Step 2: image `A` links to `https://docs.google.com/document/d/<docId>/edit?tab=t.0#heading=<headingId>`, the `Overview` heading. Image `B` is unlinked, its `#missing` link stripped
+- Step 2: the image after the table is `[![](<contentUri>)](https://example.com/after-table)`
+- Step 3: `images` reports an `error` for both `example.invalid` sources and none for the Google logo
+- Step 4: the only image is `[![](<contentUri>)](https://example.com/good)`, between `x` and `y`. No text character carries `b1`'s or `b2`'s link
+- Step 6: the first paragraph is the top-level image alone, as `[![](<contentUri>)](https://example.com/top)`
+- Step 6: the second paragraph is `x `, `[![](<contentUri>)](https://example.com/first)`, `[![](<contentUri>)](https://example.com/second)`, an unlinked `![](<contentUri>)`, then ` y`, in that order. Playwright: in the step 5 doc's editor the three inline images get wider left to right (40, 80, 120px source widths), which confirms the order independently of the links
+- Step 8: the first paragraph is `[![](<contentUri>)](https://example.com/bare)`. The second is `[tail](https://example.com/block)`, then `[![](<contentUri>)](https://example.com/block)`, then an unlinked ` after`: the nested `<a name>` doesn't end the outer link
+
+**Cleanup:** `delete_file` all four scratch docs
+
+**Result (2026-10-11) ✅ PASS — Sky, PR #992 round 1 (`6aa4dac`).** Step 2: `Logo` came back as `[![](<contentUri>)](https://example.com/one)`. `[linked text](https://example.com/t)` was followed by an unlinked `![](<contentUri>)`. `A` linked to `.../edit?tab=t.0#heading=h.…` (the `Overview` heading), and `B` was unlinked. The image after the table kept `https://example.com/after-table`. Step 3: `images` reported an `error` for both `example.invalid` sources and none for the logo. Step 4: the only image was `[![](<contentUri>)](https://example.com/good)` between `x` and `y`, and no text carried `b1`'s or `b2`'s link. Playwright, clicking each image in the step 1 doc's editor: `Logo` and the after-table image each showed a link chip for `https://example.com/…`, and `A`'s chip showed `Overview`. The unlinked image and `B` showed no link chip. The `/mobilebasic` HTML view isn't a substitute: it renders the text link but never wraps an image in `<a>`. A separate probe, `[![first](…)](https://example.com/first)[![second](…)](https://example.com/second)`, exported as `second` then `first`: adjacent images are written in reverse order. Each kept its own link.
+
+**Result (2026-10-11) ✅ PASS — Sky, PR #992 round 2 (`3a506f4`).** Re-ran step 3 (the retry, now pairing each image with its link by identity) and the new step 5. Step 4: the only image was `[![](<contentUri>)](https://example.com/good)` between `x` and `y`, and no text carried `b1`'s or `b2`'s link. Step 6: the first paragraph was the top-level image alone, as `[![](<contentUri>)](https://example.com/top)`. The second paragraph was `x `, `…(https://example.com/first)`, `…(https://example.com/second)`, an unlinked image, then ` y`. Playwright: in the step 5 doc's editor the three inline images got wider left to right, and the top image's link chip showed `https://example.com/…`. Steps 1–2 weren't re-run: the fix commit doesn't change that path beyond the sort, which step 5 covers.
+
+**Result (2026-10-11) ✅ PASS — Sky, PR #992 round 3 (`9271dfe`).** Ran the new step 7. Step 8: the first paragraph was `[![](<contentUri>)](https://example.com/bare)`, and the second was `[tail](https://example.com/block)`, then `[![](<contentUri>)](https://example.com/block)`, then an unlinked ` after`. The fix commit only touches `html_parser.py`'s anchor handling, so steps 1–6 weren't re-run.
+
 ---
 
 ## Orphan fileId on inline-image sharing failure (#649)
@@ -5200,11 +5254,11 @@ Plus 4 non-blocking cleanup items (finding 3+4 folded, finding 5 folded, finding
 **Background:** Pillow's `Image.open` refuses to identify an image whose header claims more than 2× `Image.MAX_IMAGE_PIXELS` (~179MP) and raises `DecompressionBombError` instead. The local size gate used to swallow that as "not a recognizable image", so the *most* oversized images skipped the megapixel check entirely and failed later with Google's bare "too large" error. `_read_dimensions` now reads the PNG/JPEG/GIF header without that guard, since no pixels are decoded there. `auto_downscale=True` still can't help, because downscaling needs a full decode, which the guard does block. That case must fail with a clear reason, not silently.
 
 **Setup:** generate a 14000x13000 (182MP) PNG. A 1-bit image keeps it tiny on disk:
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>uv run python3 -c &quot;
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>from PIL import Image
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>Image.MAX_IMAGE_PIXELS = None
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>Image.new(&#39;1&#39;, (14000, 13000)).save(&#39;/tmp/qa-bomb.png&#39;)
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>&quot;
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>uv run python3 -c &quot;
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>from PIL import Image
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>Image.MAX_IMAGE_PIXELS = None
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>Image.new(&#39;1&#39;, (14000, 13000)).save(&#39;/tmp/qa-bomb.png&#39;)
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>&quot;
 </code></pre></div>
 Create a doc with the marker: `create_doc(title=..., content="<p>IMGMARKERBOMB</p>", folder_id={FOLDER_ID})`
 
@@ -5341,12 +5395,12 @@ Tool call: `create_doc(title="TC-DOC201", content="![Big](/tmp/qa-oversized.png)
 2. `upload_local_file(local_path="<repo-root>/docs/qa/fixtures/qa-fixture-pixel.png", folder_id={FOLDER_ID})`. Record its ID as `{PIXEL_FILE_ID}`.
 3. No tool sets a content restriction, so lock the doc with a scratch script from the checkout under test, using the same OAuth token as the server under test:
 
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>uv<span class="w"> </span>run<span class="w"> </span>python3<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="s2">from googleapiclient.discovery import build</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="s2">from mcp_gee_sweet.auth import _oauth_creds</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="s2">d = build(&#39;drive&#39;, &#39;v3&#39;, credentials=_oauth_creds(), cache_discovery=False)</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="s2">d.files().update(fileId=&#39;{LOCKED_DOC_ID}&#39;, body={&#39;contentRestrictions&#39;: [{&#39;readOnly&#39;: True, &#39;reason&#39;: &#39;TC-DOC202&#39;}]}, supportsAllDrives=True).execute()</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="s2">&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>uv<span class="w"> </span>run<span class="w"> </span>python3<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="s2">from googleapiclient.discovery import build</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="s2">from mcp_gee_sweet.auth import _oauth_creds</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="s2">d = build(&#39;drive&#39;, &#39;v3&#39;, credentials=_oauth_creds(), cache_discovery=False)</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="s2">d.files().update(fileId=&#39;{LOCKED_DOC_ID}&#39;, body={&#39;contentRestrictions&#39;: [{&#39;readOnly&#39;: True, &#39;reason&#39;: &#39;TC-DOC202&#39;}]}, supportsAllDrives=True).execute()</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="s2">&quot;</span>
 </code></pre></div>
 
 **Prompt**
