@@ -3371,20 +3371,28 @@ get_doc_as_markdown('nonexistent-doc-id-xyz') returned clean {"error": "<HttpErr
 
 ---
 
-### TC-DOC182: `local_path` bypasses the response and writes to disk
+### TC-DOC182: `local_path` bypasses the response and writes the raw Markdown to disk
 **Prompt**
-> "Export doc {DOC_ID} as Markdown, writing the result to <path-to>/qa-md-export.json"
+> "Export doc {DOC_ID} as Markdown, writing the result to <path-to>/qa-md-export.md"
+
+Tool calls: `get_doc_as_markdown(doc_id={DOC_ID})`, then `get_doc_as_markdown(doc_id={DOC_ID}, local_path="<path-to>/qa-md-export.md")`.
 
 **Checks**
-- Returns `{local_path, doc_id, bytes_written}` (no inline `markdown` field in the response)
-- The file at `<path-to>/qa-md-export.json` exists and its `markdown` field round-trips the doc's actual content
+- The second call returns `{local_path, bytes_written, doc_id, title}` (no inline `markdown` field in the response)
+- The file at `<path-to>/qa-md-export.md` is plain Markdown, not a JSON object (#958): its bytes equal the first call's `markdown` field encoded as UTF-8 (e.g. `cmp` against that text saved to a scratch file), and `bytes_written` equals the file's size
 
-**Cleanup:** delete the local `qa-md-export.json` file
+**Cleanup:** delete the local `qa-md-export.md` file (and the scratch comparison file)
 
 **Result (2026-08-15) ✅ PASS — run live against PR #591 (issue #300).** Response was `{"local_path": ..., "bytes_written": 170, "doc_id": ...}` with no inline `markdown` field; the written file's `markdown` field matched the doc's actual content exactly.
 
 **Result (2026-09-04) ✅ PASS**
 local_path set: response {local_path, doc_id, bytes_written}, no inline markdown field. File content's markdown field matched doc's actual content exactly. Local file cleaned up.
+
+_Both results above predate #958, when the file held the JSON result envelope; re-run against the raw-Markdown checks._
+
+**Result (2026-10-11) ✅ PASS — Kit, PR #982 round 1 (`457c37b`).** Ran on a scratch doc (created with `create_doc`, trashed afterwards) instead of `{DOC_ID}`. It held non-ASCII text (`Café naïve — 日本語`, an emoji), quotes, bold, a bullet list, and one open comment, and every call used `include_comments=True`. The `local_path=".../qa-md-export.md"` call returned `{local_path, bytes_written: 184, doc_id, title}` with no `markdown` field. The file's bytes equaled the inline `markdown` field encoded as UTF-8, including the `## Comments` section, and `json.loads` on the file failed as expected. A directory `local_path` (without `include_comments`) wrote `<doc_id>.md` (111 bytes, no comments section). Regression check: `get_sheet_data(local_path=...)` still wrote a JSON file that parses. Local files deleted. Side observation, outside this case: the comment's quoted anchor `Café` came back as `Caf&#233;`, both in the export and in `add_doc_comment`'s echo.
+
+**Result (2026-10-11) ✅ PASS — Kit, PR #982 round 2 (`4f4fb99`).** Re-run after the write moved to `_write_atomically`, against the reconnected kit server, on a fresh scratch doc (trashed afterwards). `local_path` pointed at an existing `qa-md-export.md` holding `previous export`. The call returned `{local_path, bytes_written: 114, doc_id, title}`, and the file was replaced with bytes equal to the inline `markdown` (mode `0644`). A directory `local_path` wrote `<doc_id>.md` with the same bytes. A read-only (`0444`) existing target raised `Permission denied` and kept its old content. `get_sheet_data(local_path=)` still wrote parseable JSON. No `.gee-sweet-partial-*` temp file was left in the directory. Local files deleted.
 
 ---
 
