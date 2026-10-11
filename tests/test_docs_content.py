@@ -2101,6 +2101,83 @@ class TestCreateDocImages:
         ]
 
     @staticmethod
+    def _image_link_ranges(requests: list[dict]) -> list[dict]:
+        return [
+            r["updateTextStyle"]["range"]
+            for r in requests
+            if r.get("updateTextStyle", {}).get("fields") == "link"
+            and r["updateTextStyle"]["textStyle"]["link"]["url"].startswith("https://link/")
+        ]
+
+    async def test_bad_linked_image_drops_its_link_request_too(self):
+        # #977: left behind, a dropped image's link request would link whatever
+        # character now sits at the image's position.
+        drive_svc, docs_svc = self._make_services()
+        bad_uri = "https://example.com/bad.png"
+        content = (
+            f"Before [![Bad]({bad_uri})](https://link/bad) and "
+            "[![Good](https://example.com/good.png)](https://link/good) after"
+        )
+        # The retry pops from the same list it sent, so snapshot each call.
+        sent: list[list[dict]] = []
+        fail = self._fail_first_matching({bad_uri})
+
+        def side_effect(documentId, body):
+            sent.append(list(body["requests"]))
+            return fail(documentId, body)
+
+        docs_svc.documents.return_value.batchUpdate.side_effect = side_effect
+        ctx = self._ctx(drive_svc, docs_svc)
+
+        result = await _docs_tools["create_doc"](
+            title="Doc", content=content, content_format="markdown", ctx=ctx
+        )
+
+        assert "error" in {o["src"]: o for o in result["images"]}[bad_uri]
+        full, retry = sent
+        assert len(self._image_link_ranges(full)) == 2
+        bad_index = next(
+            i for i, r in enumerate(full) if r.get("insertInlineImage", {}).get("uri") == bad_uri
+        )
+        assert retry == full[:bad_index] + full[bad_index + 2 :]
+        good = next(r for r in retry if "insertInlineImage" in r)
+        index = good["insertInlineImage"]["location"]["index"]
+        assert self._image_link_ranges(retry) == [{"startIndex": index, "endIndex": index + 1}]
+
+    async def test_multiple_bad_linked_images_still_retry_only_the_insert_tail(self):
+        # #977 + #510: link requests ride inside the positional-insert tail, so
+        # the K>=2 split still finds every image there instead of falling back
+        # to whole-list retries.
+        drive_svc, docs_svc = self._make_services()
+        bad_uris = {"https://example.com/bad1.png", "https://example.com/bad2.png"}
+        content = (
+            "Before\n\n[![Bad1](https://example.com/bad1.png)](https://link/1)\n\n"
+            "[![Good](https://example.com/good.png)](https://link/good)\n\n"
+            "[![Bad2](https://example.com/bad2.png)](https://link/2)\n\nAfter"
+        )
+        docs_svc.documents.return_value.batchUpdate.side_effect = self._fail_first_matching(
+            bad_uris
+        )
+        ctx = self._ctx(drive_svc, docs_svc)
+
+        await _docs_tools["create_doc"](
+            title="Doc", content=content, content_format="markdown", ctx=ctx
+        )
+
+        _full, _retry, prefix, tail = [
+            c.kwargs["body"]["requests"]
+            for c in docs_svc.documents.return_value.batchUpdate.call_args_list
+        ]
+        assert not any("insertInlineImage" in r for r in prefix)
+        assert self._image_link_ranges(prefix) == []
+        assert [r["insertInlineImage"]["uri"] for r in tail if "insertInlineImage" in r] == [
+            "https://example.com/good.png"
+        ]
+        index = tail[0]["insertInlineImage"]["location"]["index"]
+        assert tail == [tail[0], tail[1]]
+        assert self._image_link_ranges(tail) == [{"startIndex": index, "endIndex": index + 1}]
+
+    @staticmethod
     def _server_error() -> HttpError:
         return HttpError(resp=MagicMock(status=500), content=b'{"error": {"message": "x"}}')
 
@@ -2925,6 +3002,54 @@ class TestResolveHeadingAnchorsHelper:
         assert summary == {"resolved": [], "stripped": []}
         docs_svc.documents.return_value.batchUpdate.assert_not_called()
 
+    async def test_linked_image_anchor_is_resolved(self):
+        # #977: a linked image's link lives on its inlineObjectElement's own
+        # textStyle, not a textRun, so "[![alt](src)](#overview)" needs the
+        # walker to look there too.
+        image_para = {
+            "startIndex": 20,
+            "endIndex": 23,
+            "paragraph": {
+                "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                "elements": [
+                    {
+                        "startIndex": 20,
+                        "endIndex": 21,
+                        "textRun": {"content": "x", "textStyle": {}},
+                    },
+                    {
+                        "startIndex": 21,
+                        "endIndex": 22,
+                        "inlineObjectElement": {
+                            "inlineObjectId": "kix.1",
+                            "textStyle": {"link": {"url": "#overview"}},
+                        },
+                    },
+                    {
+                        "startIndex": 22,
+                        "endIndex": 23,
+                        "textRun": {"content": "\n", "textStyle": {}},
+                    },
+                ],
+            },
+        }
+        docs_svc = MagicMock()
+        docs_svc.documents.return_value.get.return_value.execute.return_value = {
+            "documentId": "doc1",
+            "body": {
+                "content": [
+                    self._paragraph_elem(1, "Overview", heading_id="h.xyz"),
+                    image_para,
+                ]
+            },
+        }
+        summary = await _resolve_heading_anchors(docs_svc, "doc1")
+        assert summary["resolved"] == [{"anchor": "#overview", "heading": "Overview"}]
+        requests = docs_svc.documents.return_value.batchUpdate.call_args.kwargs["body"]["requests"]
+        assert [r["updateTextStyle"]["range"] for r in requests] == [
+            {"startIndex": 21, "endIndex": 22}
+        ]
+
     async def test_anchor_link_inside_table_cell_is_resolved(self):
         # Regression: the body walk used to only look at top-level
         # elem.get("paragraph") and never descended into elem.get("table"),
@@ -3702,6 +3827,54 @@ class TestPositionalInsertTailStart:
             {"insertInlineImage": {}},
         ]
         assert _positional_insert_tail_start(requests) == 2
+
+    @staticmethod
+    def _link(start: int) -> dict:
+        return {
+            "updateTextStyle": {
+                "range": {"startIndex": start, "endIndex": start + 1},
+                "textStyle": {"link": {"url": "https://t"}},
+                "fields": "link",
+            }
+        }
+
+    def test_image_link_request_stays_in_the_tail(self):
+        # #977: a linked image's own link request, recorded in image_links,
+        # counts as part of the tail.
+        insert = {"insertInlineImage": {"location": {"index": 5}}}
+        link = self._link(5)
+        requests = [
+            {"insertText": {}},
+            {"updateTextStyle": {}},
+            {"insertTable": {"location": {"index": 9}}},
+            insert,
+            link,
+            {"insertInlineImage": {"location": {"index": 2}}},
+        ]
+        assert _positional_insert_tail_start(requests, {id(insert): link}) == 2
+
+    def test_unrecorded_link_request_ends_the_tail(self):
+        # Matched by identity, not shape: an identical-looking link request
+        # that ast_to_requests didn't record ends the scan.
+        insert = {"insertInlineImage": {"location": {"index": 5}}}
+        recorded = self._link(5)
+        requests = [{"insertText": {}}, insert, self._link(5)]
+        assert _positional_insert_tail_start(requests, {id(insert): recorded}) == 3
+        assert _positional_insert_tail_start(requests) == 3
+
+    def test_ast_to_requests_records_each_image_link(self):
+        md = "[![A](https://x/a.png)](https://t) ![B](https://x/b.png)"
+        nodes = html_to_ast(_md_to_html(md))
+        uris = {id(img): img.src for img in extract_images(nodes)}
+        image_links: dict[int, dict] = {}
+        requests, _ = ast_to_requests(nodes, image_uris=uris, image_links=image_links)
+        inserts = {r["insertInlineImage"]["uri"]: r for r in requests if "insertInlineImage" in r}
+        assert list(image_links) == [id(inserts["https://x/a.png"])]
+        link = image_links[id(inserts["https://x/a.png"])]
+        assert any(r is link for r in requests)
+        assert _positional_insert_tail_start(requests, image_links) == requests.index(
+            min(inserts.values(), key=requests.index)
+        )
 
     def test_no_tail(self):
         assert _positional_insert_tail_start([{"insertText": {}}]) == 1

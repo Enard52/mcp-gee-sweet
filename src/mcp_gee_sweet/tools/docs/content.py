@@ -162,12 +162,20 @@ def _failed_insert_image_message(error: HttpError) -> str:
 _POSITIONAL_INSERT_KEYS = ("insertTable", "insertInlineImage")
 
 
-def _positional_insert_tail_start(requests: list[dict]) -> int:
+def _positional_insert_tail_start(
+    requests: list[dict], image_links: dict[int, dict] | None = None
+) -> int:
     """Index where ast_to_requests's trailing stage-3 pass (the descending-position
     insertTable + insertInlineImage requests — see its docstring) begins: the start
-    of the maximal suffix made up only of those two request kinds."""
+    of the maximal suffix made up only of those two request kinds, plus each linked
+    image's own link request (#977). `image_links` is the id(insert) -> link
+    request map ast_to_requests filled; a link request counts by identity."""
+    link_ids = {id(link) for link in (image_links or {}).values()}
     start = len(requests)
-    while start > 0 and any(key in requests[start - 1] for key in _POSITIONAL_INSERT_KEYS):
+    while start > 0 and (
+        id(requests[start - 1]) in link_ids
+        or any(key in requests[start - 1] for key in _POSITIONAL_INSERT_KEYS)
+    ):
         start -= 1
     return start
 
@@ -553,8 +561,9 @@ async def _apply_doc_content(
     # (#789): revoking after a failed edit is harmless, since a doc that did embed
     # an image holds its own copy and one that didn't never needed the share.
     try:
+        image_links: dict[int, dict] = {}
         content_requests, tables = ast_to_requests(
-            nodes, start_index=1, image_uris=placeholder_uris
+            nodes, start_index=1, image_uris=placeholder_uris, image_links=image_links
         )
 
         # Swap each request's placeholder URI for the real one, recording which
@@ -626,13 +635,21 @@ async def _apply_doc_content(
 
             def _drop_failed_image(requests: list[dict], e: HttpError) -> bool:
                 """Pop the insertInlineImage request `e` names from `requests` (the
-                batch that raised `e`), recording the failure on its image's outcome
+                batch that raised `e`), plus its link request if the image was
+                linked (#977), recording the failure on its image's outcome
                 entry. False if `e` isn't an image-fetch failure, so the caller
                 re-raises."""
                 bad_index = _failed_insert_image_request_index(e)
                 if bad_index is None or bad_index >= len(requests):
                     return False
                 bad_request = requests.pop(bad_index)
+                # Left in place, the link would land on whatever character now
+                # sits at the image's position. Matched by identity: the list
+                # holds the same dict objects ast_to_requests recorded.
+                link = image_links.get(id(bad_request))
+                if link is not None:
+                    link_index = next(i for i, r in enumerate(requests) if r is link)
+                    requests.pop(link_index)
                 img_id = request_id_to_img_id.get(id(bad_request))
                 entry = entry_by_id.get(img_id) if img_id is not None else None
                 if entry is not None:
@@ -660,7 +677,7 @@ async def _apply_doc_content(
                     image_failures += 1
                     if image_failures != 2:
                         continue
-                    tail_start = _positional_insert_tail_start(remaining)
+                    tail_start = _positional_insert_tail_start(remaining, image_links)
                     # Fail-safe: split only if every image request really is in the
                     # tail. If ast_to_requests ever emits something after its
                     # positional-insert pass, the boundary scan comes up short —
@@ -728,7 +745,7 @@ def _walk_headings_and_anchor_runs(
 ) -> tuple[list[tuple[str, str]], list[tuple[str, int, int]]]:
     """Recursively walk document body content, including table cells,
     collecting (heading_text, heading_id) pairs and (anchor_url, start, end)
-    runs for any run whose link_url starts with '#'.
+    runs for any run or inline image whose link_url starts with '#'.
 
     Mirrors _collect_doc_paragraphs's two correctness properties: it recurses
     into table cells (a heading or an anchor link living inside a table cell
@@ -767,6 +784,16 @@ def _walk_headings_and_anchor_runs(
                     end = pe.get("endIndex")
                     if end is not None:
                         offset = end
+                    # A linked image carries its link on the inlineObjectElement's
+                    # own textStyle (#977).
+                    link_url = (
+                        pe.get("inlineObjectElement", {})
+                        .get("textStyle", {})
+                        .get("link", {})
+                        .get("url", "")
+                    )
+                    if link_url.startswith("#") and end is not None:
+                        anchor_runs.append((link_url, run_start, end))
 
             if is_heading and heading_id:
                 headings.append(("".join(text_parts).strip(), heading_id))

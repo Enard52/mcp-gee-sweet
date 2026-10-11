@@ -138,15 +138,18 @@ def _px_to_pt(value: str) -> float | None:
         return None
 
 
-def _make_image(attr_dict: dict, src: str) -> Image:
+def _make_image(attr_dict: dict, src: str, link_url: str | None = None) -> Image:
     """Build an Image node from an <img> tag's attributes. width/height are
     only ever present on raw HTML <img> tags (content_format="html") — plain
-    markdown "![alt](src)" has no syntax for them, so they're None there."""
+    markdown "![alt](src)" has no syntax for them, so they're None there.
+    link_url is the enclosing <a href>, if any (markdown "[![alt](src)](url)",
+    #977)."""
     return Image(
         src=src,
         alt=attr_dict.get("alt") or None,
         width=_px_to_pt(attr_dict.get("width") or ""),
         height=_px_to_pt(attr_dict.get("height") or ""),
+        link_url=link_url,
     )
 
 
@@ -209,6 +212,17 @@ class _AstParser(HTMLParser):
         self._strike_depth = 0
         self._code_depth = 0  # inline <code> nesting; ignored inside <pre>
         self._link_url: list[str] = []  # stack of href values
+        # href values of <a> tags opened with no block or table cell around them.
+        # Read only by the bare top-level <img> branch (#977), so a top-level
+        # "<a href><img></a>" keeps its link; kept apart from _link_url so text
+        # handling, and an unclosed top-level <a>, are unaffected.
+        self._bare_link_url: list[str] = []
+        # One entry per open <a>: which of the two stacks above its start tag
+        # pushed an href onto ("block" or "bare"), or None if it pushed nothing
+        # (no href, e.g. <a name>). </a> pops only what its own start tag pushed,
+        # so an href-less anchor nested in a linked one can't pop the outer
+        # link (#994).
+        self._anchor_pushes: list[str | None] = []
 
         # --- current run buffer ---
         self._run_buf: list[str] = []
@@ -324,6 +338,10 @@ class _AstParser(HTMLParser):
         self._strike_depth = 0
         self._code_depth = 0
         self._link_url = []
+        # The cleared hrefs' anchors no longer own an entry to pop.
+        self._anchor_pushes = [
+            None if pushed == "block" else pushed for pushed in self._anchor_pushes
+        ]
 
     def _emit_block_node(
         self, tag: str, runs: list[Run | Image], *, preserve_if_empty: bool = False
@@ -686,18 +704,17 @@ class _AstParser(HTMLParser):
         # Same rationale as <hr> just above: markdown's own "![]()" syntax
         # always renders wrapped in a <p>, so this only matters for raw HTML
         # (content_format="html") supplying a top-level <img> with no
-        # wrapping tag at all.
-        if (
-            tag == "img"
-            and self._block_tag is None
-            and self._table_depth == 0
-            and self._tag_depth == 0
-        ):
+        # wrapping block at all. Unlike <hr> and bare text, an <img> wrapped
+        # only in inline tags still gets its implicit paragraph: a raw-HTML
+        # "<a href><img></a>" (a linked badge, say) is real content, and
+        # dropping it loses the image along with its link (PR #992 QA round 1).
+        if tag == "img" and self._block_tag is None and self._table_depth == 0:
             src = attr_dict.get("src")
             if src:
+                link_url = self._bare_link_url[-1] if self._bare_link_url else None
                 self._nodes.append(
                     Paragraph(
-                        runs=[_make_image(attr_dict, src)],
+                        runs=[_make_image(attr_dict, src, link_url)],
                         blockquote_depth=self._blockquote_depth,
                     )
                 )
@@ -724,6 +741,7 @@ class _AstParser(HTMLParser):
                 href = attr_dict.get("href", "")
                 if href:
                     self._link_url.append(href)
+                self._anchor_pushes.append("block" if href else None)
             elif tag == "code" and not self._in_pre:
                 self._code_depth += 1
             elif tag == "br":
@@ -739,7 +757,9 @@ class _AstParser(HTMLParser):
                 # already gets in a cell.
                 src = attr_dict.get("src")
                 if src:
-                    self._pending_runs.append(_make_image(attr_dict, src))
+                    self._pending_runs.append(
+                        _make_image(attr_dict, src, self._link_url[-1] if self._link_url else None)
+                    )
                 else:
                     self._block_had_unsupported_content = True
             elif self._block_tag:
@@ -749,6 +769,11 @@ class _AstParser(HTMLParser):
                 # silently dropped rather than contributing a run — see
                 # self._block_had_unsupported_content.
                 self._block_had_unsupported_content = True
+        elif tag == "a":
+            href = attr_dict.get("href", "") if self._table_depth == 0 else ""
+            if href:
+                self._bare_link_url.append(href)
+            self._anchor_pushes.append("bare" if href else None)
 
     def handle_endtag(self, tag):
         # --- table structure ---
@@ -911,10 +936,23 @@ class _AstParser(HTMLParser):
                 self._underline_depth = max(0, self._underline_depth - 1)
             elif tag in _INLINE_STRIKE:
                 self._strike_depth = max(0, self._strike_depth - 1)
-            elif tag == "a" and self._link_url:
-                self._link_url.pop()
+            elif tag == "a":
+                self._close_anchor()
             elif tag == "code" and not self._in_pre:
                 self._code_depth = max(0, self._code_depth - 1)
+        elif tag == "a":
+            self._close_anchor()
+
+    def _close_anchor(self):
+        """Pop whatever href the matching <a> start tag pushed, and nothing
+        else (#994)."""
+        if not self._anchor_pushes:
+            return
+        pushed = self._anchor_pushes.pop()
+        if pushed == "block" and self._link_url:
+            self._link_url.pop()
+        elif pushed == "bare" and self._bare_link_url:
+            self._bare_link_url.pop()
 
     def handle_data(self, data):
         # Table-cell text and open-block text are independent triggers that happen

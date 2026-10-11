@@ -15,6 +15,7 @@ from mcp_gee_sweet.tools.docs.ast import (
 )
 from mcp_gee_sweet.tools.docs.content import (
     _html_to_doc_requests,
+    _md_to_html,
     _to_doc_requests,
 )
 from mcp_gee_sweet.tools.docs.emitter import (
@@ -1572,3 +1573,155 @@ class TestImagePositionalInserts:
         idx_table = requests.index(table_req)
         idx_image = requests.index(image_req)
         assert {idx_table, idx_image}.issubset(range(len(requests)))
+
+
+class TestImageLinks:
+    """#977: an <img> inside <a href> (markdown "[![alt](src)](url)") keeps its
+    link through the parser and the emitter."""
+
+    def _image(self, nodes):
+        return next(item for item in nodes[0].runs if isinstance(item, Image))
+
+    def test_parser_carries_enclosing_href_onto_image(self):
+        nodes = html_to_ast('<p><a href="https://t"><img src="https://x/i.png"></a></p>')
+        assert self._image(nodes).link_url == "https://t"
+
+    def test_parser_markdown_linked_image(self):
+        nodes = html_to_ast(_md_to_html("[![alt](https://x/i.png)](https://t)"))
+        image = self._image(nodes)
+        assert (image.alt, image.link_url) == ("alt", "https://t")
+
+    def test_parser_image_outside_link_has_no_link(self):
+        nodes = html_to_ast('<p><a href="https://t">text</a><img src="https://x/i.png"></p>')
+        assert self._image(nodes).link_url is None
+
+    def test_parser_top_level_linked_image_gets_implicit_paragraph(self):
+        # PR #992 QA round 1: raw HTML with no enclosing block dropped the image.
+        nodes = html_to_ast('<a href="https://t"><img src="https://x/i.png"></a>')
+        assert len(nodes) == 1
+        assert self._image(nodes).link_url == "https://t"
+
+    def test_parser_top_level_link_does_not_reach_later_text_or_images(self):
+        nodes = html_to_ast(
+            '<a href="https://t">dropped</a><img src="https://x/a.png"><p>text</p>'
+            '<a href="https://u"><p>in block</p></a>'
+        )
+        assert self._image(nodes).link_url is None
+        assert [r.link_url for node in nodes[1:] for r in node.runs] == [None, None]
+
+    def test_parser_hrefless_nested_anchor_keeps_outer_link_bare(self):
+        # PR #992 QA round 2: an href-less </a> popped the outer bare link.
+        nodes = html_to_ast('<a href="https://u"><a name="n"></a><img src="https://x/a.png"></a>')
+        assert self._image(nodes).link_url == "https://u"
+
+    def test_parser_hrefless_nested_anchor_keeps_outer_link_in_block(self):
+        # #994: the same defect in the block-level stack, for text and images.
+        nodes = html_to_ast(
+            '<p><a href="https://u"><a name="n"></a>tail<img src="https://x/a.png"></a> after</p>'
+        )
+        runs = nodes[0].runs
+        assert [r.link_url for r in runs] == ["https://u", "https://u", None]
+
+    def test_parser_outer_close_after_nested_anchor_ends_the_link(self):
+        nodes = html_to_ast(
+            '<a href="https://u"><a name="n"></a></a><img src="https://x/a.png">'
+            '<p><a href="https://v"><a name="n"></a></a>plain</p>'
+        )
+        assert self._image(nodes).link_url is None
+        assert [r.link_url for r in nodes[1].runs] == [None]
+
+    def test_parser_image_between_linked_text_shares_the_link(self):
+        nodes = html_to_ast('<p><a href="https://t">a<img src="https://x/i.png">b</a></p>')
+        runs = nodes[0].runs
+        assert [r.link_url for r in runs] == ["https://t", "https://t", "https://t"]
+
+    def test_emitter_links_image_right_after_its_insert(self):
+        img = Image(src="a.png", link_url="https://t")
+        nodes = [Paragraph(runs=[Run("Before")]), Paragraph(runs=[img])]
+        requests, _ = ast_to_requests(nodes, image_uris={id(img): "https://example.com/a.png"})
+        i = next(i for i, r in enumerate(requests) if "insertInlineImage" in r)
+        assert requests[i]["insertInlineImage"]["location"]["index"] == 8
+        assert requests[i + 1] == {
+            "updateTextStyle": {
+                "range": {"startIndex": 8, "endIndex": 9},
+                "textStyle": {"link": {"url": "https://t"}},
+                "fields": "link",
+            }
+        }
+
+    def test_emitter_unlinked_image_gets_no_link_request(self):
+        # An inserted image doesn't inherit a neighboring run's link (confirmed
+        # live), so there's nothing to clear.
+        img = Image(src="a.png")
+        nodes = [Paragraph(runs=[Run("text", link_url="https://t"), img])]
+        requests, _ = ast_to_requests(nodes, image_uris={id(img): "https://example.com/a.png"})
+        links = [r for r in requests if "link" in r.get("updateTextStyle", {}).get("textStyle", {})]
+        assert [r["updateTextStyle"]["range"] for r in links] == [{"startIndex": 1, "endIndex": 5}]
+
+    def test_emitter_adjacent_images_keep_source_order(self):
+        # PR #992 QA round 1: images with nothing between them share a position,
+        # and each insert lands in front of what's already there, so the later
+        # one must be inserted first.
+        img1 = Image(src="a.png", link_url="https://one")
+        img2 = Image(src="b.png", link_url="https://two")
+        img3 = Image(src="c.png")
+        nodes = [Paragraph(runs=[Run("x"), img1, img2, img3])]
+        uris = {id(i): i.src for i in (img1, img2, img3)}
+        requests, _ = ast_to_requests(nodes, image_uris=uris)
+        tail = [r for r in requests if "insertInlineImage" in r or "link" in str(r)]
+        assert [r["insertInlineImage"]["uri"] for r in tail if "insertInlineImage" in r] == [
+            "c.png",
+            "b.png",
+            "a.png",
+        ]
+        # Simulate the inserts in order: each lands at index 2, in front of the rest.
+        doc: list[str] = []
+        for r in tail:
+            if "insertInlineImage" in r:
+                doc.insert(0, r["insertInlineImage"]["uri"])
+        assert doc == ["a.png", "b.png", "c.png"]
+        # Each link still directly follows its own image's insert.
+        for i, r in enumerate(tail):
+            if r.get("insertInlineImage", {}).get("uri") == "a.png":
+                assert tail[i + 1]["updateTextStyle"]["textStyle"]["link"]["url"] == "https://one"
+
+    def test_emitter_table_still_precedes_image_at_same_position(self):
+        img = Image(src="a.png")
+        table = Table(rows=[Row(cells=[Cell(children=[Run("cell")])])])
+        nodes = [Paragraph(runs=[Run("Before")]), table, Paragraph(runs=[img])]
+        requests, _ = ast_to_requests(nodes, image_uris={id(img): "a.png"})
+        kinds = [next(iter(r)) for r in requests if "insertTable" in r or "insertInlineImage" in r]
+        # Both target index 8: the image (later in the doc) goes first, then the
+        # table is inserted in front of it.
+        assert kinds == ["insertInlineImage", "insertTable"]
+
+    def test_emitter_each_link_follows_its_own_image_across_tables(self):
+        # The descending pass interleaves images and tables; every link request
+        # must stay paired with (directly after) its own image's insert.
+        img1 = Image(src="a.png", link_url="https://one")
+        img2 = Image(src="b.png")
+        img3 = Image(src="c.png", link_url="https://three")
+        table = Table(rows=[Row(cells=[Cell(children=[Run("cell")])])])
+        nodes = [
+            Paragraph(runs=[Run("x"), img1]),
+            table,
+            Paragraph(runs=[img2, Run("y"), img3]),
+        ]
+        uris = {id(i): f"https://example.com/{i.src}" for i in (img1, img2, img3)}
+        requests, _ = ast_to_requests(nodes, image_uris=uris)
+        for img in (img1, img2, img3):
+            i = next(
+                i
+                for i, r in enumerate(requests)
+                if r.get("insertInlineImage", {}).get("uri") == uris[id(img)]
+            )
+            index = requests[i]["insertInlineImage"]["location"]["index"]
+            following = requests[i + 1] if i + 1 < len(requests) else {}
+            if img.link_url is None:
+                assert "updateTextStyle" not in following
+            else:
+                assert following["updateTextStyle"]["range"] == {
+                    "startIndex": index,
+                    "endIndex": index + 1,
+                }
+                assert following["updateTextStyle"]["textStyle"] == {"link": {"url": img.link_url}}
