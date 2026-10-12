@@ -1539,6 +1539,30 @@ refused everywhere, which means the same names are refused as path separators on
 (Other Windows filename rules, such as <code>:</code> or reserved names like <code>CON</code>, aren't checked here.)</p>
 <p><strong>Workaround:</strong> Rename the file or folder in Drive (or locally). For a single file,
 <code>download_file</code> with a full file path as <code>local_path</code> downloads it under that name.</p>
+<h3 id="downloads-replace-the-local-file-rather-than-rewriting-it">Downloads replace the local file rather than rewriting it<a class="headerlink" href="#downloads-replace-the-local-file-rather-than-rewriting-it" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> <code>download_file</code>, <code>download_folder</code>, and <code>sync_folder</code> write a download to a temporary
+<code>.gee-sweet-partial-*</code> file next to the destination, then rename it over the old file. The
+replacement is a new file, so:</p>
+<ul>
+<li>It keeps the old file's permission bits, and its owner and group only when the server may set
+  them (running as root, as the Docker image does). Running as a regular user, a file owned by
+  someone else becomes owned by the server's user; its group is kept if the server's user
+  belongs to that group. ACLs, extended attributes (macOS Finder tags,
+  the quarantine flag), and the creation time aren't carried over.</li>
+<li>Another hard link to the old file keeps the old content.</li>
+<li>The server needs write permission on the destination's <em>folder</em>, not just on the file. A
+  writable file inside a read-only folder can't be downloaded over.</li>
+<li>A FIFO or socket at the destination is refused instead of written to. A device such as
+  <code>/dev/null</code> is still written directly.</li>
+</ul>
+<p>A download the server is killed partway through leaves its <code>.gee-sweet-partial-*</code> file behind.
+<code>sync_folder</code> and <code>upload_local_folder</code> never upload one and list it under <code>skipped</code>; they
+don't delete it, since it may belong to a download that's still running.</p>
+<p><strong>Why:</strong> Writing into the existing file left a truncated file behind when a download failed
+partway, with a fresh mtime that made <code>sync_folder</code> upload it over the intact Drive copy (#844).
+A rename means the destination only ever holds the old content or the complete new content.</p>
+<p><strong>Workaround:</strong> Re-apply ACLs, tags, or ownership after downloading, if they matter. Delete a
+leftover <code>.gee-sweet-partial-*</code> file once no download into that folder is running.</p>
 
 
 
