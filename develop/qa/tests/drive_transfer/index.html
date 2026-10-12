@@ -1627,6 +1627,30 @@ Delete <code>qa-convert-216.csv</code> from <code>{FOLDER_ID}</code>. Remove <co
 <p><strong>Teardown (TC-D210–TC-D214)</strong>
 Delete all <code>qa-convert.*</code> files and their converted Drive counterparts from <code>{FOLDER_ID}</code>. Remove the local <code>/tmp/qa-convert.*</code> scratch files.</p>
 <hr />
+<h3 id="tc-d286-a-compressed-file-uploads-with-its-compression-mime-type-not-the-inner-files-930-local-filesystem">TC-D286: a compressed file uploads with its compression MIME type, not the inner file's (#930) ⚠️ local-filesystem<a class="headerlink" href="#tc-d286-a-compressed-file-uploads-with-its-compression-mime-type-not-the-inner-files-930-local-filesystem" title="Permanent link">&para;</a></h3>
+<p><strong>Background:</strong> <code>upload_local_file</code>, <code>upload_local_folder</code>, and <code>sync_folder</code> dropped the encoding half of <code>mimetypes.guess_type()</code>, so <code>report.csv.gz</code> (<code>("text/csv", "gzip")</code>) was uploaded as <code>text/csv</code> even though its bytes are gzip. All three now go through the shared <code>guess_mime_type</code>, which Gmail attachments already used.</p>
+<p><strong>Setup</strong>
+<code>mkdir -p /tmp/qa-gz-286 &amp;&amp; printf 'a,b\n1,2\n' | gzip &gt; /tmp/qa-gz-286/qa-report-286.csv.gz</code></p>
+<p><strong>Prompt</strong></p>
+<blockquote>
+<p>Step 1: "Upload the local file <code>/tmp/qa-gz-286/qa-report-286.csv.gz</code> to {FOLDER_ID}"
+Step 2: "Sync <code>/tmp/qa-gz-286</code> up to a new folder <code>qa-gz-286-sync</code> in {FOLDER_ID}"
+Step 3: "Upload the folder <code>/tmp/qa-gz-286</code> to a new folder <code>qa-gz-286-folder</code> in {FOLDER_ID}"</p>
+</blockquote>
+<p><strong>Checks</strong>
+- Step 1: call <code>upload_local_file(local_path="/tmp/qa-gz-286/qa-report-286.csv.gz", parent_folder_id="{FOLDER_ID}")</code>; response has no <code>error</code> key
+- <code>get_file_metadata</code> on step 1's <code>fileId</code> reports <code>mimeType: application/gzip</code> (not <code>text/csv</code>)
+- Step 2: <code>create_folder(name="qa-gz-286-sync", parent_folder_id="{FOLDER_ID}")</code>, then <code>sync_folder(folder_id=&lt;new folder ID&gt;, local_path="/tmp/qa-gz-286", direction="upload")</code>; <code>uploaded</code> is <code>["qa-report-286.csv.gz"]</code>
+- <code>list_files</code> on the new folder shows <code>qa-report-286.csv.gz</code> with <code>mimeType: application/gzip</code>
+- Step 3: <code>create_folder(name="qa-gz-286-folder", parent_folder_id="{FOLDER_ID}")</code>, then <code>upload_local_folder(local_path="/tmp/qa-gz-286", parent_folder_id=&lt;new folder ID&gt;)</code>; <code>uploaded</code> is <code>["qa-report-286.csv.gz"]</code>, and <code>list_files</code> on that folder shows it with <code>mimeType: application/gzip</code></p>
+<p><strong>Teardown</strong>
+Delete <code>qa-report-286.csv.gz</code> and the <code>qa-gz-286-sync</code> and <code>qa-gz-286-folder</code> folders from <code>{FOLDER_ID}</code>. Remove <code>/tmp/qa-gz-286</code>.</p>
+<p><strong>Result</strong> (2026-10-11, Sky, PR #1002 round 1 at <code>594299f</code>, <code>mcp-gee-sweet-sky</code> reconnected after reset, OAuth, Shared Drive, <code>{FOLDER_ID}</code> = a throwaway child of <code>TEST_FOLDER_ID</code>): ✅ <strong>PASS</strong>.
+- Step 1: no error. <code>get_file_metadata</code> reported <code>mimeType: application/gzip</code>, <code>size: 28</code>.
+- Step 2: <code>uploaded == ["qa-report-286.csv.gz"]</code>, and <code>list_files</code> showed <code>application/gzip</code>. (<code>size_bytes</code> was <code>0</code>: sync_folder counts only downloaded bytes, which predates this PR.)
+- Step 3 (added this round, since the Background names <code>upload_local_folder</code> but no check called it): <code>uploaded == ["qa-report-286.csv.gz"]</code>, and <code>list_files</code> showed <code>application/gzip</code>.
+- Side probes on code-review findings. (a) Files the built-in table doesn't know, uploaded as <code>application/octet-stream</code> (<code>.xlsx</code>, <code>.docx</code> and <code>.7z</code> with random bytes, <code>.log</code>, <code>.ics</code>): Drive derived the real type from the name every time (the OOXML types, <code>application/x-7z-compressed</code>, <code>text/plain</code>, <code>text/calendar</code>). (b) A <code>.csv.gz</code> created the pre-fix way as <code>text/csv</code>, then re-uploaded by <code>sync_folder</code>'s <code>update()</code> path: Drive reset it to <code>application/gzip</code>. (c) <code>.svgz</code> now lands as <code>application/gzip</code>, where it used to be <code>image/svg+xml</code>. Neither version got a Drive thumbnail.</p>
+<hr />
 <h2 id="upload_local_folder"><code>upload_local_folder</code><a class="headerlink" href="#upload_local_folder" title="Permanent link">&para;</a></h2>
 <h3 id="tc-d98-bulk-upload-of-a-mixed-directory-destructive-local-filesystem">TC-D98: Bulk upload of a mixed directory ⚠️ destructive ⚠️ local-filesystem<a class="headerlink" href="#tc-d98-bulk-upload-of-a-mixed-directory-destructive-local-filesystem" title="Permanent link">&para;</a></h3>
 <p><strong>Prompt</strong></p>
