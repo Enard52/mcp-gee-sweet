@@ -2721,3 +2721,72 @@ Trash `{FOLDER_ID}` and its contents. Remove `/tmp/qa-289/`.
 - Call 1: `uploaded == ["a.txt", "sub/b.txt"]`, `size_bytes == 35`.
 - Call 2 (local mtime set to now + 120 s): `uploaded == ["a.txt"]`, `skipped == ["sub/b.txt"]`, `size_bytes == 40`. `list_files` showed a single `a.txt` with the same file ID as after call 1, and `get_file_metadata` showed `size` `"40"`.
 - Side probes, not part of the checks: a `convert_markdown=True` upload of a new 17-byte `c.md` returned `uploaded == ["c.md"]`, `size_bytes == 17`. A bidirectional call that downloaded `sub/b.txt` (7 bytes, after deleting it locally) and uploaded a new `d.txt` (5 bytes) returned `size_bytes == 12`.
+
+### TC-D292: `sync_folder(resolve=...)` — `keep_drive` and `keep_local` clear a Drive-edit conflict in place, keeping the file ID; a both-sides edit merged and uploaded with `keep_local` reaches Drive (issue #860) ⚠️ destructive ⚠️ local-filesystem
+
+**Background:** Since #814, a converted Doc edited in Drive is a `conflict` on every sync, and the only way out was replacing the Doc (new file ID, lost sharing, comments, and links). `resolve` maps a conflicted name to `keep_drive` (record the Doc's latest revision as its import revision and stamp the local mtime; Drive content unchanged) or `keep_local` (re-upload the local `.md` over the Drive edit, in place). `keep_drive` records the local file as matching the Doc, so it's only right when the local file holds exactly the Doc's content. When the local file has edits of its own, the way out is to merge and use `keep_local`; PR #1016's review found the both-sides reason first pointed at `keep_drive`, which would have left those edits off Drive while syncs read "in sync". See the #860 section of `docs/decisions/decision-converted-doc-change-detection.md`.
+
+**Setup**
+Create a scratch Drive folder `{FOLDER_ID}` and `/tmp/qa-292/` containing `p.md`, `q.md`, and `m.md`, each holding `# Heading` and one paragraph. Run `sync_folder(folder_id={FOLDER_ID}, local_path="/tmp/qa-292/", direction="upload", convert_markdown=True)`, wait about 10 seconds, then run the same call with `direction="bidirectional"` so every Doc records its import revision. Note the three file IDs with `list_files(folder_id={FOLDER_ID})`. Then:
+- `insert_doc_text(doc_id={ID of p.md}, insertions=[{"index": 1, "text": "Drive edit P\n"}])`, and append the line `Drive edit P` to `/tmp/qa-292/p.md` (the Drive edit copied over by hand; nothing local of its own).
+- `insert_doc_text(doc_id={ID of q.md}, insertions=[{"index": 1, "text": "Drive edit Q\n"}])`. Leave `/tmp/qa-292/q.md` alone.
+- `insert_doc_text(doc_id={ID of m.md}, insertions=[{"index": 1, "text": "Drive edit M\n"}])`, and append both `local edit M` and `Drive edit M` to `/tmp/qa-292/m.md` (a local edit of its own, plus the merged Drive edit).
+
+**Tool calls**
+1. `sync_folder(folder_id={FOLDER_ID}, local_path="/tmp/qa-292/", direction="bidirectional", convert_markdown=True, dry_run=True)`
+2. `sync_folder(folder_id={FOLDER_ID}, local_path="/tmp/qa-292/", direction="bidirectional", convert_markdown=True, resolve={"p.md": "keep_drive", "q.md": "keep_local", "m.md": "keep_local"}, dry_run=True)`
+3. The same call without `dry_run`.
+4. `list_files(folder_id={FOLDER_ID})`, then `get_doc_content` and `list_revisions` on each Doc.
+5. About 10 seconds later: `sync_folder(folder_id={FOLDER_ID}, local_path="/tmp/qa-292/", direction="bidirectional", convert_markdown=True)`
+6. Append another line `local edit after resolve` to `/tmp/qa-292/p.md`, then repeat call 5.
+
+**Checks**
+- Call 1: all three actions are `conflict`. The `p.md` and `m.md` reasons start "edited both locally and in Drive since the last upload" and end with "re-sync with resolve 'keep_local' to upload the merged file", with no mention of `keep_drive`. The `q.md` reason starts "edited in Drive since the last upload" and ends with "re-sync with resolve 'keep_drive' (or 'keep_local' to overwrite the Drive edit)".
+- Call 2: the `p.md` action is `keep_drive`, with a reason starting "resolve=keep_drive: accept the Doc's current Drive version as the new baseline" and containing "(was: edited both locally and in Drive". The `q.md` and `m.md` actions are `keep_local`. `resolved == []`. A scratch-script properties listing taken before and after call 2 shows no change on any Doc.
+- Call 3: `resolved == ["m.md", "p.md", "q.md"]`, `uploaded == ["m.md", "q.md"]`, `conflicts == []`, and `failed == []`.
+- Call 4: `list_files` shows exactly the three Docs, with the file IDs noted in setup (no replacement Docs). `p.md`'s content contains "Drive edit P". `q.md`'s content no longer contains "Drive edit Q". `m.md`'s content contains both "Drive edit M" and "local edit M". `q.md` and `m.md` each show one more revision than before call 3. The scratch-script properties listing shows `p.md` with `geeSweetImportRevision` equal to its latest revision ID from `list_revisions`, and `geeSweetSourceMtime` equal to the local `p.md` mtime to the microsecond.
+- Call 5: `conflicts == []`, and all three names are in `skipped`.
+- Call 6: `uploaded == ["p.md"]` and `conflicts == []`. `get_doc_content` on `p.md` contains "local edit after resolve".
+
+**Teardown**
+Trash `{FOLDER_ID}` and its contents. Remove `/tmp/qa-292/`.
+
+**Result** (2026-10-13, Kit, PR #1016 round 1 at `6204b5f`, `mcp-gee-sweet-kit` reconnected after reset, OAuth, Shared Drive): ✅ **PASS**.
+- Setup: after the bidirectional sync, all three Docs carried `geeSweetImportRevision: "1"`. Each Drive edit added revision `2`.
+- Call 1: all three were `conflict`. The `p.md` and `m.md` reasons were the both-sides text, ending "re-sync with resolve 'keep_local' to upload the merged file", with no mention of `keep_drive`. The `q.md` reason ended "re-sync with resolve 'keep_drive' (or 'keep_local' to overwrite the Drive edit)".
+- Call 2: `p.md` was `keep_drive` and `q.md`/`m.md` were `keep_local`, with the reason texts as specified. `resolved == []`. The scratch-script properties and latest-revision listings before and after call 2 were identical (diffed).
+- Call 3: `resolved == ["m.md", "p.md", "q.md"]`, `uploaded == ["m.md", "q.md"]`, `conflicts == []`, `failed == []`.
+- Call 4: the same three file IDs. `p.md` held "Drive edit P". `q.md` no longer held "Drive edit Q". `m.md` held both "local edit M" and "Drive edit M" (joined into one paragraph by Markdown soft breaks). `q.md` and `m.md` went from revision `2` to `3`, and each now carried `geeSweetBaselineRevision: "2"` with no import revision. `p.md` carried `geeSweetImportRevision: "2"` (its latest), and `geeSweetSourceMtime` `2026-10-13T20:13:36.790121Z` matched `os.stat` to the microsecond. Its `geeSweetUploadedAt` was unchanged.
+- Call 5: `skipped == ["m.md", "p.md", "q.md"]`, `conflicts == []`.
+- Call 6: `uploaded == ["p.md"]`, `conflicts == []`. `p.md`'s content held "local edit after resolve".
+
+### TC-D293: `sync_folder(resolve=...)` — a name that isn't a convert_markdown conflict refuses the whole call and changes nothing, including in a subfolder (issue #860) ⚠️ destructive ⚠️ local-filesystem
+
+**Background:** `resolve` has no folder-wide form: every key must be a converted `.md` currently listed under `conflicts`. Because a real run syncs each folder level before planning its subfolders, the keys are checked against a read-only planning pass of the whole tree first, so a bad key in a subfolder can't let the levels above it sync.
+
+**Setup**
+Create a scratch Drive folder `{FOLDER_ID}` and `/tmp/qa-293/` containing `r.md` and `s.md`, plus a subfolder `sub/` containing `t.md`, each holding `# Heading` and one paragraph. Run `sync_folder(folder_id={FOLDER_ID}, local_path="/tmp/qa-293/", direction="upload", convert_markdown=True, recursive=True)`, wait about 10 seconds, then run the same call with `direction="bidirectional"`. Then `insert_doc_text(doc_id={ID of r.md}, insertions=[{"index": 1, "text": "Drive edit\n"}])`. Create `/tmp/qa-293/new.txt` (a local-only file that a real top-level sync would upload). Take a scratch-script properties listing of `r.md`.
+
+**Tool calls**
+1. `sync_folder(folder_id={FOLDER_ID}, local_path="/tmp/qa-293/", convert_markdown=True, recursive=True, resolve={"s.md": "keep_drive"})`
+2. `sync_folder(folder_id={FOLDER_ID}, local_path="/tmp/qa-293/", convert_markdown=True, recursive=True, resolve={"r.md": "keep_drive", "sub/t.md": "keep_drive"})`
+3. `sync_folder(folder_id={FOLDER_ID}, local_path="/tmp/qa-293/", convert_markdown=True, resolve={"sub/t.md": "keep_drive"})` (no `recursive`)
+4. `sync_folder(folder_id={FOLDER_ID}, local_path="/tmp/qa-293/", convert_markdown=True, direction="download", resolve={"r.md": "keep_local"})`
+5. `sync_folder(folder_id={FOLDER_ID}, local_path="/tmp/qa-293/", convert_markdown=True, resolve={"r.md": "overwrite"})`
+6. `list_files(folder_id={FOLDER_ID})`, then the call 2 arguments with `dry_run=True` and `resolve` omitted.
+
+**Checks**
+- Call 1: the response is only `{"error": ...}`, starting "Each resolve name must be a convert_markdown .md listed under 'conflicts'" and containing "Nothing was changed" and "'s.md': not a conflict (planned action: skip)".
+- Call 2: an `error` containing "'sub/t.md': not a conflict (planned action: skip)" and not mentioning `r.md`.
+- Call 3: an `error` containing "'sub/t.md': not found in this sync (a subfolder path needs recursive=True)".
+- Call 4: an `error` containing "direction='download' never does".
+- Call 5: `{"error": "Invalid resolve value for 'r.md'. Use 'keep_drive' or 'keep_local'."}`.
+- Call 6: `list_files` has no `new.txt`. The scratch-script properties listing of `r.md` is unchanged from setup. The dry run still lists `r.md` as a `conflict` and `new.txt` as an `upload`.
+
+**Teardown**
+Trash `{FOLDER_ID}` and its contents. Remove `/tmp/qa-293/`.
+
+**Result** (2026-10-13, Kit, PR #1016 round 1 at `6204b5f`, `mcp-gee-sweet-kit` reconnected after reset, OAuth, Shared Drive): ✅ **PASS**.
+- Calls 1–5 each returned only an `error`, with the expected text: call 1 named `'s.md': not a conflict (planned action: skip)` and contained "Nothing was changed". Call 2 named only `'sub/t.md'`, with no mention of `r.md`. Call 3 named `'sub/t.md': not found in this sync (a subfolder path needs recursive=True)`. Call 4 contained "direction='download' never does". Call 5 matched exactly.
+- Call 6: `list_files` showed only `r.md`, `s.md`, and `sub`, with no `new.txt`. A scratch-script listing of the whole tree after calls 1–5 (properties plus latest revision ID for `r.md`, `s.md`, and `sub/t.md`) was identical to the setup snapshot (diffed), so nothing changed at any level. The dry run listed `r.md` as `conflict`, `new.txt` as `upload`, and `s.md` and `sub/t.md` as `skip`.
+- Side probe, not part of the checks: after a Drive edit to `sub/t.md`, the real call `resolve={"r.md": "keep_local", "sub/t.md": "keep_drive"}` (with `recursive=True`) returned `resolved == ["r.md", "sub/t.md"]` and `uploaded == ["new.txt", "r.md"]`. `sub/t.md` then carried `geeSweetImportRevision: "2"` (its latest), and `r.md` carried `geeSweetBaselineRevision: "2"` at revision `3`. A valid subfolder key resolves.

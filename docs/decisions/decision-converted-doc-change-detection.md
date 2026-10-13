@@ -67,6 +67,30 @@ For a Doc recognized as converted (`_is_converted_md_entry`), `_sync_level` deci
 
 **The restamp stays.** For converted Docs it's now purely cosmetic: it keeps Drive's displayed "last modified" near the source mtime, and correctness no longer depends on it. The shared `_restamp_modified_time` helper from #435 / PR #817 is where the new property stamping goes. That helper's docstring currently says the restamp "makes the stamp stick", which this measurement contradicts, so #814 corrects it.
 
+## Follow-up: resolving a conflict (#860, decided 2026-10-04)
+
+Under the design above, a Drive-edited Doc stays a `conflict` on every sync, because only a new upload resets the Drive-side signal and the upload is refused while that signal says Drive changed. The only way out was replacing the Doc, which gives it a new file ID and loses its sharing, comments, and inbound links.
+
+**Decision:** one per-name parameter, `sync_folder(resolve={name: mode})`, offering both options #860 listed:
+
+- `keep_drive`: record the Doc's current latest revision as its import revision, and the local mtime as its source mtime. Nothing in Drive changes. This records the local file as matching the Doc, so it's only right once the local `.md` holds exactly the Doc's content, i.e. the caller copied the Drive edits in and the file had no edits of its own. The next local change then uploads as usual.
+- `keep_local`: re-upload the local file in place over the Drive edit, keeping the file ID, through the existing re-upload path (`_converted_md_upload_properties(reupload=True)`). This is also the way out of a both-sides conflict: merge the Drive edits into the local file, then upload it. With `keep_drive` there, the local edits would never reach Drive while every sync read "in sync" (PR #1016 review, finding 1). The both-sides conflict reason recommends `keep_local` for that reason.
+
+**Guards against a careless folder-wide call:**
+
+- Every key must name a convert_markdown Doc with a matching local `.md` that the sync reports under `conflicts`, using the name as the result reports it. Otherwise the call returns an error and changes nothing. There is no folder-wide form.
+- `dry_run=True` previews each one as a `keep_drive` or `keep_local` action.
+
+**Implementation notes:**
+
+- *Checked against a read-only pass.* "Changes nothing" can't be checked inside a real run: `_sync_level` executes each level before planning its subfolders, so a bad key under `sub/` would only surface after the levels above it had synced. When `resolve` is set, `sync_folder` first runs the whole tree as a `dry_run` and checks every key against it. A `dry_run` writes nothing, not even an import revision. A real call costs a second planning pass, which is acceptable for an explicit, rare call. A `dry_run` call *is* that pass.
+- *State that moves between passes.* On the real pass, a key whose step is no longer an eligible conflict lands in `failed` and nothing is done for it, rather than the resolution applying to a situation the caller never saw. A Drive edit between the plan and the write leaves the name in `conflicts`, using the same "Drive moved since planning" guard the upload path already had.
+- *`keep_drive` stamps the planned mtime, not a fresh one.* A local save landing between the plan and the write then still uploads on the next sync, instead of being absorbed into the baseline.
+- *Legacy Docs included.* A Doc converted before #814 that reads as "Drive newer" is eligible too. `keep_drive` gives it the properties, which is the migration this doc's **Legacy Docs** paragraph left to the next re-upload. Such a Doc has no revision job, so when `resolve` names one, the plan reads its revisions separately. That gives both modes the same "Drive moved since planning" guard (PR #1016 review, finding 2).
+- *`keep_local` is refused with `direction='download'`*, before any API call, because that direction never uploads.
+
+#818 (other conversion types) can adopt the same parameter shape.
+
 ## Out of scope
 
 - **Other conversion types.** CSV → Sheet (and likely PPTX → Slides) matched back through `export_format` compare `modifiedTime` the same way, and probably share both the race and the edit-lag. There, the race's failure mode is a spurious download of the export over the local source. This wasn't measured here and is tracked in #818 rather than widening #814.

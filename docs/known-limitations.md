@@ -204,21 +204,30 @@ delete the old Doc in Drive; the next sync converts the file again under its new
 both sides to the same new name doesn't restore the link, because the digest still records the
 old name.
 
-### `sync_folder` — a `convert_markdown` Doc edited in Drive stays a conflict until it's replaced
+### `sync_folder` — a `convert_markdown` Doc edited in Drive needs a manual resolve
 
 **What:** Once a converted Doc is edited in Drive, every `sync_folder` run reports it under
 `conflicts`, including after the local `.md` is edited too. Editing or touching the local file
-doesn't clear the conflict, and there's no parameter to accept the Drive version as the new
-baseline or to force the upload over it.
+doesn't clear the conflict. Clearing it takes a call that names the Doc in `resolve`.
 
-**Why:** There's no reverse conversion (Doc → Markdown), so the Drive edit can't be downloaded.
-The only way to pick up the local file would be to overwrite the Drive edit, which is what
-`sync_folder` used to do silently and now refuses (#814). A Drive edit is detected from the
-Doc's revision history, which only a new upload resets.
+**Why:** There's no reverse conversion (Doc → Markdown), so the Drive edit can't be downloaded,
+and uploading the local file would overwrite it. `sync_folder` used to do that silently and now
+refuses (#814), so which side wins is the caller's choice.
 
-**Workaround:** Carry the Drive edits into the local `.md` by hand, then rename or remove the Doc
-in Drive and sync again. The next sync converts the local file into a new Doc. That new Doc has
-a new file ID, so re-share it and update any links that pointed to the old one. Tracked in #860.
+**Workaround:** Name the Doc in `resolve`. The right choice depends on whether the local file has
+edits of its own:
+
+- **Only the Doc was edited:** copy the Drive edits into the local `.md` by hand, so the two
+  match, then sync with `resolve={"<name>": "keep_drive"}`. Nothing in Drive changes.
+- **Both were edited:** merge the Drive edits into the local `.md`, then sync with
+  `resolve={"<name>": "keep_local"}`, which uploads the merged file in place. Don't use
+  `keep_drive` here. It records the local file as matching the Doc, so its own edits would never
+  reach Drive.
+- **To discard the Drive edit:** sync with `"keep_local"` without merging. The edit stays in
+  the Doc's version history.
+
+Either way the Doc keeps its file ID, sharing, comments, and links. Preview the call with
+`dry_run=True` first.
 
 ### `sync_folder` — a `convert_markdown` Doc from before #814 can stay stuck in `conflicts`
 
@@ -231,11 +240,11 @@ never picks up the properties that would fix it.
 **Why:** Migrating such a Doc means choosing a baseline revision for it. While it reads as Drive
 newer, `sync_folder` can't tell a lagging timestamp from a real Drive edit, so it doesn't guess.
 
-**Workaround:** If the Doc wasn't edited in Drive, touch the local `.md` (for example,
-`touch notes.md`), so it's newer than the Drive timestamp, and sync again. The upload replaces
-the Doc's content in place, keeping its file ID, and stamps the properties. From then on, the
-Doc uses the new detection. If it *was* edited in Drive, carry those edits into the local file
-first, since the upload overwrites them.
+**Workaround:** Sync once with `resolve={"<name>": "keep_drive"}`. That stamps the properties
+without changing the Doc's content, and from then on the Doc uses the new detection. Use it only
+when the local file matches the Doc: if the Doc *was* edited in Drive, copy those edits into the
+local file first. If the local file has edits of its own, merge and use `"keep_local"` instead,
+which re-uploads in place and stamps the same properties.
 
 ### Downloads and `sync_folder` skip names that aren't a single filename
 
