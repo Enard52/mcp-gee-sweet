@@ -3181,6 +3181,75 @@ parallel shards don't delete each other's scratch dir.</p>
 <p><strong>Result (2026-10-11) ✅ PASS — Kit, PR #1000 round 1 (<code>12bd36a</code>).</strong> Ran under this job's scratch dir instead of <code>/tmp</code>. With the directory absent, call 1 returned <code>local_path</code> <code>&lt;dir&gt;/&lt;doc-id&gt;-r3.md</code>, <code>bytes_written</code> 15; <code>&lt;dir&gt;</code> is a directory and the file holds <code>Saved to disk</code>.</p>
 <p><strong>Result (2026-10-11) ✅ PASS — Kit, PR #1000 round 2 (<code>695d0f9</code>).</strong> Same as round 1: call 1 returned <code>&lt;dir&gt;/&lt;doc-id&gt;-r3.md</code>, <code>bytes_written</code> 15; <code>&lt;dir&gt;</code> is a directory holding <code>Saved to disk</code>.</p>
 <p><strong>Result (2026-10-11) ✅ PASS — Kit, PR #1000 round 3 (<code>290f5bc</code>).</strong> Ran under this job's scratch dir instead of <code>/tmp</code>. Call 1 returned <code>&lt;dir&gt;/&lt;doc-id&gt;-r3.md</code>, <code>bytes_written</code> 15; <code>&lt;dir&gt;</code> is a directory holding <code>Saved to disk</code>.</p>
+<p><strong>Result (2026-10-12) ✅ PASS — Kit, PR #1006 round 1 (<code>5994843</code>).</strong> Regression check of the OAuth (user-identity) temporary-Doc path through the live tool. Ran under this job's scratch dir instead of <code>/tmp</code>. Call 1 returned <code>&lt;dir&gt;/&lt;doc-id&gt;-r3.md</code>, <code>bytes_written</code> 15, with no <code>warning</code>; <code>&lt;dir&gt;</code> is a directory holding <code>Saved to disk</code>. Afterward, <code>search_files(query="export_revision temp")</code> found no copy from this run, only one older Shared Drive copy dated 2026-10-11.</p>
+<p><strong>Result (2026-10-12) ✅ PASS — Kit, PR #1006 round 4 (<code>8ba9194</code>), after <code>/mcp reconnect</code>.</strong> Ran under this job's scratch dir. Call 1 returned <code>&lt;dir&gt;/&lt;doc-id&gt;-r3.md</code>, <code>bytes_written</code> 15, with no <code>warning</code>; <code>&lt;dir&gt;</code> is a directory holding <code>Saved to disk</code>.</p>
+<p><strong>Result (2026-10-12) ✅ PASS — Kit, PR #1006 round 6 (<code>f05bd0e</code>), after <code>/mcp reconnect</code>.</strong> Same as round 4: call 1 returned <code>&lt;dir&gt;/&lt;doc-id&gt;-r3.md</code>, <code>bytes_written</code> 15, with no <code>warning</code>; <code>&lt;dir&gt;</code> holds <code>Saved to disk</code>.</p>
+<hr />
+<h3 id="tc-d290-export_revision-for-a-user-identity-the-temporary-doc-goes-in-my-drive-root-not-the-default-folder-issue-989-requires-oauth">TC-D290: <code>export_revision</code> — for a user identity the temporary Doc goes in My Drive root, not the default folder (issue #989) ⚠️ requires-oauth<a class="headerlink" href="#tc-d290-export_revision-for-a-user-identity-the-temporary-doc-goes-in-my-drive-root-not-the-default-folder-issue-989-requires-oauth" title="Permanent link">&para;</a></h3>
+<p><strong>Background:</strong> The temporary Doc holds the revision's full content. Before #989 it was created in
+the default folder, so with <code>DRIVE_FOLDER_ID</code> on a Shared Drive every member of that drive could
+open it while the export ran. A user identity now creates it in My Drive root. A service account,
+which has no My Drive storage, still uses the default folder. The temporary Doc is removed before
+<code>export_revision</code> returns, so no tool call can see its parent afterward. The script runs this
+checkout's real <code>export_revision</code> against a scratch Doc and reads the temporary Doc's parents just
+before removal. It prints booleans only.</p>
+<p><strong>Setup:</strong> <code>src/mcp_gee_sweet/.env</code> in the checkout under test has an OAuth token and
+<code>DRIVE_FOLDER_ID</code> set to a Shared Drive folder.</p>
+<p><strong>Tool calls</strong>
+1. <code>uv run python scripts/qa_revision_temp_doc_parent.py --identity user</code>
+2. <code>uv run python scripts/qa_revision_temp_doc_parent.py --identity service-account</code></p>
+<p><strong>Checks</strong>
+- Both calls print <code>DRIVE_FOLDER_ID set: True</code>, <code>markdown: 'probe 989\n'</code>, and <code>warning: None</code>.
+- Call 1 prints <code>temp Doc in My Drive root: True</code>, <code>temp Doc in DRIVE_FOLDER_ID: False</code>, and
+  <code>temp Doc in a Shared Drive: False</code>.
+- Call 2 prints <code>temp Doc in My Drive root: False</code>, <code>temp Doc in DRIVE_FOLDER_ID: True</code>, and
+  <code>temp Doc in a Shared Drive: True</code>.</p>
+<p><strong>Teardown:</strong> None. The script deletes its scratch Doc, and <code>export_revision</code> removes the temporary
+Doc.</p>
+<p><strong>Result (2026-10-12) ✅ PASS — Kit, PR #1006 round 1 (<code>5994843</code>).</strong> Call 1 was run twice and call 2 once. Every run printed <code>DRIVE_FOLDER_ID set: True</code>, <code>markdown: 'probe 989\n'</code>, and <code>warning: None</code>. Call 1 printed My Drive root <code>True</code>, DRIVE_FOLDER_ID <code>False</code>, Shared Drive <code>False</code>. Call 2 printed My Drive root <code>False</code>, DRIVE_FOLDER_ID <code>True</code>, Shared Drive <code>True</code>.</p>
+<p><strong>Result (2026-10-12) ✅ PASS — Kit, PR #1006 round 2 (<code>77960a6</code>).</strong> The fix commit changes docs only. Ran each call once, with output identical to round 1: <code>probe 989\n</code> and no warning on both. Call 1 put the copy in My Drive root only, and call 2 put it in <code>DRIVE_FOLDER_ID</code> on the Shared Drive.</p>
+<p><strong>Result (2026-10-12) ✅ PASS — Kit, PR #1006 round 4 (<code>8ba9194</code>).</strong> Re-run because <code>8ba9194</code> changes how <code>export_doc_revision_markdown</code> renders a create error. Each call ran once, with output identical to round 2: <code>probe 989\n</code> and no warning on both, and the same folder placement for each identity.</p>
+<p><strong>Result (2026-10-12) ✅ PASS — Kit, PR #1006 round 5 (<code>28508e5</code>).</strong> Re-run with the script's new <code>try/finally</code> cleanup and imported <code>_GOOGLE_DOC_MIME</code>. Each call ran once, with output identical to round 4.</p>
+<p><strong>Result (2026-10-12) ✅ PASS — Kit, PR #1006 round 6 (<code>f05bd0e</code>).</strong> Re-run after the develop merge. Each call ran once, with output identical to round 4.</p>
+<p><strong>Result (2026-10-12) ✅ PASS — Kit, PR #1006 round 7 (<code>6ae08b8</code>).</strong> Each call ran once, with output identical to round 4.</p>
+<hr />
+<h3 id="tc-d291-a-quota-exceeded-error-says-storage-is-full-to-a-user-identity-and-keeps-the-service-account-text-for-a-service-account-issue-1009-unit-test">TC-D291: A quota-exceeded error says "storage is full" to a user identity and keeps the service-account text for a service account (issue #1009) (unit test)<a class="headerlink" href="#tc-d291-a-quota-exceeded-error-says-storage-is-full-to-a-user-identity-and-keeps-the-service-account-text-for-a-service-account-issue-1009-unit-test" title="Permanent link">&para;</a></h3>
+<p><strong>Background:</strong> Every <code>storageQuotaExceeded</code> site rendered <code>_SA_QUOTA_ERROR</code> ("Service accounts
+cannot create or copy files in personal Drive… Use OAuth or ADC auth"), whatever the identity. A
+user whose own My Drive was full was told to switch to OAuth and never told the storage was full.</p>
+<h1 id="989-made-this-more-reachable-export_revision-now-creates-its-temporary-doc-in-a-user">989 made this more reachable: <code>export_revision</code> now creates its temporary Doc in a user<a class="headerlink" href="#989-made-this-more-reachable-export_revision-now-creates-its-temporary-doc-in-a-user" title="Permanent link">&para;</a></h1>
+<p>identity's My Drive root. Every site now renders <code>tools/drive/__init__.py</code>'s
+<code>_quota_error_text(drive_service)</code>, which picks the text from the service's own credentials (the
+same check that sets <code>is_service_account_identity</code>). A quota error can't be forced against the real
+Drive API (a QA account's My Drive isn't full), the same constraint as TC-D249–TC-D252, so the
+error paths are unit-tested only.</p>
+<p><strong>Checks (unit test)</strong>
+- <code>tests/test_docs_revision_export.py::TestDocRevisionExport::test_quota_error_on_import_matches_identity</code>:
+  <code>export_revision</code>'s temporary-Doc import gets <code>_USER_QUOTA_ERROR</code> for a user identity and
+  <code>_SA_QUOTA_ERROR</code> for a service account.
+- User-identity tests for the other site families:
+  <code>tests/drive/test_files.py::TestQuotaErrors::test_user_identity_quota_says_storage_is_full</code>
+  (<code>create_spreadsheet</code>, <code>copy_file</code>),
+  <code>tests/drive/test_transfer.py::TestUploadLocalFileCore::test_quota_exceeded_for_user_identity_says_storage_is_full</code>,
+  <code>tests/drive/test_transfer.py::TestSyncFolderConvertMarkdown::test_upload_create_quota_failure_uses_friendly_message</code>
+  (both identities), <code>tests/test_docs_content.py::TestCreateDoc::test_quota_exceeded_for_user_identity_says_storage_is_full</code>,
+  and <code>tests/test_docs_images.py::TestUploadAndShareImage::test_quota_exceeded_error_matches_identity</code>
+  (both identities).
+- Regression: the existing service-account quota tests pass with their mocked service given
+  service-account credentials (<code>tests/fakes.py::as_service_account</code>).
+- Identity detection on real services, from a fresh interpreter in the checkout under test:
+  <code>_quota_error_text</code> on a Drive service built from this checkout's OAuth token returns
+  <code>_USER_QUOTA_ERROR</code>. On one built from a <code>service_account.Credentials</code> (a throwaway local key is
+  enough, since <code>build()</code> makes no network call) it returns <code>_SA_QUOTA_ERROR</code>.
+- Live service-account quota error, from a fresh interpreter: a Drive service built from
+  <code>auth._service_account_creds()</code> calls <code>files().create()</code> with no <code>parents</code>. A service account
+  has no My Drive storage, so Drive returns a real 403 <code>storageQuotaExceeded</code>.
+  <code>tools/http_errors.py</code>'s <code>is_storage_quota_error</code> is <code>True</code> for it, and <code>_quota_error_detail(e, service)</code> returns
+  <code>_SA_QUOTA_ERROR</code>. Only the user-identity error can't be forced live.</p>
+<p><strong>Result (2026-10-12) ✅ PASS — Kit, PR #1006 round 4 (<code>8ba9194</code>).</strong> The full suite passed (2772 passed, 3 skipped), including every unit test listed above. Identity detection on real services: the OAuth-built service gave the user text, and one built from the configured service-account credentials gave the SA text. Live SA quota: <code>create()</code> with no parents returned 403 <code>storageQuotaExceeded</code>, <code>_is_quota_error</code> was <code>True</code>, and the rendered text equaled <code>_SA_QUOTA_ERROR</code>.</p>
+<p><strong>Result (2026-10-12) ✅ PASS — Kit, PR #1006 round 5 (<code>28508e5</code>).</strong> <code>_is_quota_error</code> now lives in <code>tools/drive/__init__.py</code>, and no inline <code>storageQuotaExceeded</code> check remains under <code>src/</code>. The suite passed (2772 passed, 3 skipped), and ruff is clean. Same live checks as round 4, all passing: the OAuth service gave <code>_USER_QUOTA_ERROR</code> (now worded "storage is full for this destination: your My Drive, or the Shared Drive's organization storage"). A real SA 403 <code>storageQuotaExceeded</code> made the shared <code>_is_quota_error</code> return <code>True</code>, and it rendered <code>_SA_QUOTA_ERROR</code>.</p>
+<p><strong>Result (2026-10-12) ✅ PASS — Kit, PR #1006 round 6 (<code>f05bd0e</code>, after the develop merge onto #916).</strong> <code>_is_quota_error</code> is gone. Every site now checks with <code>tools/http_errors.py</code>'s <code>is_storage_quota_error</code>, and no inline <code>storageQuotaExceeded</code> check remains under <code>src/</code>. I updated the live-check step above to name that helper. The suite passed (2777 passed, 3 skipped), and ruff is clean. Live: the OAuth service gave <code>_USER_QUOTA_ERROR</code>. A real SA 403 <code>storageQuotaExceeded</code> made <code>is_storage_quota_error</code> return <code>True</code>, and <code>_quota_error_detail(e, service)</code> rendered <code>_SA_QUOTA_ERROR</code>.</p>
+<p><strong>Result (2026-10-12) ✅ PASS — Kit, PR #1006 round 7 (<code>6ae08b8</code>).</strong> <code>_SA_QUOTA_ERROR</code> is reworded. It now says a service account can create files only in a Shared Drive, says to target one or authenticate as a user, and notes that an existing Shared Drive destination's organization storage is full. The suite passed (2777 passed, 3 skipped), ruff is clean, and <code>gen_tool_docs.py</code> leaves no diff. Live: the OAuth service gave <code>_USER_QUOTA_ERROR</code>. A real SA 403 <code>storageQuotaExceeded</code> made <code>is_storage_quota_error</code> return <code>True</code>, and it rendered the new <code>_SA_QUOTA_ERROR</code> text verbatim.</p>
 <hr />
 <h3 id="tc-d287-sync_folder-a-result_local_path-over-an-existing-file-is-refused-before-any-transfer-pr-1000-qa-round-1-issue-990-local-filesystem">TC-D287: <code>sync_folder</code> — a <code>result_local_path</code> over an existing file is refused before any transfer (PR #1000 QA round 1, issue #990) ⚠️ local-filesystem<a class="headerlink" href="#tc-d287-sync_folder-a-result_local_path-over-an-existing-file-is-refused-before-any-transfer-pr-1000-qa-round-1-issue-990-local-filesystem" title="Permanent link">&para;</a></h3>
 <p>Before the fix, a real sync ran every upload and download, then failed at the final manifest

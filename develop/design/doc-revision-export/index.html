@@ -1415,23 +1415,33 @@ items, a table, an image, and heading links.</p>
 </ul>
 <h2 id="the-temporary-doc">The temporary Doc<a class="headerlink" href="#the-temporary-doc" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Created in the default folder (<code>lc.folder_id</code>), like every other create path, so a service
-  account works when a Shared Drive is configured. A storageQuotaExceeded error renders with the
-  shared <code>_SA_QUOTA_ERROR</code> text. Who can see it there, and its 30 days in the trash when the
-  identity can only trash, is tracked in #989.</li>
-<li>Uploaded resumable: Drive takes a multipart upload only up to 5 MB, and a revision with
-  embedded images can exceed it.</li>
-<li>Named <code>export_revision temp (&lt;file_id&gt; r&lt;revision_id&gt;)</code>, so an orphan is identifiable.</li>
-<li>Created inside <code>anyio.CancelScope(shield=True)</code>, per <code>CLAUDE.md</code>'s cancellation rule: a
-  cancellation can't land after Drive created the Doc but before its ID is recorded.</li>
-<li>Removed in a shielded <code>finally</code>: deleted when <code>capabilities.canDelete</code> allows it, else trashed
+<li>Where it's created depends on the identity (#989), because the copy holds the revision's full
+  content and the default folder's audience can differ from the source Doc's:</li>
+<li>A user identity (OAuth, or ADC with user credentials) creates it in My Drive root, not the
+    default folder, so the copy isn't shared with anyone.</li>
+<li>A service account identity (<code>lc.is_service_account_identity</code>) creates it in the default
+    folder (<code>lc.folder_id</code>). A service account has no My Drive storage, so only a configured
+    Shared Drive works. The remaining exposure is documented in <code>docs/known-limitations.md</code>: the
+    Shared Drive's members can open the copy while the export runs, a Content manager's copy sits
+    in the trash for 30 days, and a failed cleanup leaves it live.</li>
+</ul>
+<p>Rejected alternatives: the source Doc's parent folder matches the source's audience more
+  closely, but the identity may not be able to write there. Restricting the copy's permissions
+  after creation can't work on a Shared Drive, where member access is inherited.
+- A storageQuotaExceeded error on create renders with the shared <code>_quota_error_text</code>: "storage is
+  full" for a user identity (a full My Drive), <code>_SA_QUOTA_ERROR</code> for a service account (#1009).
+- Uploaded resumable: Drive takes a multipart upload only up to 5 MB, and a revision with
+  embedded images can exceed it.
+- Named <code>export_revision temp (&lt;file_id&gt; r&lt;revision_id&gt;)</code>, so an orphan is identifiable.
+- Created inside <code>anyio.CancelScope(shield=True)</code>, per <code>CLAUDE.md</code>'s cancellation rule: a
+  cancellation can't land after Drive created the Doc but before its ID is recorded.
+- Removed in a shielded <code>finally</code>: deleted when <code>capabilities.canDelete</code> allows it, else trashed
   (a Content manager on a Shared Drive can only trash, #876). The removal retries a 5xx or 429
   (<code>num_retries=3</code>), since a failed removal leaves a copy of the revision in Drive. A failed removal
-  never hides the export: the result gets a <code>warning</code> naming the Doc's ID.</li>
-<li>Because it writes to Drive, <code>export_revision</code> is no longer annotated <code>readOnlyHint</code>; it's
-  <code>destructiveHint=False</code>, since it changes nothing of the caller's.</li>
-<li>About 5–6 seconds per call, measured, on top of the image fetches.</li>
-</ul>
+  never hides the export: the result gets a <code>warning</code> naming the Doc's ID.
+- Because it writes to Drive, <code>export_revision</code> is no longer annotated <code>readOnlyHint</code>; it's
+  <code>destructiveHint=False</code>, since it changes nothing of the caller's.
+- About 5–6 seconds per call, measured, on top of the image fetches.</p>
 <h2 id="errors-found-while-measuring">Errors found while measuring<a class="headerlink" href="#errors-found-while-measuring" title="Permanent link">&para;</a></h2>
 <ul>
 <li>The export endpoint answers rapid calls with HTTP 429 and an HTML page, without raising. The
