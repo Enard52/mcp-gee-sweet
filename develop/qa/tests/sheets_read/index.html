@@ -1863,6 +1863,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#tc-r44-a-sheet-name-with-or-writes-inside-the-chosen-local_path-directory-pr-1000-qa-round-2-issue-990-local-filesystem" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TC-R44: A sheet name with / or .. writes inside the chosen local_path directory (PR #1000 QA round 2, issue #990) ⚠️ local-filesystem
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2624,6 +2635,19 @@ Write 10 cells (<code>Empty!A1:A10</code>) each containing a ~4,785-character st
 10 matches (42,491 chars total) raised: <code>find_in_spreadsheet: the response is 42491 characters, over the 40000-character safety cap. ...</code> despite being far under the <code>max_results=50</code> default — confirming match-count capping alone doesn't bound response size. <code>local_path</code> call succeeded: <code>{"local_path":"/tmp/qa_find_in_spreadsheet_242.json","bytes_written":42491,"spreadsheet_id":"...","query":"PADTEST","match_count":10}</code>; file verified then cleaned up. Test data cleared from the <code>Empty</code> sheet afterward.</p>
 <p><strong>Result (2026-09-04) ⏭️ SKIP</strong>
 Stale: references retired 40,000 cap; ~42k-char 10-match response no longer trips the 1,000,000 default. Cap + local_path mechanism covered by TC-R03c/d. Skipped rather than add fixture churn for no signal</p>
+<hr />
+<h3 id="tc-r44-a-sheet-name-with-or-writes-inside-the-chosen-local_path-directory-pr-1000-qa-round-2-issue-990-local-filesystem">TC-R44: A sheet name with <code>/</code> or <code>..</code> writes inside the chosen <code>local_path</code> directory (PR #1000 QA round 2, issue #990) ⚠️ local-filesystem<a class="headerlink" href="#tc-r44-a-sheet-name-with-or-writes-inside-the-chosen-local_path-directory-pr-1000-qa-round-2-issue-990-local-filesystem" title="Permanent link">&para;</a></h3>
+<p><code>get_sheet_data</code> names its file <code>&lt;sheet&gt;_data.json</code>. Before the fix, a tab named <code>../x</code> wrote <code>x_data.json</code> beside the chosen directory, and a tab named <code>a/b</code> created a subdirectory.</p>
+<p><strong>Setup:</strong> <code>rm -rf /tmp/qa-990-sheet</code>. <code>create_sheet(spreadsheet_id={SPREADSHEET_ID}, title="../x")</code> and <code>create_sheet(spreadsheet_id={SPREADSHEET_ID}, title="a/b")</code>.</p>
+<p><strong>Steps</strong>
+1. <code>get_sheet_data(spreadsheet_id={SPREADSHEET_ID}, sheet="../x", local_path="/tmp/qa-990-sheet/out/")</code>
+2. <code>get_sheet_data(spreadsheet_id={SPREADSHEET_ID}, sheet="a/b", local_path="/tmp/qa-990-sheet/out/")</code></p>
+<p><strong>Checks</strong>
+- Step 1 returns <code>local_path</code> <code>/tmp/qa-990-sheet/out/.._x_data.json</code>
+- Step 2 returns <code>local_path</code> <code>/tmp/qa-990-sheet/out/a_b_data.json</code>
+- <code>ls -A /tmp/qa-990-sheet</code> lists only <code>out</code>, and <code>ls -A /tmp/qa-990-sheet/out</code> lists exactly <code>.._x_data.json</code> and <code>a_b_data.json</code> (no <code>a/</code> subdirectory)</p>
+<p><strong>Cleanup:</strong> <code>delete_sheet</code> both tabs; <code>rm -rf /tmp/qa-990-sheet</code></p>
+<p><strong>Result (2026-10-11) ✅ PASS — Kit, PR #1000 round 3 (<code>290f5bc</code>).</strong> Ran under this job's scratch dir instead of <code>/tmp</code>. Used <code>TEST_SPREADSHEET_ID</code>. Step 1 returned <code>&lt;dir&gt;/out/.._x_data.json</code> (117 bytes), step 2 <code>&lt;dir&gt;/out/a_b_data.json</code> (116 bytes). <code>&lt;dir&gt;</code> lists only <code>out</code>, and <code>out</code> lists exactly those two files. Both tabs deleted afterward.</p>
 
 
 

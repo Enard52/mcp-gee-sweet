@@ -1522,7 +1522,7 @@
 <tr>
 <td><code>download_file</code></td>
 <td><code>_write_atomically</code>, <code>mkdir</code></td>
-<td>the tool, before <code>_validate_local_destination</code> (that helper <code>stat</code>s parents)</td>
+<td>the tool, before <code>response_limits.validate_local_destination</code> (that helper <code>stat</code>s parents)</td>
 <td>write</td>
 </tr>
 <tr>
@@ -1546,7 +1546,7 @@
 <tr>
 <td>9 tools with the response-cap bypass (<code>get_sheet_data</code>, <code>get_multiple_sheet_data</code>, <code>get_multiple_spreadsheet_summary</code>, <code>find_in_spreadsheet</code>, <code>get_doc_content</code>, <code>find_in_doc</code>, <code>get_doc_as_markdown</code>, <code>get_message</code>, <code>get_thread</code>) and <code>sync_folder(result_local_path=)</code></td>
 <td><code>mkdir</code>, <code>_write_atomically</code></td>
-<td><code>response_limits.write_capped_result_to_disk</code>, at the top, before <code>is_dir()</code>. Check the final <code>dest</code> after the directory join too, since <code>default_filename</code> changes the target</td>
+<td><code>response_limits.write_capped_result_to_disk</code>, at the top, before <code>validate_local_destination</code>. Check the final <code>dest</code> after the directory join too, since <code>default_filename</code> changes the target. For <code>result_local_path</code>, also <code>sync_folder</code>'s own early <code>validate_local_destination(result_local_path, ...)</code>, which runs before any transfer and before <code>local_path</code>'s <code>mkdir</code> (#990)</td>
 <td>write</td>
 </tr>
 </tbody>

@@ -1446,7 +1446,7 @@ items, a table, an image, and heading links.</p>
 <li><code>revisions.list</code> returns at most 200 revisions per page by default (discovery document), and
   <code>list_revisions</code> read only the first page. It now pages through every revision via the same
   <code>_list_revisions</code> helper <code>sync_folder</code> uses.</li>
-<li>A Doc <code>local_path</code> is checked with <code>_validate_local_destination</code> before the export, so a bad
+<li>A Doc <code>local_path</code> is checked with <code>response_limits.validate_local_destination</code> before the export, so a bad
   destination fails before the temporary Doc round trip.</li>
 </ul>
 <h2 id="live-verification">Live verification<a class="headerlink" href="#live-verification" title="Permanent link">&para;</a></h2>
