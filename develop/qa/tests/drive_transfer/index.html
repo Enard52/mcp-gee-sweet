@@ -3400,6 +3400,22 @@ Trash <code>{FOLDER_ID}</code> and its contents. Remove <code>/tmp/qa-273/</code
 - Call 2: <code>conflicts == ["g.md"]</code>, and <code>x.md</code> was in <code>skipped</code>, even though <code>g.md</code> had also drifted.
 - Call 3: <code>modified_time</code> was still <code>03:45:36.140Z</code>, not reset. <code>g.md</code> carried <code>geeSweetImportRevision: "1"</code>.
 - Call 4: <code>uploaded == ["x.md"]</code>, and <code>get_doc_content</code> contained "appended within 5s". An immediate extra resync left <code>x.md</code> in <code>skipped</code> (no repeat upload), and <code>g.md</code> stayed in <code>conflicts</code>.</p>
+<h3 id="tc-d289-sync_folder-size_bytes-counts-uploaded-bytes-on-both-the-create-and-update-paths-issue-1003-destructive-local-filesystem">TC-D289: <code>sync_folder</code> — <code>size_bytes</code> counts uploaded bytes, on both the create and update paths (issue #1003) ⚠️ destructive ⚠️ local-filesystem<a class="headerlink" href="#tc-d289-sync_folder-size_bytes-counts-uploaded-bytes-on-both-the-create-and-update-paths-issue-1003-destructive-local-filesystem" title="Permanent link">&para;</a></h3>
+<p><strong>Background:</strong> <code>size_bytes</code> is documented as bytes transferred, but <code>sync_folder</code> added only downloaded bytes to it. An upload-only sync always returned <code>size_bytes: 0</code>, whether the file was new (<code>create()</code>) or a re-upload (<code>update()</code>). Found live in PR #1002's QA.</p>
+<p><strong>Setup</strong>
+Create a scratch Drive folder <code>{FOLDER_ID}</code> and <code>/tmp/qa-289/</code> containing <code>a.txt</code> (exactly 28 bytes) and a subfolder <code>sub/</code> containing <code>b.txt</code> (exactly 7 bytes).</p>
+<p><strong>Tool calls</strong>
+1. <code>sync_folder(folder_id={FOLDER_ID}, local_path="/tmp/qa-289/", direction="upload", recursive=True)</code>
+2. Overwrite <code>/tmp/qa-289/a.txt</code> with exactly 40 bytes. Then read the Drive copy's <code>modified_time</code> with <code>get_file_metadata</code> and set the local file's mtime to that value plus at least 60 s (scratch script: <code>os.utime</code>). An mtime within <code>_SYNC_MTIME_TOLERANCE</code> (5 s) of Drive's would make the size change a <code>conflict</code> rather than an upload. Then repeat call 1.</p>
+<p><strong>Checks</strong>
+- Call 1: <code>uploaded</code> contains <code>a.txt</code> and <code>sub/b.txt</code>, and <code>size_bytes == 35</code>.
+- Call 2: <code>uploaded == ["a.txt"]</code>, <code>sub/b.txt</code> is in <code>skipped</code>, and <code>size_bytes == 40</code>. <code>list_files(folder_id={FOLDER_ID})</code> shows a single <code>a.txt</code>, with the same file ID as after call 1 (the <code>update()</code> path, not a new file), and <code>get_file_metadata</code> on it shows <code>size</code> <code>"40"</code>.</p>
+<p><strong>Teardown</strong>
+Trash <code>{FOLDER_ID}</code> and its contents. Remove <code>/tmp/qa-289/</code>.</p>
+<p><strong>Result</strong> (2026-10-12, Sky, PR #1007 round 1 at <code>10dfb80</code>, <code>mcp-gee-sweet-sky</code> reconnected after reset, OAuth, Shared Drive): ✅ <strong>PASS</strong>.
+- Call 1: <code>uploaded == ["a.txt", "sub/b.txt"]</code>, <code>size_bytes == 35</code>.
+- Call 2 (local mtime set to now + 120 s): <code>uploaded == ["a.txt"]</code>, <code>skipped == ["sub/b.txt"]</code>, <code>size_bytes == 40</code>. <code>list_files</code> showed a single <code>a.txt</code> with the same file ID as after call 1, and <code>get_file_metadata</code> showed <code>size</code> <code>"40"</code>.
+- Side probes, not part of the checks: a <code>convert_markdown=True</code> upload of a new 17-byte <code>c.md</code> returned <code>uploaded == ["c.md"]</code>, <code>size_bytes == 17</code>. A bidirectional call that downloaded <code>sub/b.txt</code> (7 bytes, after deleting it locally) and uploaded a new <code>d.txt</code> (5 bytes) returned <code>size_bytes == 12</code>.</p>
 
 
 
