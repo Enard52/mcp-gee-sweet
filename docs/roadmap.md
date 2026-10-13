@@ -284,7 +284,7 @@ Same shape as v0.8.1 — stabilize on defects that surfaced since v0.9.0 shipped
 - [x] **Bundle:** Drive transfer follow-ups (`download_file` preflight + `_write_atomically`), one PR closing [#874](https://github.com/khuisman/mcp-gee-sweet/issues/874), [#887](https://github.com/khuisman/mcp-gee-sweet/issues/887) — lane A (PR #1001) ([#895](https://github.com/khuisman/mcp-gee-sweet/issues/895))
 - [x] `upload_local_file`/`sync_folder`: compressed files upload with the inner MIME type (`x.csv.gz` → `text/csv`). Lane A, after #895 (both touch `transfer.py` uploads); community PR #934 closed unmerged 2026-10-10 (PR #1002) ([#930](https://github.com/khuisman/mcp-gee-sweet/issues/930))
 - [x] `sync_folder`: `size_bytes` never counts uploaded bytes, so an upload-only sync reports 0 (found in PR #1002's QA, observed live). Lane A, after #930 (PR #1007) ([#1003](https://github.com/khuisman/mcp-gee-sweet/issues/1003))
-- [ ] Share one HttpError reason-check helper across the `storageQuotaExceeded` sites. Lane A, after #1003; community PR #921 closed unmerged 2026-10-10 ([#916](https://github.com/khuisman/mcp-gee-sweet/issues/916))
+- [x] Share one HttpError reason-check helper across the `storageQuotaExceeded` sites. Lane A, after #1003; community PR #921 closed unmerged 2026-10-10 (PR #1011) ([#916](https://github.com/khuisman/mcp-gee-sweet/issues/916))
 
 **Calendar hardening** _(triaged out of `backlog` 2026-09-11)_
 - [ ] **Bundle:** Calendar follow-ups from PR #912, one PR closing [#915](https://github.com/khuisman/mcp-gee-sweet/issues/915), [#918](https://github.com/khuisman/mcp-gee-sweet/issues/918) — lane B, after #892 ([#985](https://github.com/khuisman/mcp-gee-sweet/issues/985))
