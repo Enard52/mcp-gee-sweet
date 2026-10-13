@@ -34,6 +34,7 @@ from .images import (
     upload_and_share_local_image,
 )
 from .indices import _collect_doc_paragraphs, decode_code_run_text, utf16_len
+from .markdown_export import _discard_temp_doc
 from .style import _add_or_clear_field
 
 logger = logging.getLogger(__name__)
@@ -308,6 +309,59 @@ def _read_doc_source_file(
     return content, content_format
 
 
+# A bound on the backup copy (all attempts), since it runs shielded from
+# cancellation and a cancel waits for shielded work. Measured at 2.5-4 s for a
+# 20 KB doc; a doc with many images takes longer.
+_BACKUP_COPY_TIMEOUT = 60
+
+# A 429 on the copy is retried this many times, with exponential backoff. A 429
+# means Drive ran nothing; a 5xx isn't retried, since the copy may already exist
+# and a retry would make another one.
+_BACKUP_COPY_RATE_LIMIT_RETRIES = 3
+
+
+def _was_rejected(e: BaseException) -> bool:
+    """True if `e` is an HttpError the API answered with a 4xx, meaning the
+    request ran nothing. A 5xx, a timeout, or a transport error doesn't say
+    whether the request landed."""
+    return isinstance(e, HttpError) and 400 <= int(e.resp.status) < 500
+
+
+def _describe(e: BaseException) -> str:
+    """str(e), or the exception's type name when that's empty (a TimeoutError)."""
+    return str(e) or type(e).__name__
+
+
+async def _copy_for_backup(drive_service, doc_id: str, name: str) -> dict[str, Any]:
+    """files.copy of `doc_id` named `name`, next to the source. Retries a 429
+    only, within _BACKUP_COPY_TIMEOUT for every attempt together."""
+    request = drive_service.files().copy(
+        fileId=doc_id,
+        body={"name": name},
+        fields="id,name,capabilities(canDelete)",
+        supportsAllDrives=True,
+    )
+    with anyio.fail_after(_BACKUP_COPY_TIMEOUT):
+        for attempt in range(_BACKUP_COPY_RATE_LIMIT_RETRIES + 1):
+            try:
+                return await execute_in_thread(request.execute, drive_service)
+            except HttpError as e:
+                if int(e.resp.status) != 429 or attempt == _BACKUP_COPY_RATE_LIMIT_RETRIES:
+                    raise
+            await anyio.sleep(2**attempt)
+    raise AssertionError("unreachable")
+
+
+async def _doc_end_index(docs_service, doc_id: str) -> tuple[dict[str, Any], int]:
+    """The doc and its body's endIndex (2 for an empty doc)."""
+    doc = await execute_in_thread(
+        docs_service.documents().get(documentId=doc_id).execute,
+        docs_service,
+    )
+    body_content = doc.get("body", {}).get("content", [])
+    return doc, body_content[-1].get("endIndex", 2) if body_content else 2
+
+
 async def _replace_doc_content(
     lc: SpreadsheetContext,
     doc_id: str,
@@ -327,18 +381,100 @@ async def _replace_doc_content(
     The three flags are keyword-only (#567), here and in _apply_doc_content: as
     positional bools, swapping two at a call site would type-check and silently do
     the wrong thing.
+
+    A doc with content is copied with Drive before the clear (#878), and the copy
+    is deleted once the new content is in. If anything after the copy fails or is
+    cancelled, the copy is kept and a failure result names it as "backupId". Drive's
+    revision history can't serve this: Docs merges the revision current before the
+    clear into the clear's own revision at once, so its ID is a 404 straight away
+    (measured live; see docs/design/doc-replace-backup.md). A failed copy leaves the
+    doc untouched and returns an error, except a storageQuotaExceeded one: a service
+    account writing into a user-owned doc can't own a copy, and this tool is the
+    documented way to write such a doc, so it replaces without a backup, and a
+    failure says so.
+
+    The doc is unchanged, and the copy removed, only when a step before the clear
+    fails or the clear gets a 4xx. A clear that fails any other way (a 5xx, a
+    timeout, a transport error) may have landed, so the copy is kept and the error
+    says the content may have been cleared (PR #1017 QA round 1).
     """
     docs_service = lc.docs_service
     drive_service = lc.drive_service
     doc_cache = lc.doc_cache
-    doc = await execute_in_thread(
-        docs_service.documents().get(documentId=doc_id).execute,
-        docs_service,
-    )
-    body_content = doc.get("body", {}).get("content", [])
-    end_index = body_content[-1].get("endIndex", 2) if body_content else 2
+    doc, end_index = await _doc_end_index(docs_service, doc_id)
 
-    clear_requests = []
+    backup: dict[str, Any] = {}
+    no_backup_reason: str | None = None
+    if end_index > 2:
+        backup_name = f"{doc.get('title') or doc_id} (backup before replace)"
+        # Shielded, so a cancellation can't land after Drive made the copy but
+        # before its ID is recorded (the PR #877 rule); bounded inside by
+        # _BACKUP_COPY_TIMEOUT.
+        with anyio.CancelScope(shield=True):
+            try:
+                backup = await _copy_for_backup(drive_service, doc_id, backup_name)
+            except Exception as e:
+                if not is_storage_quota_error(e):
+                    error = (
+                        f"Couldn't back up the document before replacing its content, "
+                        f"so it was left unchanged: {_describe(e)}"
+                    )
+                    if not _was_rejected(e):
+                        # Drive may have made the copy and lost the response.
+                        error += (
+                            f". A copy named {backup_name!r} may still have been created "
+                            f"next to the document; check for it and delete it"
+                        )
+                    return {"error": error, "docId": doc_id}
+                no_backup_reason = "this account has no Drive storage quota for the copy"
+                logger.warning(
+                    "Replacing doc %s without a backup: storage quota exceeded on copy", doc_id
+                )
+
+        # Re-read after the copy, which takes seconds: a concurrent edit meanwhile
+        # would otherwise survive the clear (the doc grew) or make it fail (it
+        # shrank).
+        try:
+            _, end_index = await _doc_end_index(docs_service, doc_id)
+        except BaseException as e:
+            return await _unchanged_result(drive_service, backup, doc_id, e)
+
+    def _failed(e: BaseException, cleared: str) -> dict[str, Any]:
+        """The result for a failure once the clear was sent; `cleared` is "yes",
+        "maybe", or "no" (the doc was empty by the time the clear would run)."""
+        doc_cache.mark_dirty(doc_id)
+        if not isinstance(e, Exception):
+            if backup.get("id"):
+                logger.warning(
+                    "Replacing doc %s was cancelled; kept its backup copy %s", doc_id, backup["id"]
+                )
+            raise e
+        if isinstance(e, DocEditError):
+            result = _doc_edit_failure_result(e, doc_id)
+        else:
+            result = {"error": f"doc edit failed: {_describe(e)}", "docId": doc_id}
+        state = {
+            "yes": "The document's previous content was cleared first",
+            "maybe": "The document's previous content may have been cleared",
+        }.get(cleared)
+        if backup.get("id"):
+            if state:
+                result["error"] += (
+                    f". {state}; a full copy of it is kept as {backup['name']!r} (backupId)."
+                )
+            else:
+                result["error"] += (
+                    f". A full copy of the document from before this call is kept as "
+                    f"{backup['name']!r} (backupId)."
+                )
+            result["backupId"] = backup["id"]
+        elif no_backup_reason and state:
+            result["error"] += (
+                f". {state} and couldn't be backed up ({no_backup_reason}), so the "
+                f"document may be empty or partly written."
+            )
+        return result
+
     if end_index > 2:
         # The document's final paragraph mark can't be deleted by the Docs API (only
         # everything before it), so an explicit textStyle override left there by prior
@@ -346,29 +482,35 @@ async def _replace_doc_content(
         # table, see _build_blank_para_before_table_collapses in emitter.py — would
         # otherwise survive this "clear" and can leak into newly-inserted content below.
         # Reset it before deleting, while its original index range is still valid.
-        clear_requests.append(
+        clear_requests = [
             {
                 "updateTextStyle": {
                     "range": {"startIndex": end_index - 1, "endIndex": end_index},
                     "textStyle": {},
                     "fields": "*",
                 }
-            }
-        )
-        clear_requests.append(
-            {"deleteContentRange": {"range": {"startIndex": 1, "endIndex": end_index - 1}}}
-        )
+            },
+            {"deleteContentRange": {"range": {"startIndex": 1, "endIndex": end_index - 1}}},
+        ]
         # Sent as its own batchUpdate, not combined with the insert below: live testing
         # showed the Docs API resolves a same-batch insertText's inherited formatting
         # from a pre-batch snapshot, so contamination survived even after the clear
         # request above ran earlier in that same batch. A separate call forces the
         # insert to see the already-cleared document state.
-        await execute_in_thread(
-            docs_service.documents()
-            .batchUpdate(documentId=doc_id, body={"requests": clear_requests})
-            .execute,
-            docs_service,
-        )
+        try:
+            await execute_in_thread(
+                docs_service.documents()
+                .batchUpdate(documentId=doc_id, body={"requests": clear_requests})
+                .execute,
+                docs_service,
+            )
+        except BaseException as e:
+            if _was_rejected(e):
+                return await _unchanged_result(drive_service, backup, doc_id, e)
+            return _failed(e, "maybe")
+        cleared = "yes"
+    else:
+        cleared = "no"
 
     try:
         image_outcomes = await _apply_doc_content(
@@ -382,24 +524,79 @@ async def _replace_doc_content(
             revoke_sharing=revoke_sharing,
             auto_downscale=auto_downscale,
         )
-    except DocEditError as e:
-        # The clear above already committed, so the doc changed either way.
-        doc_cache.mark_dirty(doc_id)
-        return _doc_edit_failure_result(e, doc_id)
-
-    metadata = await execute_in_thread(
-        drive_service.files()
-        .get(fileId=doc_id, fields="webViewLink", supportsAllDrives=True)
-        .execute,
-        drive_service,
-    )
-
+    except BaseException as e:
+        return _failed(e, cleared)
+    # Before the link lookup, which can still raise with the doc already
+    # replaced (PR #1017 QA round 2).
     doc_cache.mark_dirty(doc_id)
+
+    # The backup's removal and the link lookup are independent, so they run
+    # together. The removal catches its own errors; a lookup error is re-raised
+    # after the removal finishes.
+    warning: str | None = None
+    metadata: dict[str, Any] = {}
+    lookup_error: Exception | None = None
+
+    async def _remove_backup() -> None:
+        nonlocal warning
+        warning = await _discard_backup(drive_service, backup)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(_remove_backup)
+        try:
+            metadata = await execute_in_thread(
+                drive_service.files()
+                .get(fileId=doc_id, fields="webViewLink", supportsAllDrives=True)
+                .execute,
+                drive_service,
+            )
+        except Exception as e:
+            lookup_error = e
+    if lookup_error is not None:
+        raise lookup_error
+
     logger.debug("Replaced content in doc %s", doc_id)
     result: dict[str, Any] = {"docId": doc_id, "web_link": metadata.get("webViewLink")}
     if image_outcomes is not None:
         result["images"] = image_outcomes
+    if warning:
+        result["warning"] = warning
     return result
+
+
+async def _unchanged_result(
+    drive_service, backup: dict[str, Any], doc_id: str, e: BaseException
+) -> dict[str, Any]:
+    """_replace_doc_content's result when it stopped before changing the doc: the
+    backup isn't needed, so it's removed. A cancellation is re-raised after."""
+    warning = await _discard_backup(drive_service, backup)
+    if not isinstance(e, Exception):
+        raise e
+    result: dict[str, Any] = {
+        "error": f"Couldn't clear the document, so it was left unchanged: {_describe(e)}",
+        "docId": doc_id,
+    }
+    if warning:
+        result["warning"] = warning
+    return result
+
+
+async def _discard_backup(drive_service, backup: dict[str, Any]) -> str | None:
+    """Remove _replace_doc_content's backup copy, if one was made. Shielded, so a
+    cancellation doesn't leave the copy behind. Returns a warning for the caller's
+    result if the removal failed, else None."""
+    if not backup.get("id"):
+        return None
+    with anyio.CancelScope(shield=True):
+        cleanup_error = await _discard_temp_doc(
+            drive_service, backup["id"], backup.get("capabilities", {}).get("canDelete", True)
+        )
+    if not cleanup_error:
+        return None
+    return (
+        f"Couldn't remove the backup copy {backup['id']} made before replacing "
+        f"the content; delete it manually ({cleanup_error})."
+    )
 
 
 class DocEditError(Exception):
@@ -1277,9 +1474,15 @@ def register(tool):
         Returns:
             Confirmation with the document ID and web link. Includes "images" (per-image
             outcomes) when content contained any images.
-            If writing the new content fails, returns {"error", "docId", "images"}
-            instead, with any temporary image share already revoked. The old content
-            was cleared first, so the doc may be empty or partly written.
+            Includes "warning" if the backup copy (below) couldn't be removed.
+            Before clearing a doc that has content, a full copy of it is made in Drive,
+            and deleted again once the new content is in. If the copy fails, nothing
+            is changed and an error is returned (except when the account has no
+            storage quota for it, e.g. a service account: the replace then goes ahead
+            without a backup). If writing the new content fails, returns {"error",
+            "docId", "backupId", "images"} instead, with any temporary image share
+            already revoked: the doc may be empty or partly written, and backupId is
+            the kept copy of its previous content.
         """
         lc = ctx.request_context.lifespan_context
         return await _replace_doc_content(
@@ -1338,9 +1541,15 @@ def register(tool):
         Returns:
             Confirmation with the document ID and web link. Includes "images" (per-image
             outcomes) when the file contained any images.
-            If writing the new content fails, returns {"error", "docId", "images"}
-            instead, with any temporary image share already revoked. The old content
-            was cleared first, so the doc may be empty or partly written.
+            Includes "warning" if the backup copy (below) couldn't be removed.
+            Before clearing a doc that has content, a full copy of it is made in Drive,
+            and deleted again once the new content is in. If the copy fails, nothing
+            is changed and an error is returned (except when the account has no
+            storage quota for it, e.g. a service account: the replace then goes ahead
+            without a backup). If writing the new content fails, returns {"error",
+            "docId", "backupId", "images"} instead, with any temporary image share
+            already revoked: the doc may be empty or partly written, and backupId is
+            the kept copy of its previous content.
         """
         source = _read_doc_source_file(local_path, content_format, format_overridable=True)
         if isinstance(source, dict):
