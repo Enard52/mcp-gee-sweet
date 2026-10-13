@@ -809,3 +809,23 @@ Write 10 cells (`Empty!A1:A10`) each containing a ~4,785-character string with a
 **Result (2026-09-04) ⏭️ SKIP**
 Stale: references retired 40,000 cap; ~42k-char 10-match response no longer trips the 1,000,000 default. Cap + local_path mechanism covered by TC-R03c/d. Skipped rather than add fixture churn for no signal
 
+
+---
+
+### TC-R44: A sheet name with `/` or `..` writes inside the chosen `local_path` directory (PR #1000 QA round 2, issue #990) ⚠️ local-filesystem
+`get_sheet_data` names its file `<sheet>_data.json`. Before the fix, a tab named `../x` wrote `x_data.json` beside the chosen directory, and a tab named `a/b` created a subdirectory.
+
+**Setup:** `rm -rf /tmp/qa-990-sheet`. `create_sheet(spreadsheet_id={SPREADSHEET_ID}, title="../x")` and `create_sheet(spreadsheet_id={SPREADSHEET_ID}, title="a/b")`.
+
+**Steps**
+1. `get_sheet_data(spreadsheet_id={SPREADSHEET_ID}, sheet="../x", local_path="/tmp/qa-990-sheet/out/")`
+2. `get_sheet_data(spreadsheet_id={SPREADSHEET_ID}, sheet="a/b", local_path="/tmp/qa-990-sheet/out/")`
+
+**Checks**
+- Step 1 returns `local_path` `/tmp/qa-990-sheet/out/.._x_data.json`
+- Step 2 returns `local_path` `/tmp/qa-990-sheet/out/a_b_data.json`
+- `ls -A /tmp/qa-990-sheet` lists only `out`, and `ls -A /tmp/qa-990-sheet/out` lists exactly `.._x_data.json` and `a_b_data.json` (no `a/` subdirectory)
+
+**Cleanup:** `delete_sheet` both tabs; `rm -rf /tmp/qa-990-sheet`
+
+**Result (2026-10-11) ✅ PASS — Kit, PR #1000 round 3 (`290f5bc`).** Ran under this job's scratch dir instead of `/tmp`. Used `TEST_SPREADSHEET_ID`. Step 1 returned `<dir>/out/.._x_data.json` (117 bytes), step 2 `<dir>/out/a_b_data.json` (116 bytes). `<dir>` lists only `out`, and `out` lists exactly those two files. Both tabs deleted afterward.

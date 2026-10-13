@@ -4278,3 +4278,30 @@ Comment text is plain text, so no line of it may render as Markdown structure, a
 **Result (2026-10-11) ✅ PASS (case as written), ❌ sent back on probes — Kit, PR #991 round 2 (`de8143e`).** Ran with the export under this job's scratch dir instead of `/tmp`. Every check passed for the case's own content: body `<p>- a</p>`, `<p># h</p>`, `<p>---</p>`, `<p>tab indent</p>`; the comment's eight lines joined by `<br />` in one paragraph, then `<p>indented *x*</p>`; no `<ul>`/`<ol>`/`<table>`/`<pre>`. Extra probes on the same doc failed: (1) a body paragraph `## Notes` and a comment line `## Notes` each rendered as `<h2>`, and the comment line before it kept a literal `\`, because `_LEADING_SIMPLE_MARKER` matches only a single `#`; (2) `add_doc_comment(quoted_text="Summary\n===  ")` exported `> Summary\` / `> ===  `, which renders as `<h1>Summary\</h1>` inside the blockquote, because `_LEADING_RULE_LINE` doesn't allow trailing whitespace after `=`. Drive trims trailing whitespace from the end of comment `content` (not from `quoted_text`), and a mid-content `===  ` line is safe because the hard break before it blocks the setext.
 
 **Result (2026-10-11) ✅ PASS — Kit, PR #991 round 3 (`95ba882`).** Ran with the export under this job's scratch dir instead of `/tmp`. Step 3's HTML had no `<ul>`/`<ol>`/`<h1>`/`<table>`/`<pre>`, exactly one `<h2>` (`Comments`) and one `<hr />`. Body: `<p>- a</p>`, `<p># h</p>`, `<p>---</p>`, `<p>tab indent</p>`, `<p>## Notes</p>`. Step 1's comment rendered its nine lines through `## Notes` joined by `<br />` with no literal `\`, then `<p>indented *x*</p>`. Step 1a's `quoted_text` came back as `Summary\n===  ` (trailing spaces kept) and rendered as `<blockquote><p>Summary<br />===</p></blockquote>`, no `<h1>`.
+
+### TC-DOC218: A trailing-slash `local_path` naming a missing directory creates it; one naming an existing file is refused (issue #990) ⚠️ local-filesystem
+Every capped tool's `local_path` goes through the shared `write_capped_result_to_disk`. Before #990, `dir/` for a directory that didn't exist yet was written as a *file* named `dir`, and `file/` over an existing file overwrote it.
+
+**Setup:** `rm -rf /tmp/qa-990 && mkdir -p /tmp/qa-990/linkdir && printf 'keep me' > /tmp/qa-990/blocker && ln -s /tmp/qa-990/missing /tmp/qa-990/dangling && ln -s /tmp/qa-990/elsewhere /tmp/qa-990/linkdir/{DOC_ID}.md`. Confirm `/tmp/qa-990/new`, `/tmp/qa-990/missing`, and `/tmp/qa-990/elsewhere` don't exist.
+
+**Steps**
+1. `get_doc_as_markdown(doc_id={DOC_ID}, local_path="/tmp/qa-990/new/sub/")`
+2. `get_doc_as_markdown(doc_id={DOC_ID}, local_path="/tmp/qa-990/blocker/")`
+3. `get_doc_as_markdown(doc_id={DOC_ID}, local_path="/tmp/qa-990/blocker/sub/")`
+4. `get_doc_as_markdown(doc_id={DOC_ID}, local_path="/tmp/qa-990/dangling/")`
+5. `get_doc_as_markdown(doc_id={DOC_ID}, local_path="/tmp/qa-990/linkdir/")`
+
+**Checks**
+- Step 1 returns `local_path` `/tmp/qa-990/new/sub/{DOC_ID}.md`. `/tmp/qa-990/new/sub` is a directory (`test -d`), not a file, and the `.md` file in it holds raw Markdown whose byte size equals `bytes_written`
+- Step 2 raises "local_path '/tmp/qa-990/blocker/' has a non-directory path component at '/tmp/qa-990/blocker'; local_path ends in a path separator or '.', which makes it a directory target…", and `/tmp/qa-990/blocker` still holds `keep me`
+- Step 3 raises a `ValueError` "…has a non-directory path component at '/tmp/qa-990/blocker'" (a file further up the path), not a raw `NotADirectoryError` (PR #1000 QA round 1)
+- Step 4 raises a `ValueError` "…has a symlink to a missing target at '/tmp/qa-990/dangling'", not a raw `FileExistsError`, and `/tmp/qa-990/missing` still doesn't exist (PR #1000 QA round 1)
+- Step 5 raises a `ValueError` "…has a symlink to a missing target at '/tmp/qa-990/linkdir/{DOC_ID}.md'", and `/tmp/qa-990/elsewhere` still doesn't exist: the file joined onto a directory gets the same checks as a file `local_path` (PR #1000 QA round 2)
+
+**Cleanup:** `rm -rf /tmp/qa-990`
+
+**Result (2026-10-11) ✅ PASS — Kit, PR #1000 round 1 (`12bd36a`).** Ran under this job's scratch dir instead of `/tmp`. Step 1 returned `local_path` `<dir>/new/sub/{DOC_ID}.md`, `bytes_written` 96; `new/sub` is a directory and the file is 96 bytes. Step 2 raised the expected "ends in a separator, so it must be a directory, but … is an existing file" error and `blocker` still holds `keep me`. Probes outside the case (sent back): `<file>/sub/` with `<file>` a regular file raises a raw `NotADirectoryError`, and `<dangling symlink>/` raises `FileExistsError`, not the new `ValueError`.
+
+**Result (2026-10-11) ✅ PASS — Kit, PR #1000 round 2 (`695d0f9`).** Ran under this job's scratch dir instead of `/tmp`. Step 1 returned `<dir>/new/sub/{DOC_ID}.md`, `bytes_written` 96, and `new/sub` is a directory. Step 2 raised "…has a non-directory path component at '<dir>/blocker'; local_path ends in a path separator or '.', which makes it a directory target…", and `blocker` still holds `keep me`. Step 3 raised the `ValueError` naming `<dir>/blocker`. Step 4 raised "…has a symlink to a missing target at '<dir>/dangling'", and `missing` was not created.
+
+**Result (2026-10-11) ✅ PASS — Kit, PR #1000 round 3 (`290f5bc`).** Ran under this job's scratch dir instead of `/tmp`. Steps 1–4 matched round 2 (step 1 wrote `<dir>/new/sub/{DOC_ID}.md`, 96 bytes; steps 2–4 raised the expected `ValueError`s; `blocker` still holds `keep me`; `missing` not created). Step 5 raised "…has a symlink to a missing target at '<dir>/linkdir/{DOC_ID}.md'", and `elsewhere` was not created.

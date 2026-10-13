@@ -614,7 +614,7 @@ Unit tests: `tests/drive/test_transfer.py -k TestDownloadFile` — 10 passed (in
 
 ### TC-D274: `download_file` — trailing-slash `local_path` over an existing regular file fails before any Drive request (#827, #855) ⚠️ local-filesystem
 
-**Background:** #827 moved the trailing-slash clash check ahead of the Drive metadata call, and #855 folded it into a single preflight (`_validate_local_destination`). A bad destination should now fail without spending a Drive request. A file ID that doesn't exist is the live stand-in for "no Drive request": if the call reaches Drive it gets a 404 `HttpError`, and if the preflight rejects it first the path error comes back.
+**Background:** #827 moved the trailing-slash clash check ahead of the Drive metadata call, and #855 folded it into a single preflight (`_validate_local_destination`, now the shared `response_limits.validate_local_destination`, #990). A bad destination should now fail without spending a Drive request. A file ID that doesn't exist is the live stand-in for "no Drive request": if the call reaches Drive it gets a 404 `HttpError`, and if the preflight rejects it first the path error comes back.
 
 **Setup:** `rm -rf /tmp/qa-d274 && mkdir -p /tmp/qa-d274 && printf x > /tmp/qa-d274/clash`
 
@@ -2220,8 +2220,8 @@ revision separate (#814), so the diff below uses one.
 
 ### TC-D282: Doc revision `local_path`, and arguments that don't apply to the file's type (issue #959) ⚠️ local-filesystem ⚠️ requires-oauth
 
-**Setup:** `mkdir -p /tmp/qa-959` (the directory must exist: a `local_path` naming a missing
-directory, even with a trailing `/`, is written as a file of that name).
+**Setup:** `mkdir -p /tmp/qa-959` (before #990, a `local_path` naming a missing directory, even
+with a trailing `/`, was written as a file of that name; TC-D288 covers the missing-directory case).
 `create_doc(title="qa-959-args", content="<p>Saved to disk</p>")`, then
 `list_revisions` on it and on `TEST_SPREADSHEET_ID`, taking each one's last `revisionId`.
 
@@ -2278,6 +2278,62 @@ is the Shared Drive.
 **Teardown:** `delete_file(file_id="<id>")` on the SA server.
 
 **Result (2026-10-11, PR #988 round 1, `8b223c5`) ⏭️ SKIP** — Not run: a lane QA session may call only its own `mcp-gee-sweet-kit` server, and the case needs `mcp-gee-sweet-sa`. Pending for a release pass (Aziz may use the `-sa` slot). The trash branch is unit-tested only so far.
+
+---
+
+### TC-D288: `export_revision` — a trailing-slash `local_path` naming a missing directory creates it, not a file (issue #990) ⚠️ local-filesystem ⚠️ requires-oauth
+
+Reproduces PR #988 round 1's observation: with the directory absent, `local_path="<dir>/"`
+wrote a 15-byte *file* named after it. Uses `/tmp/qa-990-rev`, not TC-DOC218's `/tmp/qa-990`, so
+parallel shards don't delete each other's scratch dir.
+
+**Setup:** `rm -rf /tmp/qa-990-rev`. `create_doc(title="qa-990", content="<p>Saved to disk</p>")`, then
+`list_revisions(file_id="<doc-id>")` and take the last `revisionId`.
+
+**Tool calls**
+1. `export_revision(file_id="<doc-id>", revision_id="<doc rev>", local_path="/tmp/qa-990-rev/")`
+
+**Checks**
+- Call 1 returns `local_path` `/tmp/qa-990-rev/<doc-id>-r<doc rev>.md`, not `/tmp/qa-990-rev`.
+- `/tmp/qa-990-rev` is a directory (`test -d`), and the `.md` file in it holds `Saved to disk`.
+
+**Teardown:** `rm -rf /tmp/qa-990-rev`; `delete_file(file_id="<doc-id>")`.
+
+**Result (2026-10-11) ✅ PASS — Kit, PR #1000 round 1 (`12bd36a`).** Ran under this job's scratch dir instead of `/tmp`. With the directory absent, call 1 returned `local_path` `<dir>/<doc-id>-r3.md`, `bytes_written` 15; `<dir>` is a directory and the file holds `Saved to disk`.
+
+**Result (2026-10-11) ✅ PASS — Kit, PR #1000 round 2 (`695d0f9`).** Same as round 1: call 1 returned `<dir>/<doc-id>-r3.md`, `bytes_written` 15; `<dir>` is a directory holding `Saved to disk`.
+
+**Result (2026-10-11) ✅ PASS — Kit, PR #1000 round 3 (`290f5bc`).** Ran under this job's scratch dir instead of `/tmp`. Call 1 returned `<dir>/<doc-id>-r3.md`, `bytes_written` 15; `<dir>` is a directory holding `Saved to disk`.
+
+---
+
+### TC-D287: `sync_folder` — a `result_local_path` over an existing file is refused before any transfer (PR #1000 QA round 1, issue #990) ⚠️ local-filesystem
+
+Before the fix, a real sync ran every upload and download, then failed at the final manifest
+write, and the error named `local_path` (`sync_folder`'s other parameter).
+
+**Setup:** `rm -rf /tmp/qa-990-sync && mkdir -p /tmp/qa-990-sync/src && printf 'upload me' > /tmp/qa-990-sync/src/a.txt && printf 'keep me' > /tmp/qa-990-sync/blocker`.
+`create_folder(name="qa-990-sync")`, note the returned ID as `<folder-id>`.
+
+**Tool calls**
+1. `sync_folder(folder_id="<folder-id>", local_path="/tmp/qa-990-sync/src", direction="upload", result_local_path="/tmp/qa-990-sync/blocker/")`
+2. `list_files(folder_id="<folder-id>")`
+3. `sync_folder(folder_id="<folder-id>", local_path="/tmp/qa-990-sync/new/deep/sync", result_local_path="/tmp/qa-990-sync/blocker/")`
+
+**Checks**
+- Call 1 raises "result_local_path '/tmp/qa-990-sync/blocker/' has a non-directory path component
+  at '/tmp/qa-990-sync/blocker'; result_local_path ends in a path separator…". The message names
+  `result_local_path` throughout, never `local_path`.
+- Call 2 returns no files: `a.txt` was not uploaded (a real, non-`dry_run` sync).
+- `/tmp/qa-990-sync/blocker` still holds `keep me`.
+- Call 3 raises the same error, and `/tmp/qa-990-sync/new` doesn't exist: the missing `local_path`
+  isn't created for a refused call (PR #1000 QA round 2).
+
+**Teardown:** `rm -rf /tmp/qa-990-sync`; `delete_file(file_id="<folder-id>")`.
+
+**Result (2026-10-11) ✅ PASS — Kit, PR #1000 round 2 (`695d0f9`).** Ran under this job's scratch dir instead of `/tmp`. Call 1 raised "result_local_path '<dir>/blocker/' has a non-directory path component at '<dir>/blocker'; result_local_path ends in a path separator or '.'…", naming `result_local_path` throughout. Call 2 returned `[]`, and `blocker` still holds `keep me`. Probe outside the case (sent back): the same call with a missing `local_path` of `<dir>/new/deep/sync` raised the same error but had already created `new/deep/sync`.
+
+**Result (2026-10-11) ✅ PASS — Kit, PR #1000 round 3 (`290f5bc`).** Ran under this job's scratch dir instead of `/tmp`. Call 1 raised the `result_local_path` error, call 2 returned `[]`, and call 3 raised the same error with no `new/` directory created. `blocker` still holds `keep me`.
 
 ---
 

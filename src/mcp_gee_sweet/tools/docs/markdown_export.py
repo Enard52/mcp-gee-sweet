@@ -308,8 +308,11 @@ def register(tool):
                 instead of returning it inline. The file holds the raw Markdown
                 text (UTF-8), byte-identical to the inline markdown field,
                 including the comments section when include_comments is True.
-                A directory path writes <doc_id>.md inside it. Bypasses the
-                response-size cap.
+                A directory path writes <doc_id>.md inside it; a path ending in
+                '/' is a directory, created if missing. A file in place of a parent
+                directory, or at a path ending in '/', raises ValueError; an existing
+                file at a plain file path is replaced.
+                Bypasses the response-size cap.
 
         Returns:
             Dictionary with doc_id, title, and markdown (the full Markdown
