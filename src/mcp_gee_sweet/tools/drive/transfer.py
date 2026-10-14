@@ -296,42 +296,6 @@ def _make_local_dir(path: Path, local_path: str) -> None:
         raise _blocked_destination_error(local_path, blocker)
 
 
-def _make_local_dir_tracked(path: Path, local_path: str) -> list[Path]:
-    """_make_local_dir, returning the directories it created, outermost first.
-
-    Pass the list to _remove_created_dirs if the write that needed them fails,
-    so a failed call leaves nothing new on disk (#1012).
-    """
-    missing: list[Path] = []
-    for p in (path, *path.parents):
-        if p.exists() or p.is_symlink():
-            break
-        missing.append(p)
-    missing.reverse()
-    try:
-        _make_local_dir(path, local_path)
-    except BaseException:
-        _remove_created_dirs(missing)
-        raise
-    return missing
-
-
-def _remove_created_dirs(created: list[Path]) -> None:
-    """rmdir the directories _make_local_dir_tracked created, innermost first.
-
-    Best effort, and never recursive: rmdir refuses a directory that isn't
-    empty, so one another call has written into since is kept, along with
-    everything above it.
-    """
-    for p in reversed(created):
-        try:
-            p.rmdir()
-        except FileNotFoundError:
-            continue
-        except OSError:
-            return
-
-
 def _download_media(drive_service, file_id: str, dest: Path, mtime: float | None = None) -> None:
     """Stream a non-Workspace Drive file's content into `dest` via _write_atomically.
 
@@ -2249,6 +2213,12 @@ async def _sync_level(
                     )
                     if not isinstance(content, bytes):
                         content = content.encode("utf-8")
+                # sync_folder creates local_path here, at its first local write,
+                # so a dry_run, an upload-only sync, or a call that fails before
+                # writing leaves nothing on disk (#1012). A subfolder level's
+                # dest_dir already exists, from the subfolder pass of a real run.
+                _make_local_dir(dest_dir, str(dest_dir))
+                if is_workspace:
                     await asyncio.to_thread(
                         _write_atomically, dest_file, lambda fh, c=content: fh.write(c), drive_ts
                     )
@@ -3265,8 +3235,9 @@ def register(tool):
         local_path ending in a path separator (or in '/.' or '/..') is always
         treated as a directory target, and is created (mkdir -p) if it doesn't
         exist yet. Directories are created only once the content is ready to
-        write, and a call that fails removes any it created, so an error leaves
-        nothing new on disk. A local_path that can't be written (a parent is a file, or the
+        write, so a refused call or a failed export leaves nothing new on disk;
+        a non-Workspace download that fails partway keeps the directory it
+        created. A local_path that can't be written (a parent is a file, or the
         destination is a symlink to a missing target) raises ValueError before
         anything is downloaded. A Drive name
         that isn't a single ordinary filename (it contains '/' or '\\', is '.' or
@@ -3349,18 +3320,14 @@ def register(tool):
             if not isinstance(content, bytes):
                 content = content.encode("utf-8")
 
-        # A media download streams straight to disk, so its directory must
-        # exist first; undo the mkdir if the transfer fails. Synchronous, so a
-        # cancellation can't interrupt it.
-        created = _make_local_dir_tracked(target_dir, local_path)
-        try:
-            if is_workspace:
-                await asyncio.to_thread(_write_atomically, dest, lambda fh: fh.write(content))
-            else:
-                await asyncio.to_thread(_download_media, drive_service, file_id, dest)
-        except BaseException:
-            _remove_created_dirs(created)
-            raise
+        # A media download streams straight to disk, so its directory must exist
+        # first, and a failed one keeps it: an rmdir could race another call
+        # writing into the same new directory (PR #1023 QA round 1).
+        _make_local_dir(target_dir, local_path)
+        if is_workspace:
+            await asyncio.to_thread(_write_atomically, dest, lambda fh: fh.write(content))
+        else:
+            await asyncio.to_thread(_download_media, drive_service, file_id, dest)
 
         size = dest.stat().st_size
         logger.debug("Downloaded %s → %s (%d bytes)", file_id, dest, size)
@@ -3405,7 +3372,9 @@ def register(tool):
 
         Args:
             folder_id: The Google Drive folder ID.
-            local_path: Local directory to download files into (created if needed).
+            local_path: Local directory to download files into. Created only when
+                        there's at least one file to download, so a folder whose
+                        every entry is skipped or refused leaves nothing on disk.
             export_format: If provided, Google Workspace files are exported to this
                            format (e.g. 'pdf', 'docx'). See download_file for full list.
                            Without this, Workspace files are skipped.
@@ -3443,8 +3412,6 @@ def register(tool):
             .execute,
             drive_service,
         )
-        # After the listing, so a bad folder_id leaves nothing on disk (#1012).
-        _make_local_dir(dest_dir, local_path)
 
         downloaded: list[str] = []
         skipped: list[str] = []
@@ -3524,6 +3491,12 @@ def register(tool):
                     size=None if is_workspace else fsize,
                 )
             )
+
+        if candidates:
+            # Only once there's something to write, so a bad folder_id or a
+            # folder whose every entry is skipped or refused leaves nothing on
+            # disk (#1012). A download that fails keeps it, as download_file's does.
+            _make_local_dir(dest_dir, local_path)
 
         total = len(candidates)
         # List-box, not a bare int + nonlocal: matches _sync_level's
@@ -3793,8 +3766,10 @@ def register(tool):
 
         Args:
             folder_id: Google Drive folder ID to sync against.
-            local_path: Local directory path to sync against (created if needed,
-                        except under dry_run).
+            local_path: Local directory path to sync against. A missing one plans
+                        as empty, and is created only at the first local write (a
+                        download, or a Drive-only subfolder), so a dry_run or an
+                        upload-only sync never creates it.
             direction: 'bidirectional', 'upload', or 'download'.
             export_format: Required to include Workspace files in the sync. They are
                            exported/compared using this format (e.g. 'pdf', 'docx', 'csv').
@@ -3854,7 +3829,7 @@ def register(tool):
                        directory, created if missing. A file in place of a parent
                        directory, or at a path ending in '/', raises ValueError; an
                        existing file at a plain file path is replaced. Both checks
-                       run before any transfer or local mkdir.
+                       run before any transfer or local write.
             resolve: Clears convert_markdown conflicts one Doc at a time, keeping
                        its file ID (and so its sharing, comments, and links). Maps a
                        name exactly as 'conflicts' reports it ('sub/notes.md' under
@@ -3943,7 +3918,7 @@ def register(tool):
             # Before any transfer: a bad destination would otherwise fail only at the
             # final manifest write, after every upload/download had already run, and
             # the caller would get no record of them (PR #1000 QA round 1). Before
-            # local_path's mkdir too, so a refused call leaves nothing on disk
+            # any local write too, so a refused call leaves nothing on disk
             # (PR #1000 QA round 2).
             validate_local_destination(result_local_path, local_path_param="result_local_path")
             # local_path is also a live input directory this same call scans — unlike
@@ -3965,12 +3940,6 @@ def register(tool):
                 )
 
         async def _run(run_dry: bool, resolve_req: _ResolveRequest | None) -> dict[str, Any]:
-            if not run_dry:
-                # Only a real run writes, so a dry_run (and a resolve call its
-                # check pass refuses) never creates local_path (#1012). A
-                # missing one plans as an empty local side; a blocked one was
-                # refused by validate_local_destination above.
-                _make_local_dir(dest_dir, local_path)
             uploaded: list[str] = []
             downloaded: list[str] = []
             skipped: list[str] = []

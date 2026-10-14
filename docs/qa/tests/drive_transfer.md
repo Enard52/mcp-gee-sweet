@@ -2795,7 +2795,7 @@ Trash `{FOLDER_ID}` and its contents. Remove `/tmp/qa-293/`.
 
 ### TC-D294: `download_file` — a call that fails creates no local directories (issue #1012) ⚠️ local-filesystem
 
-**Background:** `download_file` ran `mkdir -p` on the destination before checking `export_format`, so a Workspace file requested without one raised the expected `ValueError` but left the directories behind. It now validates `export_format` first, fetches a Workspace export before creating anything, and removes the directories it created if the write or a non-Workspace download then fails.
+**Background:** `download_file` ran `mkdir -p` on the destination before checking `export_format`, so a Workspace file requested without one raised the expected `ValueError` but left the directories behind. It now validates `export_format` first, and fetches a Workspace export before creating anything. A non-Workspace download that fails partway keeps the directory it created (no rollback, since an `rmdir` could race another call writing there; PR #1023 QA round 1).
 
 **Setup:** `/tmp/qa-294/` must NOT exist (`rm -rf /tmp/qa-294`). `{DOC_ID}` is a Google Doc.
 
@@ -2857,7 +2857,7 @@ Trash `{FOLDER_ID}` and its contents. Remove `/tmp/qa-293/`.
 
 ### TC-D296: `download_folder` — a folder ID Drive can't find creates no local directory (issue #1012) ⚠️ local-filesystem
 
-**Background:** `download_folder` created `local_path` before listing the Drive folder, so a listing error left it behind, empty. It now creates `local_path` after the listing succeeds.
+**Background:** `download_folder` created `local_path` before listing the Drive folder, so a listing error left it behind, empty. It now creates `local_path` only once the listing has at least one file to download (see TC-D298 for a folder with none).
 
 **Setup:** `/tmp/qa-296/` must NOT exist (`rm -rf /tmp/qa-296`).
 
@@ -2877,3 +2877,47 @@ Trash `{FOLDER_ID}` and its contents. Remove `/tmp/qa-293/`.
 **Result** (2026-10-13, Sky, PR #1023 round 1 at `db72e58`, `mcp-gee-sweet-sky` reconnected after reset, OAuth, Shared Drive): ✅ **PASS**.
 - Call 1 raised `HttpError 404` "File not found", and `/tmp/qa-296` did not exist afterward.
 - Call 3 used TC-D295's scratch folder: `downloaded == ["a.txt"]`, and `/tmp/qa-296/new/` held it.
+
+---
+
+### TC-D297: `sync_folder` — a real run creates `local_path` only at its first local write (issue #1012, PR #1023 QA round 1) ⚠️ local-filesystem
+
+**Background:** a real `sync_folder` run used to create `local_path` before its first Drive call, so a bad `folder_id` or an upload-only sync, neither of which writes anything locally, left it behind, empty. Now it's created at the first file download or Drive-only subfolder.
+
+**Setup:** `/tmp/qa-297/` must NOT exist (`rm -rf /tmp/qa-297`). `{SCRATCH_FOLDER_ID}` is a scratch Drive folder holding one uploaded non-Workspace file `a.txt` (as in TC-D295's setup) and nothing else.
+
+**Tool calls**
+1. `sync_folder(folder_id="invalidfolderid123xyz", local_path="/tmp/qa-297/new/", direction="download")`
+2. `sync_folder(folder_id="{SCRATCH_FOLDER_ID}", local_path="/tmp/qa-297/new/", direction="upload")`
+3. After each of calls 1–2: `ls /tmp/qa-297`
+4. `sync_folder(folder_id="{SCRATCH_FOLDER_ID}", local_path="/tmp/qa-297/new/", direction="download")`
+
+**Checks**
+- Call 1 raises Drive's `HttpError 404` "File not found".
+- Call 2: `uploaded == []`, `downloaded == []`, `failed == []`. `list_files(folder_id="{SCRATCH_FOLDER_ID}")` still lists only `a.txt`.
+- Step 3: after both calls, `/tmp/qa-297` does not exist.
+- Call 4: `downloaded == ["a.txt"]`, and `/tmp/qa-297/new/a.txt` exists.
+
+**Teardown**
+`rm -rf /tmp/qa-297`. Trash `{SCRATCH_FOLDER_ID}`.
+
+---
+
+### TC-D298: `download_folder` — a folder with nothing to download creates no local directory (issue #1012, PR #1023 QA round 1) ⚠️ local-filesystem
+
+**Background:** `download_folder` used to create `local_path` even when every entry was skipped (Workspace files with no `export_format`, subfolders), leaving it empty. It now creates it only once it has at least one file to download.
+
+**Setup:** `/tmp/qa-298/` must NOT exist (`rm -rf /tmp/qa-298`). `{FOLDER_ID}` holds only Workspace files and subfolders (true of `TEST_FOLDER_ID`; see TC-D295's result).
+
+**Tool calls**
+1. `download_folder(folder_id="{FOLDER_ID}", local_path="/tmp/qa-298/new/")` (no `export_format`)
+2. `ls /tmp/qa-298`
+3. `download_folder(folder_id="{FOLDER_ID}", local_path="/tmp/qa-298/new/", export_format="pdf")`
+
+**Checks**
+- Call 1: `downloaded == []`, and every entry is in `skipped`.
+- Step 2: `/tmp/qa-298` does not exist.
+- Call 3: `downloaded` lists each Workspace file as `<name>.pdf`, and `/tmp/qa-298/new/` holds them.
+
+**Teardown**
+`rm -rf /tmp/qa-298`.
