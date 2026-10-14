@@ -42,7 +42,31 @@ The incidents behind the rules in this file are in [`docs/decisions/role-file-hi
 
 **A role-routed label (`joy`/`bob`/`aziz`) and a version label are not mutually exclusive — don't let one imply the absence of the other.** They answer different questions: who scopes/does the work, versus whether a release actually depends on it landing. Apply the same release-gate test used for every other ticket: does the *next* targeted release actually need this to ship cleanly? If yes — e.g. a release-process fix Bob owns that the next `/release` run would visibly break without — it gets the version label alongside the person label. If the work is genuinely open-ended with no release tie, it stays version-less regardless of who it's routed to (#602). One past role-routed ticket correctly staying version-less is not a rule that they all do.
 
-**A `from-review` ticket gets the in-flight release's version label only if it meets one of two conditions.** Either (a) its defect is new in this release, meaning a commit after the last stable tag introduced it, or (b) a failure was actually observed: wrong output, a crash, or a data exposure. A concrete path to one that nobody has observed isn't (b). Name which condition applies on the ticket's `docs/roadmap.md` line. Every other `from-review` ticket gets the next version's label, not the in-flight one's. Don't label a review ticket for the in-flight release just because the PR that produced it ships there (#987 and #994 were, and had to be moved to v0.9.3; #995).
+## Version labels: impact × reach
+
+**A defect or hygiene ticket's version label comes from its impact × reach cell, however it reaches triage:** backlog triage, a `/retro` ticket, a Dev's follow-up (`dev.md` step 6), or a review finding (`qa.md` step 3). Features, docs, test/QA, and process tickets aren't placed by this rubric: features follow the roadmap's version plan, and a role-routed or process ticket uses the release-gate test under "Ticket triage and labeling". Thresholds approved by the maintainer on 2026-10-13 (#1024); background in `docs/decisions/decision-impact-reach-triage.md`.
+
+Impact, the worst that fits:
+- **severe**: data loss, data exposure, a hang, or the tool unusable.
+- **wrong**: the call succeeds and its output is wrong or misleading, with nothing telling the caller.
+- **loud**: the call fails visibly, or its error message is wrong or unhelpful.
+- **hygiene**: no reachable wrong behavior: a dedup, a refactor, a guard on a path nothing reaches.
+
+Reach:
+- **common**: the default configuration and a typical call.
+- **narrow**: a supported but non-default choice: a specific parameter combination, input type, or deployment shape (service account, Shared Drive, SSE).
+- **rare**: contrived input, or a path nobody has shown is reachable.
+
+Label by cell:
+- **In-flight release:** `severe` at any reach; `wrong/common`; anything that breaks install, auth, or first run, whatever its cell; a regression, meaning a commit after the last stable tag introduced it, whatever its cell.
+- **In-flight only if observed or under about an hour of work, else next version:** `wrong/narrow`. Observed means a failure was actually seen (wrong output, a crash, a data exposure); a concrete path to one that nobody has seen isn't. The hour covers the whole fix, tests and QA case included.
+- **Next version, grouped by area:** `wrong/rare`, `loud/narrow`, `loud/rare`. Put it on the roadmap next to that version's other tickets for the same module, or fold it into an open bundle ticket for that module.
+- **No version label of its own:** `hygiene`. Fold it into a ticket that already touches the same file, or into a timeboxed bundle that no release waits on, and comment on the hygiene ticket naming where it went. That is its triage disposition (see the Retro entry "Triage means every item gets a real disposition").
+- **`loud/common` isn't placed by the approved rubric.** Unless it breaks install, auth, or first run, ask the user which version it goes in.
+
+The ticket's `docs/roadmap.md` line names the cell and, for an in-flight label, which rule put it there: `severe/narrow`, `wrong/narrow, observed`, `loud/rare, regression since v0.9.1`. Don't label a review ticket for the in-flight release just because the PR that produced it ships there (#987 and #994 were, and had to be moved to v0.9.3; #995).
+
+**Chain stop rule.** A follow-up chain is a root defect plus the tickets that each successive fix's review or Dev filed (#690 → #724 → #836 → #874 → #887 → #990 → #1012). To find a ticket's place in one, follow the PR its body says it came from back to the ticket that PR closed, and repeat until a ticket wasn't found in a PR's review. The family is the functions the root's fix changed, plus sibling functions sharing the mechanism it fixed (in #690's chain, every tool that creates local directories for a download). Once a root has two follow-ups in its family, every later ticket in that family gets the next version's label, whatever its cell, unless it's `severe` or observed; those two exceptions go through the rubric as usual. If the chain keeps going, propose to the user that the area is done: its residual edges get a `docs/known-limitations.md` entry (as #692 did) and the remaining tickets close into it. Only the user closes them.
 
 ## Community intake
 
