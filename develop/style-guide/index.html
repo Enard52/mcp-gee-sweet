@@ -1371,14 +1371,14 @@
 <p><strong>Going forward:</strong> a PR that splits a <code>tools/</code> module splits its test file in the same PR — not as a follow-up, and not left for whoever notices the mismatch later.</p>
 <hr />
 <h2 id="linting-ruff">Linting — Ruff<a class="headerlink" href="#linting-ruff" title="Permanent link">&para;</a></h2>
-<p><strong>Current config</strong> (<code>pyproject.toml</code>): <code>line-length = 100</code>, <code>target-version = "py310"</code>, and an empty <code>[tool.ruff.lint]</code> — meaning only Ruff's bare defaults are active (<code>E</code>/<code>F</code>/<code>I</code>/<code>W</code>: pycodestyle errors, pyflakes, import sorting, pycodestyle warnings; confirmed via <code>ruff check --show-settings</code>, not assumed). The repo currently passes <code>ruff check .</code> cleanly under this set.</p>
-<p>Expanding the rule set is tracked, not decided here:
-- #377 — adopt <code>UP</code>/<code>B</code>/<code>C4</code>/<code>SIM</code>/<code>RUF</code> (low-churn, recommended)
+<p><strong>Current config</strong> lives in <code>pyproject.toml</code>'s <code>[tool.ruff]</code> and <code>[tool.ruff.lint]</code> tables; <code>uv run ruff check --show-settings</code> prints the resolved rule set. It isn't copied here, since a copy drifts out of date.</p>
+<p>The Ruff version is the project's own locked dev dependency (<code>uv.lock</code>). CI and the pre-commit hooks both run it through <code>uv run --frozen ruff</code>, so pre-commit applies the same Ruff version and config as CI (#974). Pre-commit checks staged Python files; CI checks the whole tree. A commit that changes <code>pyproject.toml</code> or <code>uv.lock</code> also runs a whole-tree <code>ruff check .</code> and <code>ruff format --check .</code>, since a config or version change can fail files the commit doesn't touch.</p>
+<p>Expanding the rule set further is tracked, not decided here:
 - #378 — <code>ASYNC</code> (needs a manual per-call-site look, not a blanket enable)
 - #379 — <code>ANN</code> (needs a phased adoption plan, not a flag flip)</p>
 <hr />
 <h2 id="formatting">Formatting<a class="headerlink" href="#formatting" title="Permanent link">&para;</a></h2>
-<p><code>ruff-format</code> runs via pre-commit (<code>.pre-commit-config.yaml</code>) alongside <code>ruff --fix</code>. Nothing further to configure here — formatting is already automatic and enforced at commit time.</p>
+<p><code>ruff format</code> runs via pre-commit (<code>.pre-commit-config.yaml</code>) alongside <code>ruff check --fix</code>, both as <code>uv run --frozen</code> hooks on the locked Ruff version. Nothing further to configure here — formatting is already automatic and enforced at commit time.</p>
 <hr />
 <h2 id="playwright">Playwright<a class="headerlink" href="#playwright" title="Permanent link">&para;</a></h2>
 <p>The operational protocol (lock path, acquire/release, staleness recovery for coordinating a single browser tab across parallel QA shards) already lives in <a href="../qa/run/#coordinating-playwright-across-parallel-shards"><code>docs/qa/run.md</code></a> — that's QA-execution detail, not code style, so it's linked here rather than duplicated.</p>
