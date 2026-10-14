@@ -2790,3 +2790,75 @@ Trash `{FOLDER_ID}` and its contents. Remove `/tmp/qa-293/`.
 - Calls 1–5 each returned only an `error`, with the expected text: call 1 named `'s.md': not a conflict (planned action: skip)` and contained "Nothing was changed". Call 2 named only `'sub/t.md'`, with no mention of `r.md`. Call 3 named `'sub/t.md': not found in this sync (a subfolder path needs recursive=True)`. Call 4 contained "direction='download' never does". Call 5 matched exactly.
 - Call 6: `list_files` showed only `r.md`, `s.md`, and `sub`, with no `new.txt`. A scratch-script listing of the whole tree after calls 1–5 (properties plus latest revision ID for `r.md`, `s.md`, and `sub/t.md`) was identical to the setup snapshot (diffed), so nothing changed at any level. The dry run listed `r.md` as `conflict`, `new.txt` as `upload`, and `s.md` and `sub/t.md` as `skip`.
 - Side probe, not part of the checks: after a Drive edit to `sub/t.md`, the real call `resolve={"r.md": "keep_local", "sub/t.md": "keep_drive"}` (with `recursive=True`) returned `resolved == ["r.md", "sub/t.md"]` and `uploaded == ["new.txt", "r.md"]`. `sub/t.md` then carried `geeSweetImportRevision: "2"` (its latest), and `r.md` carried `geeSweetBaselineRevision: "2"` at revision `3`. A valid subfolder key resolves.
+
+---
+
+### TC-D294: `download_file` — a call that fails creates no local directories (issue #1012) ⚠️ local-filesystem
+
+**Background:** `download_file` ran `mkdir -p` on the destination before checking `export_format`, so a Workspace file requested without one raised the expected `ValueError` but left the directories behind. It now validates `export_format` first, fetches a Workspace export before creating anything, and removes the directories it created if the write or a non-Workspace download then fails.
+
+**Setup:** `/tmp/qa-294/` must NOT exist (`rm -rf /tmp/qa-294`). `{DOC_ID}` is a Google Doc.
+
+**Tool calls**
+1. `download_file(file_id="{DOC_ID}", local_path="/tmp/qa-294/new/dir/")` (no `export_format`)
+2. `download_file(file_id="{DOC_ID}", local_path="/tmp/qa-294/new/out.pdf")` (no `export_format`)
+3. `download_file(file_id="{DOC_ID}", local_path="/tmp/qa-294/new/dir/", export_format="bogus")`
+4. `download_file(file_id="{DOC_ID}", local_path="/tmp/qa-294/new/dir/", export_format="xlsx")` (a Sheets format, which Drive refuses for a Doc)
+5. After each of calls 1–4: `ls /tmp/qa-294`
+6. `download_file(file_id="{DOC_ID}", local_path="/tmp/qa-294/new/dir/", export_format="pdf")`
+
+**Checks**
+- Calls 1 and 2 raise `ValueError` "export_format is required for Google Workspace file …".
+- Call 3 raises `ValueError` "Unknown export_format 'bogus'. …".
+- Call 4 raises Drive's `HttpError 400` "The requested conversion is not supported."
+- Step 5: after every one of calls 1–4, `/tmp/qa-294` does not exist.
+- Call 6 succeeds: `/tmp/qa-294/new/dir/` is a directory holding `<doc name>.pdf`, and the returned `local_path` is that file.
+
+**Teardown**
+`rm -rf /tmp/qa-294`.
+
+---
+
+### TC-D295: `sync_folder(dry_run=True)` — a preview against a `local_path` that doesn't exist creates nothing (issue #1012) ⚠️ local-filesystem
+
+**Background:** `sync_folder` created `local_path` before checking `dry_run`, so a preview against a new directory left it behind, empty. Now only a real run creates it. A dry run plans a missing `local_path` as an empty local side. A real call that `resolve` refuses (its check pass is a dry run) also creates nothing.
+
+**Setup:** `/tmp/qa-295/` must NOT exist (`rm -rf /tmp/qa-295`). `{FOLDER_ID}` holds at least one non-Workspace file.
+
+**Tool calls**
+1. `sync_folder(folder_id="{FOLDER_ID}", local_path="/tmp/qa-295/new/sync/", direction="download", recursive=True, dry_run=True)`
+2. `ls /tmp/qa-295`
+3. `sync_folder(folder_id="{FOLDER_ID}", local_path="/tmp/qa-295/new/sync/", convert_markdown=True, resolve={"nope.md": "keep_drive"})` (no `dry_run`)
+4. `ls /tmp/qa-295`
+5. `sync_folder(folder_id="{FOLDER_ID}", local_path="/tmp/qa-295/new/sync/", direction="download")`
+
+**Checks**
+- Call 1: `dry_run` is `true`, `failed == []`, and `actions` lists every non-Workspace file in `{FOLDER_ID}` as `download`.
+- Step 2: `/tmp/qa-295` does not exist.
+- Call 3: the response is only `{"error": ...}`, containing "'nope.md': not found in this sync" and "Nothing was changed".
+- Step 4: `/tmp/qa-295` still does not exist.
+- Call 5: `/tmp/qa-295/new/sync/` is a directory, and `downloaded` names the same files call 1 listed as `download`.
+
+**Teardown**
+`rm -rf /tmp/qa-295`.
+
+---
+
+### TC-D296: `download_folder` — a folder ID Drive can't find creates no local directory (issue #1012) ⚠️ local-filesystem
+
+**Background:** `download_folder` created `local_path` before listing the Drive folder, so a listing error left it behind, empty. It now creates `local_path` after the listing succeeds.
+
+**Setup:** `/tmp/qa-296/` must NOT exist (`rm -rf /tmp/qa-296`).
+
+**Tool calls**
+1. `download_folder(folder_id="invalidfolderid123xyz", local_path="/tmp/qa-296/new/")`
+2. `ls /tmp/qa-296`
+3. `download_folder(folder_id="{FOLDER_ID}", local_path="/tmp/qa-296/new/")`
+
+**Checks**
+- Call 1 raises an error from Drive (`HttpError 404`, "File not found").
+- Step 2: `/tmp/qa-296` does not exist.
+- Call 3: `/tmp/qa-296/new/` is a directory holding the folder's non-Workspace files, as listed in `downloaded`.
+
+**Teardown**
+`rm -rf /tmp/qa-296`.
