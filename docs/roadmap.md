@@ -290,7 +290,7 @@ Same shape as v0.8.1 — stabilize on defects that surfaced since v0.9.0 shipped
 - [ ] Live verification for community PR #940 (literal fences in code-block exports) ([#952](https://github.com/khuisman/mcp-gee-sweet/issues/952))
 
 **Infrastructure**
-- [ ] pre-commit's `ruff` hook pins v0.11.9 while CI runs the project's locked 0.16.x, so a commit can pass a lint CI rejects. Seen live on PR #1000 (RUF043, three red CI runs). Moved out of the #897 bundle 2026-10-12 — lane B, after #989 ([#974](https://github.com/khuisman/mcp-gee-sweet/issues/974))
+- [x] pre-commit's `ruff` hook pins v0.11.9 while CI runs the project's locked 0.16.x, so a commit can pass a lint CI rejects. Seen live on PR #1000 (RUF043, three red CI runs). Moved out of the #897 bundle 2026-10-12 — lane B, after #989 ([#974](https://github.com/khuisman/mcp-gee-sweet/issues/974)) (PR #1022)
 - [x] `/release` + `prep-for-pr` backstop checks for README render breakage on PyPI — the human-facing companion to #708's CI guard, routed to Bob ([#709](https://github.com/khuisman/mcp-gee-sweet/issues/709)) (PR #967)
 - [x] `supportsAllDrives=True` is hand-inlined at ~58 Drive call sites — retrofitted twice now (#687 plus its own original miss); wants a shared wrapper or lint guard so a new call site can't omit it ([#696](https://github.com/khuisman/mcp-gee-sweet/issues/696)) (PR #784)
 - [x] Extract a shared `_BaseCache` helper for the `rows_fetched` sufficiency check + epoch-guarded store — #688's fix copy-pasted the pattern into `DriveFolderCache` instead, and the epoch guard is still missing there ([#698](https://github.com/khuisman/mcp-gee-sweet/issues/698)) (PR #788)
