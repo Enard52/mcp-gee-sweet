@@ -2817,13 +2817,18 @@ Trash `{FOLDER_ID}` and its contents. Remove `/tmp/qa-293/`.
 **Teardown**
 `rm -rf /tmp/qa-294`.
 
+**Result** (2026-10-13, Sky, PR #1023 round 1 at `db72e58`, `mcp-gee-sweet-sky` reconnected after reset, OAuth, Shared Drive): ✅ **PASS**.
+- Calls 1 and 2 raised `export_format is required for Google Workspace file 'mcp-gee-sweet-qa-fixtures-doc'`. Call 3 raised `Unknown export_format 'bogus'`. Call 4 raised `HttpError 400` "The requested conversion is not supported."
+- `/tmp/qa-294` did not exist after calls 1–4. The four calls ran in parallel, so it was checked once after all four rather than after each one.
+- Call 6 wrote `/tmp/qa-294/new/dir/mcp-gee-sweet-qa-fixtures-doc.pdf` (20152 bytes).
+
 ---
 
 ### TC-D295: `sync_folder(dry_run=True)` — a preview against a `local_path` that doesn't exist creates nothing (issue #1012) ⚠️ local-filesystem
 
 **Background:** `sync_folder` created `local_path` before checking `dry_run`, so a preview against a new directory left it behind, empty. Now only a real run creates it. A dry run plans a missing `local_path` as an empty local side. A real call that `resolve` refuses (its check pass is a dry run) also creates nothing.
 
-**Setup:** `/tmp/qa-295/` must NOT exist (`rm -rf /tmp/qa-295`). `{FOLDER_ID}` holds at least one non-Workspace file.
+**Setup:** `/tmp/qa-295/` must NOT exist (`rm -rf /tmp/qa-295`). `{FOLDER_ID}` holds at least one non-Workspace file. `TEST_FOLDER_ID` holds only Workspace files, so create a scratch subfolder in it (`create_folder`) and put a text file in it (`upload_file(name="a.txt", content="hello", folder_id=...)`). TC-D296 call 3 can reuse that folder.
 
 **Tool calls**
 1. `sync_folder(folder_id="{FOLDER_ID}", local_path="/tmp/qa-295/new/sync/", direction="download", recursive=True, dry_run=True)`
@@ -2840,7 +2845,13 @@ Trash `{FOLDER_ID}` and its contents. Remove `/tmp/qa-293/`.
 - Call 5: `/tmp/qa-295/new/sync/` is a directory, and `downloaded` names the same files call 1 listed as `download`.
 
 **Teardown**
-`rm -rf /tmp/qa-295`.
+`rm -rf /tmp/qa-295`. Trash the scratch folder (`delete_file`) once TC-D296 is done with it.
+
+**Result** (2026-10-13, Sky, PR #1023 round 1 at `db72e58`, `mcp-gee-sweet-sky` reconnected after reset, OAuth, Shared Drive): ✅ **PASS**.
+- First run against `TEST_FOLDER_ID` itself: call 1 returned `actions: []` because that folder holds only Workspace files (Setup now says so). Re-ran against a scratch subfolder holding one uploaded `a.txt`: call 1 listed `a.txt` as `download` ("drive only"), with `failed == []`.
+- `/tmp/qa-295` did not exist after call 1 or after call 3.
+- Call 3 returned only an `error` containing "'nope.md': not found in this sync" and "Nothing was changed".
+- Call 5: `downloaded == ["a.txt"]`, and `/tmp/qa-295/new/sync/a.txt` exists.
 
 ---
 
@@ -2862,3 +2873,7 @@ Trash `{FOLDER_ID}` and its contents. Remove `/tmp/qa-293/`.
 
 **Teardown**
 `rm -rf /tmp/qa-296`.
+
+**Result** (2026-10-13, Sky, PR #1023 round 1 at `db72e58`, `mcp-gee-sweet-sky` reconnected after reset, OAuth, Shared Drive): ✅ **PASS**.
+- Call 1 raised `HttpError 404` "File not found", and `/tmp/qa-296` did not exist afterward.
+- Call 3 used TC-D295's scratch folder: `downloaded == ["a.txt"]`, and `/tmp/qa-296/new/` held it.
