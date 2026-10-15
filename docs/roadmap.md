@@ -287,7 +287,7 @@ Same shape as v0.8.1 — stabilize on defects that surfaced since v0.9.0 shipped
 **Testing** _(triaged out of `backlog` 2026-09-11)_
 - [x] **Bundle:** test-suite tightening, one PR closing [#392](https://github.com/khuisman/mcp-gee-sweet/issues/392), [#526](https://github.com/khuisman/mcp-gee-sweet/issues/526), [#551](https://github.com/khuisman/mcp-gee-sweet/issues/551), [#561](https://github.com/khuisman/mcp-gee-sweet/issues/561), [#574](https://github.com/khuisman/mcp-gee-sweet/issues/574) — lane B (PR #924) ([#891](https://github.com/khuisman/mcp-gee-sweet/issues/891))
 - [x] Live verification for PR #922 (reject unbounded A1 ranges); coverage in PR #929 (PR #929) ([#927](https://github.com/khuisman/mcp-gee-sweet/issues/927))
-- [ ] Live verification for community PR #940 (literal fences in code-block exports) ([#952](https://github.com/khuisman/mcp-gee-sweet/issues/952))
+- [x] Live verification for community PR #940 (literal fences in code-block exports) ([#952](https://github.com/khuisman/mcp-gee-sweet/issues/952)) (PR #1027)
 
 **Infrastructure**
 - [x] pre-commit's `ruff` hook pins v0.11.9 while CI runs the project's locked 0.16.x, so a commit can pass a lint CI rejects. Seen live on PR #1000 (RUF043, three red CI runs). Moved out of the #897 bundle 2026-10-12 — lane B, after #989 ([#974](https://github.com/khuisman/mcp-gee-sweet/issues/974)) (PR #1022)
