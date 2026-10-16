@@ -4242,6 +4242,12 @@ All files from both probes and the three steps, and the doc, were trashed.
 
 **Result (2026-10-04) ✅ PASS — Kit, PR #903 round 2 (`4e392c3`).** All six steps ran from the kit worktree with its OAuth token, on a fresh scratch doc in `{FOLDER_ID}`. Each step printed `cancelled at '<point>'; the tool returned nothing` and the WARNING `Doc edit for {DOC_ID} failed or was cancelled after its images were resolved; files created by this call: <one file ID>; pre-existing files: none; still link-shared by this call: ...`. That last field listed `{KEPT_FILE_ID}` for step 4 and was `none` for every other step. Steps 2 (`share-fail`, the orphan) and 6 (`revoke`), which logged nothing in round 1's probe, now log. `list_permissions` showed no `anyone` grant on `{SHARE_FILE_ID}`, `{ORPHAN_FILE_ID}`, `{EDIT_FILE_ID}`, `{INFLIGHT_FILE_ID}`, or `{REVOKE_FILE_ID}`, and showed `anyoneWithLink`/`reader` on `{KEPT_FILE_ID}`. After `refresh_cache`, `get_doc_as_markdown` read `Before`, `IMGMARKER883`, an image, an image, `After`. So steps 1–4 left `IMGMARKER883` untouched, step 6's edit landed before its cancel, and step 5's in-flight edit also landed (an image replaced `INFLIGHT883`). All six files and the doc were trashed.
 
+**Result (2026-10-14) ✅ PASS — Kit, PR #1029 round 1 (`089f6ee`).** Re-run on the shared `ImageShareLifecycle`. All six steps ran from the kit worktree with its OAuth token, on a fresh scratch doc in a scratch folder on the QA Shared Drive. Each printed `cancelled at '<point>'; the tool returned nothing` and the expected WARNING, whose `still link-shared by this call` listed `{KEPT_FILE_ID}` for step 4 and was `none` otherwise. `list_permissions` showed no `anyone` grant on the five revoked files and `anyoneWithLink`/`reader` on `{KEPT_FILE_ID}`. `get_doc_as_markdown` read `Before`, `IMGMARKER883`, an image, an image, `After`. New with #907: step 5 printed `(edit landed: no)` from the cancel path, then the lifecycle's "finished afterward" DEBUG line and a later `(edit landed: yes)`. Script note: steps 3–4 print `batchUpdates sent: 1; landed: 0`, but the `edit` gate cancels before the request is sent (`sent` is counted before the hold; sent back in the round 1 PR comment). Cleanup done.
+
+**Result (2026-10-14) ✅ PASS (partial re-run) — Kit, PR #1029 round 2 (`fd591d9`).** Re-verified the script-counter fix only: step 3 (`edit`) on a fresh scratch doc printed the cancel line, the WARNING (`still link-shared by this call: none`), and `batchUpdates sent: 0; landed: 0` (round 1 printed `sent: 1`). `IMGMARKER883` was still in the doc, and the file had no `anyone` grant. Cleanup done.
+
+**Result (2026-10-15) ✅ PASS — Kit, PR #1029 round 4 (`d748932`).** Re-run after the `develop` merge (#1023, #1034). All six steps ran from the kit worktree with its OAuth token, on a fresh scratch doc in a scratch folder on the QA Shared Drive. Each printed `cancelled at '<point>'; the tool returned nothing` and the expected WARNING, whose `still link-shared by this call` listed `{KEPT_FILE_ID}` for step 4 and was `none` otherwise. Steps 1–4 printed `batchUpdates sent: 0; landed: 0`. Step 5 printed `(edit landed: no)`, the lifecycle's "finished afterward" DEBUG line, then `(edit landed: yes)`. `list_permissions` showed no `anyone` grant on the five revoked files and `anyoneWithLink`/`reader` on `{KEPT_FILE_ID}`. After `refresh_cache`, `get_doc_as_markdown` read `Before`, `IMGMARKER883`, an image, an image, `After`. Cleanup done.
+
 ## Unreadable source file returns an error — `create_doc_from_file` / `update_doc_from_file` (PR #961)
 
 Both tools read the local file through the shared `_read_doc_source_file` helper. Before PR #961's round 2, a path that existed but wasn't a readable UTF-8 regular file raised out of the tool (`[Errno 21] Is a directory`, `'utf-8' codec can't decode byte 0xe9 ...`) instead of returning `{"error": ...}`.
@@ -4374,7 +4380,8 @@ from mcp_gee_sweet import auth
 from mcp_gee_sweet.tools.docs import content as c
 creds = auth._oauth_creds()
 lc = SimpleNamespace(docs_service=build('docs', 'v1', credentials=creds),
-    drive_service=build('drive', 'v3', credentials=creds), doc_cache=MagicMock(), folder_id=None)
+    drive_service=build('drive', 'v3', credentials=creds), doc_cache=MagicMock(),
+    drive_folder_cache=MagicMock(), folder_id=None)
 with patch.object(c, 'fill_tables', side_effect=RuntimeError('injected failure')):
     print(asyncio.run(c._replace_doc_content(lc, '{DOC_ID}', '<p>TC-DOC219 failed write</p>', 'html',
         autolink_urls=True, revoke_sharing=True, auto_downscale=False)))
@@ -4397,7 +4404,8 @@ from mcp_gee_sweet import auth
 from mcp_gee_sweet.tools.docs import content as c
 creds = auth._oauth_creds()
 lc = SimpleNamespace(docs_service=build('docs', 'v1', credentials=creds),
-    drive_service=build('drive', 'v3', credentials=creds), doc_cache=MagicMock(), folder_id=None)
+    drive_service=build('drive', 'v3', credentials=creds), doc_cache=MagicMock(),
+    drive_folder_cache=MagicMock(), folder_id=None)
 real = c.execute_in_thread
 async def after_commit(fn, service):
     result = await real(fn, service)
@@ -4445,7 +4453,8 @@ from mcp_gee_sweet.tools.docs import content as c
 oauth, sa = auth._oauth_creds(), auth._service_account_creds()
 od, odocs = build('drive', 'v3', credentials=oauth), build('docs', 'v1', credentials=oauth)
 lc = SimpleNamespace(docs_service=build('docs', 'v1', credentials=sa),
-    drive_service=build('drive', 'v3', credentials=sa), doc_cache=MagicMock(), folder_id=None)
+    drive_service=build('drive', 'v3', credentials=sa), doc_cache=MagicMock(),
+    drive_folder_cache=MagicMock(), folder_id=None)
 def text(d):
     b = odocs.documents().get(documentId=d).execute()['body']['content']
     return ''.join(r.get('textRun', {}).get('content', '') for e in b for r in e.get('paragraph', {}).get('elements', [])).strip()
@@ -4480,3 +4489,75 @@ finally:
 **Result (2026-10-14) ✅ PASS — Sky, PR #1034 round 1 (`454001d`).** Ran the script as written from this slot's checkout, with this slot's OAuth token and the shared service-account key passed by env var. Line `A` had `web_link` and the expected `warning`, with doc text `'TC-DOC224 after'`. Line `B` had the expected "cleared first and couldn't be backed up (this account can't add a file to the document's folder)" error and no `backupId`. Line `C` listed only `TC-DOC224 doc`. Before each of `A` and `B`, the log showed googleapiclient's `403 … "insufficientFilePermissions"` and then `Replacing doc … without a backup: this account can't add a file to the document's folder`. `cleanup done` was printed. Extra probe: the service account was given writer access on both the doc and a My Drive folder, and the copy returned `storageQuotaExceeded`, as the design doc says. After the owner set `downloadRestrictions.itemDownloadRestriction.restrictedForWriters`, the same copy returned 403 `cannotCopyFile` (with or without `parents`). That reason isn't in `_no_backup_reason`, so such a writer is still refused.
 
 **Result (2026-10-14) ✅ PASS — Sky, PR #1034 round 2 (`ca210a4`).** Re-ran the script as written, and every check held, with the same `A`/`B`/`C` output and log lines as round 1. Extra probe for the round-1 fix: the same fixture, with `execute_in_thread` patched so that only the `webViewLink` lookup raises `ConnectionError`. The replace raised `RuntimeError` "The document's previous content was replaced without a backup copy (this account can't add a file to the document's folder). The new content was written, but looking up the document's link failed: injected lookup failure", with the `ConnectionError` as `__cause__`. The doc read `'TC-DOC224 lookup after'`, and the folder held no backup copy. `numChildrenInNonRootLimitExceeded` can't be produced live (a 500k-item folder), so it's unit-tested only. Cleanup done.
+
+**Result (2026-10-14) ✅ PASS — Kit, PR #1029 round 4 (`d748932`).** Re-ran after `develop` (#1034) was merged into PR #1029, whose `ImageShareLifecycle` now runs inside `_replace_doc_content`. The script ran as written (its `\"` escapes undone for a file) from the kit checkout, with this slot's OAuth token and service-account key passed by env var. Lines `A`, `B` and `C`, both `Replacing doc … without a backup` log lines (each after a 403 `insufficientFilePermissions`), and `cleanup done` all matched the checks.
+
+## Image-share lifecycle: cancellation and cache follow-ups (#909)
+
+`_apply_doc_content` (behind `create_doc`, `create_doc_from_file`, `write_doc_content`, `update_doc_from_file`) and `insert_local_images` now share one temporary-image-share lifecycle, `images.ImageShareLifecycle` (#908). Before this, `_apply_doc_content` sent its content `batchUpdate` even when the call was cancelled during the shielded image gather (#904), and logged nothing when a cancellation arrived during its success-path revoke (#908). Both tools' cancel paths invalidated the doc cache before an in-flight edit landed, or not at all (#907). And `write_doc_content` and a resized `drive:` copy never marked the folder they uploaded into as dirty (#666). TC-DOC203 covers `insert_local_images` on the same lifecycle and should be re-run alongside these.
+
+### TC-DOC222: A cancelled `write_doc_content` never sends its edit after a cancel during the share, logs a cancel during the revoke, and re-invalidates the cache once an in-flight edit lands (#904, #907, #908) ⚠️ requires-oauth ⚠️ destructive ⚠️ local-filesystem
+
+**Background:** Same mechanism as TC-DOC203: `scripts/qa_cancel_insert_local_images.py` runs the checkout's own tool against the real APIs and cancels it at one point. `--tool write_doc_content` routes the call through `_replace_doc_content`/`_apply_doc_content` (its MARKER argument is ignored; `-` below). The script prints every doc-cache invalidation as `doc cache marked dirty for <id> (edit landed: yes|no)`, then waits for an in-flight edit to finish. Run it from the checkout under test with that checkout's OAuth token (`TOKEN_PATH`). It prints the tool's WARNINGs to stderr. On an empty doc `write_doc_content` sends no clear and makes no backup copy, so its first `batchUpdate` is the content one.
+
+**Setup:**
+1. `create_doc(title="TC-DOC222", folder_id={FOLDER_ID})` with no content. Record `docId` as `{DOC_ID}`.
+2. `create_doc(title="TC-DOC222 inflight", folder_id={FOLDER_ID})` with no content. Record `docId` as `{INFLIGHT_DOC_ID}`.
+3. `create_doc(title="TC-DOC222 markers", content="Before\n\nINFLIGHT909\n\nAfter", content_format="markdown", folder_id={FOLDER_ID})`. Record `docId` as `{MARKER_DOC_ID}`.
+
+**Prompt**
+> (none — script-driven; the steps below are shell commands plus tool calls)
+
+**Steps** (`<pixel>` is `<repo-root>/docs/qa/fixtures/qa-fixture-pixel.png`)
+1. `uv run python scripts/qa_cancel_insert_local_images.py {DOC_ID} {FOLDER_ID} <pixel> - share --tool write_doc_content`. Record the file ID from the WARNING as `{SHARE_FILE_ID}`.
+2. The same command with `revoke` in place of `share`. Record the WARNING's file ID as `{REVOKE_FILE_ID}`.
+3. `uv run python scripts/qa_cancel_insert_local_images.py {INFLIGHT_DOC_ID} {FOLDER_ID} <pixel> - inflight --tool write_doc_content`. Record the WARNING's file ID as `{INFLIGHT_FILE_ID}`.
+4. `uv run python scripts/qa_cancel_insert_local_images.py {MARKER_DOC_ID} {FOLDER_ID} <pixel> INFLIGHT909 inflight` (default tool, `insert_local_images`). Record the WARNING's file ID as `{ILI_FILE_ID}`.
+5. Step 1's command again, with `inflight` in place of `share`. `{DOC_ID}` has content since step 2, so this cancels during the *clear* `batchUpdate`, before any image work. Record the backup copy's ID from its WARNING as `{BACKUP_ID}`.
+
+**Checks**
+- Steps 1–4 each print `cancelled at '<point>'; the tool returned nothing` and a WARNING `Doc edit for <doc> failed or was cancelled after its images were resolved; files created by this call: <one file ID>; pre-existing files: none; still link-shared by this call: none`. Before #908, step 2 logged nothing
+- Step 1 prints `batchUpdates sent: 0; landed: 0`. Before #904, the content `batchUpdate` was still sent after the cancellation
+- Steps 3, 4 and 5 each print a `doc cache marked dirty for <doc> (edit landed: no)` line from the cancel path, then a later `doc cache marked dirty for <doc> (edit landed: yes)` line, and end with `batchUpdates sent: 1; landed: 1`. Before #907, the `(edit landed: yes)` line was missing. If a run shows only `(edit landed: yes)` lines, the edit finished before the cancel reached the tool; re-run that step on a fresh doc
+- Step 5 logs `Replacing doc {DOC_ID} was cancelled; kept its backup copy {BACKUP_ID}` and no image WARNING (no image was uploaded)
+- `list_permissions` on `{SHARE_FILE_ID}`, `{REVOKE_FILE_ID}`, `{INFLIGHT_FILE_ID}`, and `{ILI_FILE_ID}` shows no `anyone` permission
+- After `refresh_cache` on each doc, `get_doc_as_markdown` shows: `{INFLIGHT_DOC_ID}` with `Before`, an image, `After` (the in-flight edit landed); `{MARKER_DOC_ID}` with an image where `INFLIGHT909` was; `{DOC_ID}` empty (step 5's clear landed); `{BACKUP_ID}` with `Before`, an image, `After` (step 2's content)
+
+**Cleanup:** trash `{SHARE_FILE_ID}`, `{REVOKE_FILE_ID}`, `{INFLIGHT_FILE_ID}`, `{ILI_FILE_ID}`, `{BACKUP_ID}`, `{DOC_ID}`, `{INFLIGHT_DOC_ID}`, and `{MARKER_DOC_ID}`.
+
+**Result (2026-10-14) ✅ PASS (checks as written); ❌ sent back on a probe — Kit, PR #1029 round 1 (`089f6ee`).** Ran from the kit worktree with its OAuth token, docs in a scratch folder on the QA Shared Drive, the fixture pixel from this checkout. Steps 1–4 each printed the cancel line and the WARNING with `still link-shared by this call: none`. Step 1 printed `batchUpdates sent: 0; landed: 0`. Steps 3, 4 and 5 each printed `(edit landed: no)` line(s) from the cancel path (step 3 two: the lifecycle's and `_replace_doc_content`'s `_failed`), then `(edit landed: yes)`, and ended `sent: 1; landed: 1`. Step 5 logged `Replacing doc {DOC_ID} was cancelled; kept its backup copy {BACKUP_ID}` and no image WARNING. `list_permissions` showed no `anyone` grant on the four files. `get_doc_as_markdown`: `{INFLIGHT_DOC_ID}` `Before`/image/`After`; `{MARKER_DOC_ID}` an image where `INFLIGHT909` was; `{DOC_ID}` empty; `{BACKUP_ID}` `Before`/image/`After`. **Probe (failed):** step 2's command (`revoke`) on a doc that already had content, so a backup was made: two batchUpdates (clear + content) landed and the doc read `Before`/image/`After`, yet the call also logged `Replacing doc … was cancelled; kept its backup copy …`, and that copy was left in Drive for a replace that had fully succeeded. The lifecycle's new post-revoke checkpoint routes the cancel through `_failed` instead of after `_discard_backup` (review finding 2). Cleanup done.
+
+**Result (2026-10-14) ✅ PASS (partial re-run) — Kit, PR #1029 round 2 (`fd591d9`).** Re-ran step 3 and step 5 on fresh scratch docs; both matched round 1 (step 3: `(edit landed: no)` lines, then `(edit landed: yes)`, `sent: 1; landed: 1`, the doc `Before`/image/`After`; step 5: `kept its backup copy` logged, the backup held the old content). Round 1's failed probe (`revoke` on a doc with content) now passes: both batchUpdates landed, the doc read `Before`/image/`After`, no `kept its backup copy` line was logged, and after `refresh_cache` the folder held no `(backup before replace)` copy of that doc. Cleanup done.
+
+**Result (2026-10-14) ✅ PASS (probe only) — Kit, PR #1029 round 3 (`2311322`).** Steps not re-run; the round's fix only touches `create_doc`/`create_doc_from_file`'s Drive create. A scratch script (not committed) ran the checkout's `create_doc` against the real APIs with a mock folder cache and cancelled it while `files().create` ran on its worker thread. The tool returned nothing, the create landed afterward (the Doc was in the folder), and the folder was marked dirty once it landed. An uncancelled `create_doc` in the same folder marked it dirty as before. Cleanup done.
+
+**Result (2026-10-15) ✅ PASS — Kit, PR #1029 round 4 (`d748932`).** Full re-run after the `develop` merge brought #1034's no-backup changes into `_replace_doc_content`. Ran from the kit worktree with its OAuth token, docs in a scratch folder on the QA Shared Drive. Steps 1–4 each printed the cancel line and the WARNING with `still link-shared by this call: none`. Step 1 printed `batchUpdates sent: 0; landed: 0`. Steps 3, 4 and 5 printed `(edit landed: no)` line(s) from the cancel path (step 3 two), then `(edit landed: yes)`, and ended `sent: 1; landed: 1`. Step 5 logged `Replacing doc {DOC_ID} was cancelled; kept its backup copy {BACKUP_ID}` and no image WARNING. `list_permissions` showed no `anyone` grant on the four files. `get_doc_as_markdown`: `{INFLIGHT_DOC_ID}` `Before`/image/`After`; `{MARKER_DOC_ID}` an image where `INFLIGHT909` was; `{DOC_ID}` empty; `{BACKUP_ID}` `Before`/image/`After`. Round 1's probe (`revoke` on a doc that already had content, so a backup was made) passed again: `sent: 2; landed: 2`, the doc read `Before`/image/`After`, no `kept its backup copy` line was logged, and the folder held no `(backup before replace)` copy of that doc. Cleanup done.
+
+---
+
+### TC-DOC223: An image upload or resized copy shows up in a cached folder listing without `refresh_cache`, and a failed edit still names its resized copy (#666) ⚠️ requires-oauth ⚠️ destructive ⚠️ local-filesystem
+
+**Background:** `list_files` caches each folder's listing. `create_doc` marked its target folder dirty, but `write_doc_content` (which uploads a local image into the server's default folder) never did. A `drive:` source's or `drive_file_id`'s resized copy lands next to its original, which no tool marked dirty either. Every upload result now names the folder its file was created in, and the shared image lifecycle (or `insert_inline_image`) marks that folder dirty. The case reads each listing once to cache it, and never calls `refresh_cache`.
+
+**Setup:**
+1. `uv run python3 -c "from PIL import Image; Image.new('RGB', (6000, 6000), 'red').save('/tmp/qa-oversized-909.png')"`
+2. `create_folder(name="TC-DOC223 originals", parent_folder_id={FOLDER_ID})`. Record its ID as `{ORIG_FOLDER_ID}`.
+3. `upload_local_file(local_path="/tmp/qa-oversized-909.png", parent_folder_id={ORIG_FOLDER_ID})`. Record the returned `fileId` as `{OVERSIZED_FILE_ID}`.
+4. `create_doc(title="TC-DOC223", content="Start", folder_id={FOLDER_ID})`. Record `docId` as `{DOC_ID}`.
+5. Read the server's default folder from its config (`DRIVE_FOLDER_ID`) as `{DEFAULT_FOLDER_ID}`. If it isn't set, skip steps 3–4 below and their check: `write_doc_content` can't upload a local image without one.
+
+**Steps**
+1. `list_files(folder_id={ORIG_FOLDER_ID})`, to cache the listing. It shows only `qa-oversized-909.png`.
+2. `insert_inline_image(doc_id={DOC_ID}, index=1, drive_file_id={OVERSIZED_FILE_ID}, auto_downscale=True)`. Record `resized_file_id`. Then `list_files(folder_id={ORIG_FOLDER_ID})` again.
+3. `list_files(folder_id={DEFAULT_FOLDER_ID}, mime_type="image/png")`, to cache the listing.
+4. `write_doc_content(doc_id={DOC_ID}, content="![Pixel](<repo-root>/docs/qa/fixtures/qa-fixture-pixel.png)", content_format="markdown")`. Record `images[0].fileId` as `{PIXEL_FILE_ID}`. Then `list_files(folder_id={DEFAULT_FOLDER_ID}, mime_type="image/png")` again.
+5. Lock `{DOC_ID}` read-only with TC-DOC202's setup step 3 script (doc ID `{DOC_ID}`, reason `TC-DOC223`). Then `insert_inline_image(doc_id={DOC_ID}, index=1, drive_file_id={OVERSIZED_FILE_ID}, auto_downscale=True)` again.
+
+**Checks**
+- Step 2's second listing includes `qa-oversized-909.png (resized)` with ID `resized_file_id`. Before the fix it showed only the original until `refresh_cache`
+- Step 4's second listing includes `{PIXEL_FILE_ID}` (`qa-fixture-pixel.png`). Before the fix it was missing until `refresh_cache`
+- Step 5 returns `{"error": ...}` with the Docs `batchUpdate`'s 403 "The caller does not have permission", plus a `resized_file_id` different from step 2's. That copy exists and is link-shared even though nothing was embedded; before the fix the error result didn't name it
+
+**Cleanup:** unlock `{DOC_ID}` with the same script, using `body={'contentRestrictions': [{'readOnly': False}]}`. Trash both steps' `resized_file_id`, `{OVERSIZED_FILE_ID}`, `{ORIG_FOLDER_ID}`, `{PIXEL_FILE_ID}`, and `{DOC_ID}`. `rm /tmp/qa-oversized-909.png`
+
+**Result (2026-10-14) ✅ PASS — Kit, PR #1029 round 1 (`089f6ee`).** Ran in a scratch folder on the QA Shared Drive; the oversized PNG went under this job's scratch dir instead of `/tmp`, and `{DEFAULT_FOLDER_ID}` is the Shared Drive root (`DRIVE_FOLDER_ID`). Step 1's listing showed only `qa-oversized-909.png`; step 2's second listing added `qa-oversized-909.png (resized)` with ID `resized_file_id`. Step 3's listing was empty; step 4's second listing showed `{PIXEL_FILE_ID}` (`qa-fixture-pixel.png`). No `refresh_cache` anywhere. Step 5 returned the 403 "The caller does not have permission" error plus a new `resized_file_id`, different from step 2's. Cleanup done.
