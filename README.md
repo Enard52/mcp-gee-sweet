@@ -2,16 +2,16 @@
   <img src="https://raw.githubusercontent.com/khuisman/mcp-gee-sweet/main/docs/assets/logo.png" alt="mcp-gee-sweet logo" width="160">
 
   <b>mcp-gee-sweet</b>
-  <p align="center"><i>The Google Workspace MCP server built for depth.</i></p>
+  <p align="center"><i>A Google Workspace MCP server built for depth.</i></p>
 
 ![GitHub License](https://img.shields.io/github/license/khuisman/mcp-gee-sweet)
 </div>
 
 <!-- mcp-name: io.github.khuisman/mcp-gee-sweet -->
 
-Google ships its own Sheets and Docs MCP servers now (Developer Preview), but they're shallow — thin CRUD, both approval-gated. mcp-gee-sweet goes deeper: raw formula access — reads `=VLOOKUP()` and friends directly, structural Docs support (colspan/rowspan tables, themes, named styles, an HTML/Markdown→AST→Docs pipeline), plus complete Drive and Calendar coverage Google's preview doesn't touch at all.
+mcp-gee-sweet gives AI clients deep, direct access to Google Sheets, Docs, Drive, Calendar, and Gmail. It reads raw formulas like `=VLOOKUP()` directly, builds Docs structurally (colspan/rowspan tables, themes, named styles, an HTML/Markdown→AST→Docs pipeline), and covers Drive files, sharing, and sync alongside Calendar events and Gmail messages, threads, and drafts.
 
-A few things no other Workspace MCP has:
+A few highlights:
 - **Caching** — repeated reads return in ~2ms from a local cache instead of a round-trip API call every time.
 - **Formula access** — reads raw `=VLOOKUP()`, `=SUM()`, and `=IF()` expressions, not just the values they produce.
 - **Local sync** — two-way sync between a local folder and Google Drive.
@@ -32,12 +32,13 @@ uvx --prerelease=allow mcp-gee-sweet
 
 ## What's covered
 
-| Service | Tools | Google's own MCP | Highlights |
-|---|---|---|---|
-| **Google Sheets** | 35 | 6 | Formula access, batch read/write, 8 chart types, structural ops |
-| **Google Drive** | 38 | — | File ops, sharing/permissions, local sync, revision history |
-| **Google Docs** | 34 | 2 | Full HTML→Doc pipeline, tables, range styling, themes, Markdown export |
-| **Google Calendar** | 17 | — | Event CRUD, free-slot finder across multiple calendars |
+| Service | Tools | Highlights |
+|---|---|---|
+| **Google Sheets** | 36 | Formula access, batch read/write, 8 chart types, structural ops |
+| **Google Drive** | 38 | File ops, sharing/permissions, local sync, revision history |
+| **Google Docs** | 34 | Full HTML→Doc pipeline, tables, range styling, themes, Markdown export |
+| **Google Calendar** | 17 | Event CRUD, free-slot finder across multiple calendars |
+| **Gmail** | 11 | Search and read messages and threads, send and reply, drafts, labels (OAuth only) |
 
 ---
 
@@ -85,7 +86,7 @@ mcp-gee-sweet auth   # one-time browser login; `uvx mcp-gee-sweet auth` for a Py
 
 Pass the same `CREDENTIALS_PATH` and `TOKEN_PATH` in your MCP client's `env`. A stdio server with no token doesn't open a browser itself. Instead its first tool call offers you the Google consent link (or you run `mcp-gee-sweet auth`), and you retry the call. A token revoked mid-session is handled the same way, with no restart.
 
-Service accounts (recommended for headless server deployments — see Option B above), base64 credential injection, and Application Default Credentials are also supported. See [Authentication](https://khuisman.github.io/mcp-gee-sweet/latest/auth/) for all options.
+Service accounts (recommended for headless server deployments — see Option B above; Gmail tools need OAuth), base64 credential injection, and Application Default Credentials are also supported. See [Authentication](https://khuisman.github.io/mcp-gee-sweet/latest/auth/) for all options.
 
 ---
 
