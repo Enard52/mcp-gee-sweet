@@ -315,7 +315,7 @@ Same shape as v0.8.1 — stabilize on defects that surfaced since v0.9.0 shipped
 - [x] Local-file read policy across local-path tools — in a remote/SSE deployment these read the server's own filesystem (token, SA key), and Gmail attachments can now mail them out. Decided 2026-10-04: `LOCAL_FILE_ACCESS=full|roots|off` (default `off` under SSE/HTTP), one shared check for every local read and write; also covers `_read_doc_source_file`'s synchronous read. Lane A after #1018, `solo-only`: lane B holds after #909 until it ships ([#796](https://github.com/khuisman/mcp-gee-sweet/issues/796)) (PR #1039)
 - [ ] Release-pass Gmail QA (`docs/qa/tests/gmail.md`, added by #786). Many cases are destructive (send/draft/trash), so they need a dedicated mailbox fixture plan — Aziz ([#803](https://github.com/khuisman/mcp-gee-sweet/issues/803))
 - [ ] Rewrite TC-GM01–22 prescriptively, add TC-GM26–44 and the Smoke rows, per `docs/qa/gmail-test-plan.md` §4. Part of #803, Aziz ([#822](https://github.com/khuisman/mcp-gee-sweet/issues/822))
-- [ ] README and `docs/index.md`: add Gmail coverage (recounted per-domain tool counts) and remove the comparisons with other MCP servers. Docs-only, no file overlap with PR #1039, so it runs alongside #796 despite the `solo-only` hold (user decision 2026-10-16) — lane B ([#1033](https://github.com/khuisman/mcp-gee-sweet/issues/1033))
+- [x] README and `docs/index.md`: add Gmail coverage (recounted per-domain tool counts) and remove the comparisons with other MCP servers. Docs-only, no file overlap with PR #1039, so it runs alongside #796 despite the `solo-only` hold (user decision 2026-10-16) — lane B ([#1033](https://github.com/khuisman/mcp-gee-sweet/issues/1033)) (PR #1041)
 
 Tool surface (from the original v1.1+ plan):
 
