@@ -369,6 +369,15 @@ Follows the design in [`docs/decisions/decision-comments-first-class.md`](decisi
 - [ ] `_parse_a1_notation` rejects `A:B5`, which the Sheets values API accepts as `A5:B` — decided 2026-10-11: keep rejecting (a destructive GridRange tool acting on "row 5 onward" is worse than an error); document in the docstring that this is deliberately stricter than Sheets. Found in PR #986 — lane A; moved from v0.9.2 2026-10-11 (docstring only, current behavior is the safe one) ([#987](https://github.com/khuisman/mcp-gee-sweet/issues/987))
 - [x] `html_parser`: the `</a>` of an href-less anchor nested in a linked one pops the outer link, so text or an image after it is written unlinked. Found in PR #992's QA, which sent back the same bug in its new `_bare_link_url` stack; may close with PR #992 — lane A; moved from v0.9.2 2026-10-11 (pre-existing, invalid nested HTML only) (PR #992) ([#994](https://github.com/khuisman/mcp-gee-sweet/issues/994))
 
+**v0.9.2 release-QA defects** _(found in the v0.9.2 pass, PR #1051; all pre-existing at v0.9.0)_
+
+- [ ] Stale per-thread HTTP connection fails the first call after idle (`Errno 54`/`Errno 60`), with no retry. `loud/common`; placed in v0.9.3 by the user 2026-10-17 ([#1052](https://github.com/khuisman/mcp-gee-sweet/issues/1052))
+- [ ] `list_spreadsheets`, `search_files`, `search_spreadsheets` return trashed files — `wrong/common` — lane A ([#1054](https://github.com/khuisman/mcp-gee-sweet/issues/1054))
+- [ ] Table column widths fail on any table after the first in a written doc (stale `startIndex` in `fill_tables`) — `loud/narrow`, observed — lane B ([#1053](https://github.com/khuisman/mcp-gee-sweet/issues/1053))
+- [ ] Blockquote indent invisible on single-line quotes (no `indentFirstLine`) — `wrong/narrow, observed`; #1044-relevant ([#1056](https://github.com/khuisman/mcp-gee-sweet/issues/1056))
+- [ ] `get_doc_as_markdown` emits a raw `\u000b` for a soft line break in non-code text — `wrong/narrow, observed`; #1044-relevant ([#1057](https://github.com/khuisman/mcp-gee-sweet/issues/1057))
+- [ ] `transfer_ownership(send_notification=False)` can never succeed — `loud/narrow` ([#1055](https://github.com/khuisman/mcp-gee-sweet/issues/1055))
+
 **Code structure & typing (Joy)** _(slotted into v0.9.2 (now v0.9.3) 2026-09-09 so Joy's architecture initiative carries release deadlines instead of staying open-ended)_
 
 - [ ] Split `tools/sheets/structure.py` by domain (1865 lines, 25 tools) ([#376](https://github.com/khuisman/mcp-gee-sweet/issues/376))
@@ -386,8 +395,8 @@ Follows the design in [`docs/decisions/decision-comments-first-class.md`](decisi
 - [ ] **Bundle:** Docs read side (`doc_to_ast`/`ast_to_markdown`), one PR closing [#596](https://github.com/khuisman/mcp-gee-sweet/issues/596), [#600](https://github.com/khuisman/mcp-gee-sweet/issues/600), [#732](https://github.com/khuisman/mcp-gee-sweet/issues/732) — lane B ([#893](https://github.com/khuisman/mcp-gee-sweet/issues/893))
 - [ ] `update_doc_from_file`: opt-in incremental (`mode="patch"`) update that diffs block by block and rewrites only changed blocks, so comment anchors and revision history survive — lane A, after #878 (same write-path files) ([#957](https://github.com/khuisman/mcp-gee-sweet/issues/957))
 - [ ] Docstrings: `create_paragraph_bullets` carries internal API-quirk mechanics plus residual bare issue refs in `style.py` tool docstrings ([#683](https://github.com/khuisman/mcp-gee-sweet/issues/683))
-- [ ] `style_doc_range` has no `font_family` parameter — can't apply monospace to an existing range — claimed by community PR #1026, merges after the v0.9.2 cut ([#720](https://github.com/khuisman/mcp-gee-sweet/issues/720))
-- [ ] Document `font_family` on `insert_softbreak_paragraph` and widen the `style_doc_range` font test. Follow-up to #720 from duplicate PR #1028; blocked on #1026, which waits until after the v0.9.2 cut ([#1037](https://github.com/khuisman/mcp-gee-sweet/issues/1037))
+- [x] `style_doc_range` has no `font_family` parameter — can't apply monospace to an existing range — community PR #1026 ([#720](https://github.com/khuisman/mcp-gee-sweet/issues/720)) (PR #1026)
+- [ ] Document `font_family` on `insert_softbreak_paragraph` and widen the `style_doc_range` font test. Follow-up to #720 from duplicate PR #1028; unblocked, #1026 merged 2026-10-17 ([#1037](https://github.com/khuisman/mcp-gee-sweet/issues/1037))
 - [ ] Harden `font_family` in Docs text-style requests: one shared `weightedFontFamily` builder for `style_doc_range`, `apply_theme` and `emitter.py`; reject empty values; decide on weight reset; document the Arial fallback. `wrong/narrow` + `loud/narrow`, not observed. From #1026's review; after #1026 ([#1038](https://github.com/khuisman/mcp-gee-sweet/issues/1038))
 - [ ] **Bundle:** Calendar follow-ups from PR #912, one PR closing [#915](https://github.com/khuisman/mcp-gee-sweet/issues/915), [#918](https://github.com/khuisman/mcp-gee-sweet/issues/918) — lane B, after #892 ([#985](https://github.com/khuisman/mcp-gee-sweet/issues/985))
 - [ ] `qa`: `search_files` has no unit test coverage for the error-dict path ([#573](https://github.com/khuisman/mcp-gee-sweet/issues/573))
