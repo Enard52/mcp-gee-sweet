@@ -383,7 +383,7 @@ Follows the design in [`docs/decisions/decision-comments-first-class.md`](decisi
 - [x] `list_spreadsheets`, `search_files`, `search_spreadsheets` return trashed files — `wrong/common` — lane A ([#1054](https://github.com/khuisman/mcp-gee-sweet/issues/1054)) (PR #1083)
 - [ ] Table column widths fail on any table after the first in a written doc (stale `startIndex` in `fill_tables`) — `loud/narrow`, observed — lane B ([#1053](https://github.com/khuisman/mcp-gee-sweet/issues/1053))
 - [ ] Blockquote indent invisible on single-line quotes (no `indentFirstLine`) — `wrong/narrow, observed`; #1044-relevant ([#1056](https://github.com/khuisman/mcp-gee-sweet/issues/1056))
-- [ ] `get_doc_as_markdown` emits a raw `\u000b` for a soft line break in non-code text — `wrong/narrow, observed`; #1044-relevant ([#1057](https://github.com/khuisman/mcp-gee-sweet/issues/1057))
+- [ ] `get_doc_as_markdown` emits a raw `\u000b` for a soft line break in non-code text — `wrong/narrow, observed`; #1044-relevant — lane A ([#1057](https://github.com/khuisman/mcp-gee-sweet/issues/1057))
 - [ ] `transfer_ownership(send_notification=False)` can never succeed — `loud/narrow` ([#1055](https://github.com/khuisman/mcp-gee-sweet/issues/1055))
 
 **Code structure & typing (Joy)** _(slotted into v0.9.2 (now v0.9.3) 2026-09-09 so Joy's architecture initiative carries release deadlines instead of staying open-ended)_
