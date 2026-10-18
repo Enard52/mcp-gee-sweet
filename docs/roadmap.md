@@ -380,7 +380,7 @@ Follows the design in [`docs/decisions/decision-comments-first-class.md`](decisi
 **v0.9.2 release-QA defects** _(found in the v0.9.2 pass, PR #1051; all pre-existing at v0.9.0)_
 
 - [ ] Stale per-thread HTTP connection fails the first call after idle (`Errno 54`/`Errno 60`), with no retry. `loud/common`; placed in v0.9.3 by the user 2026-10-17 ([#1052](https://github.com/khuisman/mcp-gee-sweet/issues/1052))
-- [ ] `list_spreadsheets`, `search_files`, `search_spreadsheets` return trashed files — `wrong/common` — lane A ([#1054](https://github.com/khuisman/mcp-gee-sweet/issues/1054))
+- [x] `list_spreadsheets`, `search_files`, `search_spreadsheets` return trashed files — `wrong/common` — lane A ([#1054](https://github.com/khuisman/mcp-gee-sweet/issues/1054)) (PR #1083)
 - [ ] Table column widths fail on any table after the first in a written doc (stale `startIndex` in `fill_tables`) — `loud/narrow`, observed — lane B ([#1053](https://github.com/khuisman/mcp-gee-sweet/issues/1053))
 - [ ] Blockquote indent invisible on single-line quotes (no `indentFirstLine`) — `wrong/narrow, observed`; #1044-relevant ([#1056](https://github.com/khuisman/mcp-gee-sweet/issues/1056))
 - [ ] `get_doc_as_markdown` emits a raw `\u000b` for a soft line break in non-code text — `wrong/narrow, observed`; #1044-relevant ([#1057](https://github.com/khuisman/mcp-gee-sweet/issues/1057))
