@@ -136,18 +136,32 @@ Run 1 (kai-oauth), throwaway folder under the Shared Drive.
 
 ### TC-D14: List from explicit folder ID
 
+**Setup (#1054):**
+1. `create_spreadsheet(title="QA-Trashed-1054", folder_id={FOLDER_ID})`; note its id.
+2. Positive control: `list_spreadsheets(folder_id={FOLDER_ID})` and `search_spreadsheets(query="QA-Trashed-1054")` must each return an entry with that id. Drive's search index can lag a new file, so retry until both do; a negative check run before this proves nothing.
+3. `delete_file(file_id=<its id>, permanent=False)`. `get_file_metadata(file_id=<its id>)` must report `trashed: true` before you continue.
+
 **Prompt**
 > "List spreadsheets in folder {FOLDER_ID}"
 
 **Checks**
 - Returns spreadsheets from that specific folder
 - Results scoped to the given folder
+- No result has `QA-Trashed-1054`'s id (#1054: trashed files were returned)
+
+**Cleanup:** `delete_file(file_id=<QA-Trashed-1054 id>, permanent=True)`, or leave it in the trash for a later `empty_trash` run. TC-D29 reuses it if run in the same pass, so clean up after TC-D29.
 
 **Result (2026-09-04) ✅ PASS**
 list_spreadsheets(FOLDER_ID) returns exactly the 3 spreadsheets in that folder (fixtures + QA-Cache-Check + QA-Create-Explicit), scoped correctly.
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
+**Result (2026-10-17) ✅ PASS — PR #1083 round 1 (Sky, `47db02a`)**
+OAuth, fixture folder on the Shared Drive. Positive control first: before trashing, `list_spreadsheets({FOLDER_ID})` listed `QA-Trashed-1054` (plus `QA-Trashed-1054-Sheet` and the fixture). After `delete_file(permanent=False)`, with `get_file_metadata` reporting `trashed: true`, the same call returned only `mcp-gee-sweet-qa-fixtures`. Cleaned up with `delete_file(permanent=True)`.
+
+**Result (2026-10-17) ✅ PASS — PR #1083 round 2 (Sky, `35a1839`)**
+Ran the revised 3-step setup with fresh fixtures. Step 2 positive control: `list_spreadsheets({FOLDER_ID})` and `search_spreadsheets('QA-Trashed-1054')` both returned the new id on the first try. After trashing (`trashed: true`), no `list_spreadsheets({FOLDER_ID})` result had that id; only the fixture remained.
 
 ---
 
@@ -302,18 +316,29 @@ Run 1 (kai-oauth).
 
 ### TC-D29: Basic name search
 
+**Setup (#1054):** the trashed `QA-Trashed-1054` spreadsheet from TC-D14's setup, whose positive control already covers `search_spreadsheets`. If TC-D14 didn't run in this pass, run its setup (all three steps).
+
 **Prompt**
 > "Search for spreadsheets with 'qa-fixtures' in the name"
 
 **Checks**
 - Returns at least one result including 'mcp-gee-sweet-qa-fixtures'
 - Each result has a name and ID
+- No result of `search_spreadsheets(query="QA-Trashed-1054")` has `QA-Trashed-1054`'s id (#1054: trashed files were returned). Match by id, not by an empty result: fullText search also matches any live doc that mentions the name, such as a QA run log.
+
+**Cleanup:** `delete_file(file_id=<QA-Trashed-1054 id>, permanent=True)`, or leave it in the trash for a later `empty_trash` run.
 
 **Result (2026-09-04) ✅ PASS**
 search_spreadsheets('qa-fixtures') returned 1 result: 'mcp-gee-sweet-qa-fixtures' with id + name + metadata.
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
+**Result (2026-10-17) ✅ PASS — PR #1083 round 1 (Sky, `47db02a`)**
+`search_spreadsheets('qa-fixtures')` → the fixture. Positive control: before trashing, `search_spreadsheets('QA-Trashed-1054')` returned both new spreadsheets. After trashing (`trashed: true` confirmed), it returned `[]`.
+
+**Result (2026-10-17) ✅ PASS — PR #1083 round 2 (Sky, `35a1839`)**
+`search_spreadsheets('qa-fixtures')` → the fixture. With TC-D14's setup (positive control passed), no `search_spreadsheets('QA-Trashed-1054')` result had the trashed id after trashing (it returned `[]`).
 
 ---
 
@@ -1185,18 +1210,32 @@ empty_trash on a whole trash; not run during a shared pass.
 
 ### TC-D75: Search by name across all MIME types
 
+**Setup (#1054):**
+1. `create_spreadsheet(title="QA-Trashed-1054-Sheet", folder_id={FOLDER_ID})` and `create_folder(name="QA-Trashed-1054-Folder", parent_folder_id={FOLDER_ID})`; note both ids.
+2. Positive control: `search_files(query="QA-Trashed-1054")`, `search_files(query="QA-Trashed-1054", mime_type="application/vnd.google-apps.folder")`, and `search_files(query="QA-Trashed-1054", folder_id={FOLDER_ID})` must each return the ids they should (both; the folder; both). Drive's search index can lag a new file, so retry until they do; a negative check run before this proves nothing.
+3. `delete_file(file_id=<id>, permanent=False)` on each. `get_file_metadata` must report `trashed: true` for both before you continue.
+
 **Prompt**
 > "Search files for 'QA' — no MIME type filter"
 
 **Checks**
 - Returns a mix of docs, spreadsheets, and folders created during QA
 - Each result has `id`, `name`, `mimeType`, `modified_time`, and `web_link`
+- No result of `search_files(query="QA-Trashed-1054")` or `search_files(query="QA-Trashed-1054", mime_type="application/vnd.google-apps.folder")` has either trashed fixture's id (#1054). Match by id, not by an empty result: fullText search also matches any live doc that mentions the name, such as a QA run log.
+
+**Cleanup:** `delete_file(file_id=<id>, permanent=True)` on both, or leave them in the trash for a later `empty_trash` run. TC-D77 reuses them if run in the same pass, so clean up after TC-D77.
 
 **Result (2026-09-04) ✅ PASS**
 search_files('QA') no filter → mix of spreadsheets, docs, folders, text/plain; each entry has id, name, mimeType, modified_time, web_link (also owners=[], parent).
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
+
+**Result (2026-10-17) ✅ PASS — PR #1083 round 1 (Sky, `47db02a`)**
+`search_files('QA')` → a mix of spreadsheets, docs, and a folder, each with id/name/mimeType/modified_time/web_link. Positive control: before trashing, `search_files('QA-Trashed-1054', folder_id={FOLDER_ID})` returned the sheet, the folder, and TC-D14's sheet. After trashing, `search_files('QA-Trashed-1054')` (unscoped) and the same call with `mime_type='application/vnd.google-apps.folder'` both returned `[]`.
+
+**Result (2026-10-17) ✅ PASS — PR #1083 round 2 (Sky, `35a1839`)**
+Revised setup with fresh fixtures. Step 2 positive controls returned the expected ids on the first try: unscoped → both (plus TC-D14's sheet), `mime_type=folder` → the folder, `folder_id={FOLDER_ID}` → both. After trashing (`trashed: true` on both), no result of the unscoped or `mime_type=folder` search had either id.
 
 ---
 
@@ -1222,18 +1261,30 @@ Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
 
 ### TC-D77: Search with folder filter
 
+**Setup (#1054):** the trashed `QA-Trashed-1054-Sheet` and `QA-Trashed-1054-Folder` from TC-D75's setup, whose positive control already covers the `folder_id` search. If TC-D75 didn't run in this pass, run its setup (all three steps).
+
 **Prompt**
 > "Search for files with 'QA' in the name, but only in {FOLDER_ID}"
 
 **Checks**
 - All results have `parent` matching `{FOLDER_ID}`
 - Files from other folders excluded
+- No result of `search_files(query="QA-Trashed-1054", folder_id={FOLDER_ID})` has either trashed fixture's id (#1054: trashed files were returned)
+- A quote in `folder_id` can't reopen the query (#1054 round 1): `search_files(query="QA-Trashed-1054", folder_id="x' in parents or trashed=true or 'y")` returns either `[]` or an `{"error": ...}` item, and no result has either trashed fixture's id. Before the fix, the raw `'` closed the folder string and the `or trashed=true` brought the trashed fixtures back.
+
+**Cleanup:** `delete_file(file_id=<id>, permanent=True)` on both, or leave them in the trash for a later `empty_trash` run.
 
 **Result (2026-09-04) ✅ PASS**
 search_files('QA', folder_id=FOLDER_ID) → every result has parent = FOLDER_ID; files from other folders excluded.
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
+
+**Result (2026-10-17) ✅ PASS — PR #1083 round 1 (Sky, `47db02a`)**
+`search_files('QA', folder_id={FOLDER_ID})` → 3 results, all with `parent` = `{FOLDER_ID}`. `search_files('QA-Trashed-1054', folder_id={FOLDER_ID})` returned all 3 fixtures before trashing and `[]` after.
+
+**Result (2026-10-17) ✅ PASS — PR #1083 round 2 (Sky, `35a1839`)**
+`search_files('QA', folder_id={FOLDER_ID})` → 3 results, all with `parent` = `{FOLDER_ID}`. No result of the `folder_id` search for `QA-Trashed-1054` had either trashed id. Injection check: `folder_id="x' in parents or trashed=true or 'y"` returned a single `{"error": "Search failed: <HttpError 404 … File not found: .>"}` item. The request URL shows the escaped query (`'x\' in parents or trashed=true or \'y' in parents`), so Drive read the whole value as one folder ID, and no trashed fixture came back. `list_spreadsheets` with the same `folder_id` raised the same 404 as a tool error (that tool has no try/except, which is pre-existing).
 
 ---
 
