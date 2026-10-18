@@ -2,10 +2,37 @@
 
 import importlib
 import json
+import os
 
 import pytest
 
 from mcp_gee_sweet.tools import response_limits
+
+
+class TestEnforceResponseSizeFloor:
+    """#825: reject a known-over-cap response before fetching it."""
+
+    def test_at_or_under_cap_succeeds(self, monkeypatch):
+        monkeypatch.setattr(response_limits, "MAX_TOOL_RESPONSE_CHARS", 100)
+        response_limits.enforce_response_size_floor(100, tool_name="some_tool")
+
+    def test_over_cap_raises_with_lower_bound_wording(self, monkeypatch):
+        monkeypatch.setattr(response_limits, "MAX_TOOL_RESPONSE_CHARS", 100)
+        with pytest.raises(ValueError) as exc_info:
+            response_limits.enforce_response_size_floor(
+                101, tool_name="some_tool", hint="Big body. "
+            )
+        message = str(exc_info.value)
+        assert message.startswith("some_tool: the response would be at least 101 characters")
+        assert "100-character safety cap. Big body. Pass local_path" in message
+
+    def test_local_path_omitted_when_unavailable(self, monkeypatch):
+        monkeypatch.setattr(response_limits, "MAX_TOOL_RESPONSE_CHARS", 1)
+        with pytest.raises(ValueError) as exc_info:
+            response_limits.enforce_response_size_floor(
+                2, tool_name="some_tool", local_path_available=False
+            )
+        assert "local_path" not in str(exc_info.value)
 
 
 class TestEnforceResponseSizeCap:
@@ -89,6 +116,34 @@ class TestWriteCappedResultToDisk:
         )
         assert json.loads(dest.read_text()) == [{"a": 1}, {"b": 2}]
 
+    async def test_str_result_written_verbatim(self, tmp_path):
+        """#958: a str is written as raw UTF-8 text, not JSON-quoted, with no
+        newline translation."""
+        dest = tmp_path / "out.md"
+        text = '# Title\r\nline "two" 😀\n'
+        result = await response_limits.write_capped_result_to_disk(
+            text, str(dest), default_filename="fallback.md", manifest_extra={}
+        )
+        assert dest.read_bytes() == text.encode("utf-8")
+        assert result["bytes_written"] == len(text.encode("utf-8"))
+
+    async def test_failed_write_leaves_previous_file_intact(self, tmp_path, monkeypatch):
+        """PR #982 QA round 1: a write that fails partway must not leave a
+        truncated file over a previous good export."""
+        dest = tmp_path / "out.md"
+        dest.write_text("previous export", encoding="utf-8")
+
+        def _replace_fails(src, dst):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(os, "replace", _replace_fails)
+        with pytest.raises(OSError, match="disk full"):
+            await response_limits.write_capped_result_to_disk(
+                "new export", str(dest), default_filename="fallback.md", manifest_extra={}
+            )
+        assert dest.read_text(encoding="utf-8") == "previous export"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["out.md"]
+
     async def test_directory_path_uses_default_filename(self, tmp_path):
         result = await response_limits.write_capped_result_to_disk(
             {"a": 1}, str(tmp_path), default_filename="fallback.json", manifest_extra={}
@@ -96,6 +151,109 @@ class TestWriteCappedResultToDisk:
         dest = tmp_path / "fallback.json"
         assert result["local_path"] == str(dest)
         assert dest.exists()
+
+    async def test_missing_directory_with_trailing_slash_is_created(self, tmp_path):
+        """#990: 'dir/' for a directory that doesn't exist yet means a directory,
+        not a file named 'dir'."""
+        missing = tmp_path / "new" / "sub"
+        result = await response_limits.write_capped_result_to_disk(
+            {"a": 1}, f"{missing}/", default_filename="fallback.json", manifest_extra={}
+        )
+        dest = missing / "fallback.json"
+        assert missing.is_dir()
+        assert result["local_path"] == str(dest)
+        assert json.loads(dest.read_text()) == {"a": 1}
+
+    async def test_existing_directory_with_trailing_slash_uses_default_filename(self, tmp_path):
+        result = await response_limits.write_capped_result_to_disk(
+            "text", f"{tmp_path}/", default_filename="fallback.md", manifest_extra={}
+        )
+        dest = tmp_path / "fallback.md"
+        assert result["local_path"] == str(dest)
+        assert dest.read_text() == "text"
+
+    async def test_trailing_slash_on_existing_file_raises_and_keeps_file(self, tmp_path):
+        """#990: a trailing slash naming an existing regular file is refused,
+        never overwritten as if the slash weren't there."""
+        existing = tmp_path / "out"
+        existing.write_text("keep me", encoding="utf-8")
+        with pytest.raises(ValueError, match="non-directory path component"):
+            await response_limits.write_capped_result_to_disk(
+                {"a": 1}, f"{existing}/", default_filename="fallback.json", manifest_extra={}
+            )
+        assert existing.read_text(encoding="utf-8") == "keep me"
+
+    async def test_existing_file_further_up_the_path_raises(self, tmp_path):
+        """PR #1000 QA round 1: 'file/sub/' raised a raw NotADirectoryError
+        from mkdir; every ancestor is checked, not just the immediate parent."""
+        existing = tmp_path / "out"
+        existing.write_text("keep me", encoding="utf-8")
+        for local_path in (f"{existing}/sub/", f"{existing}/sub/x.json"):
+            with pytest.raises(ValueError, match=r"non-directory path component at '.*out'"):
+                await response_limits.write_capped_result_to_disk(
+                    {"a": 1}, local_path, default_filename="fallback.json", manifest_extra={}
+                )
+        assert existing.read_text(encoding="utf-8") == "keep me"
+
+    async def test_dangling_symlink_with_trailing_slash_raises(self, tmp_path):
+        """PR #1000 QA round 1: a dangling symlink raised a raw FileExistsError."""
+        link = tmp_path / "link"
+        link.symlink_to(tmp_path / "missing")
+        with pytest.raises(ValueError, match="symlink to a missing target"):
+            await response_limits.write_capped_result_to_disk(
+                {"a": 1}, f"{link}/", default_filename="fallback.json", manifest_extra={}
+            )
+        assert not (tmp_path / "missing").exists()
+
+    async def test_default_filename_with_separators_stays_inside_the_directory(self, tmp_path):
+        """PR #1000 QA round 2: a sheet named '../x' wrote x_data.json beside the
+        chosen directory, and 'a/b' created a subdirectory."""
+        out = tmp_path / "out"
+        for name, expected in (
+            ("../x_data.json", ".._x_data.json"),
+            ("a/b_data.json", "a_b_data.json"),
+        ):
+            result = await response_limits.write_capped_result_to_disk(
+                {"a": 1}, f"{out}/", default_filename=name, manifest_extra={}
+            )
+            assert result["local_path"] == str(out / expected)
+        assert sorted(p.name for p in out.iterdir()) == [".._x_data.json", "a_b_data.json"]
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["out"]
+
+    async def test_dangling_symlink_at_joined_filename_raises(self, tmp_path):
+        """PR #1000 QA round 2: a dangling symlink at <dir>/<default_filename> was
+        written through to its target; the same symlink as local_path is refused."""
+        out = tmp_path / "out"
+        out.mkdir()
+        (out / "fallback.json").symlink_to(tmp_path / "elsewhere")
+        with pytest.raises(ValueError, match="symlink to a missing target"):
+            await response_limits.write_capped_result_to_disk(
+                {"a": 1}, f"{out}/", default_filename="fallback.json", manifest_extra={}
+            )
+        assert not (tmp_path / "elsewhere").exists()
+
+    async def test_missing_directory_with_trailing_dot_is_created(self, tmp_path):
+        """Path() drops a trailing '/.', so 'dir/.' must be read from the string,
+        the same as download_file (#874)."""
+        missing = tmp_path / "new"
+        result = await response_limits.write_capped_result_to_disk(
+            {"a": 1}, f"{missing}/.", default_filename="fallback.json", manifest_extra={}
+        )
+        assert missing.is_dir()
+        assert json.loads((missing / "fallback.json").read_text()) == {"a": 1}
+        assert result["bytes_written"] == (missing / "fallback.json").stat().st_size
+
+    async def test_error_names_the_callers_parameter(self, tmp_path):
+        existing = tmp_path / "out"
+        existing.write_text("keep me", encoding="utf-8")
+        with pytest.raises(ValueError, match=r"^result_local_path "):
+            await response_limits.write_capped_result_to_disk(
+                {"a": 1},
+                f"{existing}/",
+                default_filename="fallback.json",
+                manifest_extra={},
+                local_path_param="result_local_path",
+            )
 
     async def test_creates_missing_parent_dirs(self, tmp_path):
         dest = tmp_path / "nested" / "sub" / "out.json"
@@ -113,3 +271,20 @@ class TestWriteCappedResultToDisk:
         )
         assert json.loads(dest.read_text()) == big_result
         assert result["bytes_written"] == dest.stat().st_size
+
+
+class TestSafeFilename:
+    @pytest.mark.parametrize(
+        ("name", "expected"),
+        [
+            ("Sheet1_data.json", "Sheet1_data.json"),
+            ("../x_data.json", ".._x_data.json"),
+            ("a/b\\c_data.json", "a_b_c_data.json"),
+            ("nul\x00_data.json", "nul__data.json"),
+            (".", "_."),
+            ("..", "_.."),
+            (".gee-sweet-partial-0123456789abcdef", "_.gee-sweet-partial-0123456789abcdef"),
+        ],
+    )
+    def test_reduces_to_one_ordinary_component(self, name, expected):
+        assert response_limits._safe_filename(name) == expected

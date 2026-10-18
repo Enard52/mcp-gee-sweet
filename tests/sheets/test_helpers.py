@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 import pytest
 
 from mcp_gee_sweet.cache import SheetInfo, SheetStructureCache
@@ -10,6 +8,8 @@ from mcp_gee_sweet.tools.sheets.helpers import (
     _letter_to_column_index,
     _parse_a1_notation,
 )
+
+from ..fakes import FakeSheetsService
 
 
 class TestColumnIndexToLetter:
@@ -48,6 +48,45 @@ class TestLetterToColumnIndex:
 
 
 class TestParseA1Notation:
+    @pytest.mark.parametrize(
+        "range_str",
+        [
+            "A1:",
+            "A:",
+            "5:",
+            ":5",
+            ":B",
+            ":B5",
+            "1:B",
+            "A:5",
+            "A:B5",
+            "ß1",
+            "ﬀ1",
+            "A\u0661",
+            "\u212a1",
+        ],
+    )
+    def test_missing_incompatible_or_non_ascii_bounds_raise(self, range_str):
+        with pytest.raises(ValueError, match="Invalid A1 notation"):
+            _parse_a1_notation(range_str)
+
+    def test_invalid_newline_is_visible_in_error(self):
+        with pytest.raises(ValueError) as exc:
+            _parse_a1_notation("A1\n")
+        assert str(exc.value) == "Invalid A1 notation: 'A1\\n'"
+
+    def test_cell_to_row_range(self):
+        assert _parse_a1_notation("b2:5") == {
+            "startColumnIndex": 1,
+            "startRowIndex": 1,
+            "endRowIndex": 5,
+        }
+
+    @pytest.mark.parametrize("range_str", [":", "A1\n", "1:2\n", "B:D\n"])
+    def test_incomplete_or_trailing_newline_range_raises(self, range_str):
+        with pytest.raises(ValueError, match="Invalid A1 notation"):
+            _parse_a1_notation(range_str)
+
     def test_single_cell(self):
         result = _parse_a1_notation("A1")
         assert result["startColumnIndex"] == 0
@@ -105,39 +144,96 @@ class TestParseA1Notation:
         with pytest.raises(ValueError):
             _parse_a1_notation("??!!")
 
+    def test_row_zero_raises(self):
+        # The regex's bare \d+ matches "0", but row 0 isn't valid 1-based A1
+        # notation — int(start_row) - 1 would silently compute -1 and reach
+        # the Sheets API as a raw HttpError instead (issue #747 QA round 1).
+        with pytest.raises(ValueError):
+            _parse_a1_notation("A0")
 
-class _RaisingSheetsService:
+    def test_end_row_zero_raises(self):
+        with pytest.raises(ValueError):
+            _parse_a1_notation("A1:A0")
+
+    def test_inverted_row_range_raises(self):
+        with pytest.raises(ValueError):
+            _parse_a1_notation("A5:A2")
+
+    def test_zero_width_row_range_raises(self):
+        with pytest.raises(ValueError):
+            _parse_a1_notation("A5:A4")
+
+    def test_inverted_column_range_raises(self):
+        with pytest.raises(ValueError):
+            _parse_a1_notation("C1:A1")
+
+    def test_zero_width_column_range_raises(self):
+        with pytest.raises(ValueError):
+            _parse_a1_notation("B1:A1")
+
+    def test_last_column_and_row_accepted(self):
+        # ZZZ is column 18,278 and row 10,000,000 is the most a sheet can hold.
+        assert _parse_a1_notation("ZZZ10000000") == {
+            "startColumnIndex": 18277,
+            "endColumnIndex": 18278,
+            "startRowIndex": 9999999,
+            "endRowIndex": 10000000,
+        }
+
+    def test_leading_zero_row_accepted(self):
+        assert _parse_a1_notation("A01") == _parse_a1_notation("A1")
+
+    @pytest.mark.parametrize(
+        "range_str",
+        ["AAAA1", "ZZZZZZZZ1", "A1:AAAA2", "AAAA", "A:AAAA", "A1:AAAA"],
+    )
+    def test_column_beyond_zzz_raises(self, range_str):
+        with pytest.raises(ValueError, match="Invalid A1 notation: column is beyond ZZZ"):
+            _parse_a1_notation(range_str)
+
+    @pytest.mark.parametrize(
+        "range_str",
+        ["A10000001", "A99999999999", "1:10000001", "A1:B10000001", "A1:10000001", "10000001"],
+    )
+    def test_row_beyond_limit_raises(self, range_str):
+        with pytest.raises(ValueError, match="Invalid A1 notation: row is beyond 10,000,000"):
+            _parse_a1_notation(range_str)
+
+    def test_row_over_int_digit_limit_keeps_prefix(self):
+        # int() refuses a string over 4300 digits with its own ValueError,
+        # which would lack the "Invalid A1 notation" prefix (#955).
+        with pytest.raises(ValueError, match="Invalid A1 notation: row is beyond"):
+            _parse_a1_notation("A" + "9" * 5000)
+
+    def test_all_zero_row_raises(self):
+        with pytest.raises(ValueError, match="row must be 1 or greater"):
+            _parse_a1_notation("A000")
+
+
+_ONE_OTHER_SHEET = {"sheets": [{"properties": {"title": "Other", "sheetId": 0}}]}
+_TWO_SHEETS = {
+    "sheets": [
+        {"properties": {"title": "Sheet1", "sheetId": 0, "index": 0}},
+        {"properties": {"title": "Sheet2", "sheetId": 123456, "index": 1}},
+    ]
+}
+
+
+def _raising_service() -> FakeSheetsService:
     """Simulates a transient API failure (rate limit, timeout, auth hiccup)."""
-
-    _http = SimpleNamespace(credentials=None)
-
-    class _Spreadsheets:
-        class _Request:
-            def execute(self, **kwargs):
-                raise TimeoutError("simulated transient API failure")
-
-        def get(self, spreadsheetId, fields):
-            return self._Request()
-
-    def spreadsheets(self):
-        return self._Spreadsheets()
+    return FakeSheetsService(exception=TimeoutError("simulated transient API failure"))
 
 
-class _EmptySheetsService:
+def _empty_service() -> FakeSheetsService:
     """A real API response where the sheet genuinely doesn't exist."""
+    return FakeSheetsService(result=_ONE_OTHER_SHEET)
 
-    _http = SimpleNamespace(credentials=None)
 
-    class _Spreadsheets:
-        class _Request:
-            def execute(self, **kwargs):
-                return {"sheets": [{"properties": {"title": "Other", "sheetId": 0}}]}
-
-        def get(self, spreadsheetId, fields):
-            return self._Request()
-
-    def spreadsheets(self):
-        return self._Spreadsheets()
+def _matching_service() -> FakeSheetsService:
+    """A real API response with more than one sheet, so a happy-path lookup
+    exercises picking the right match rather than trivially returning the
+    only entry present."""
+    return FakeSheetsService(result=_TWO_SHEETS)
 
 
 class TestGetSheetIdExceptionPropagation:
@@ -148,16 +244,36 @@ class TestGetSheetIdExceptionPropagation:
 
     async def test_no_cache_transient_api_error_propagates(self):
         with pytest.raises(TimeoutError):
-            await _get_sheet_id(_RaisingSheetsService(), "sid", "Sheet1")
+            await _get_sheet_id(_raising_service(), "sid", "Sheet1")
 
     async def test_no_cache_genuine_missing_sheet_still_returns_none(self):
-        sheet_id = await _get_sheet_id(_EmptySheetsService(), "sid", "Sheet1")
+        sheet_id = await _get_sheet_id(_empty_service(), "sid", "Sheet1")
         assert sheet_id is None
+
+    async def test_no_cache_matching_sheet_returns_its_id(self):
+        """Happy-path coverage (PR #442 review, issue #442) — the existing
+        exception-propagation/not-found tests never exercised a genuine
+        match, so a bug in the match/return logic itself (wrong dict key,
+        returning the wrong sheet's id) would have passed unnoticed."""
+        sheet_id = await _get_sheet_id(_matching_service(), "sid", "Sheet2")
+        assert sheet_id == 123456
+
+    async def test_with_cache_matching_sheet_returns_its_id(self):
+        # _raising_service() here proves the cache path never touches the
+        # API at all for a fresh, matching cache entry — if it did, this
+        # would raise TimeoutError instead of returning.
+        cache = SheetStructureCache(db_path=":memory:", ttl=1000)
+        cache.store(
+            "sid",
+            [SheetInfo(title="Sheet1", sheet_id=0), SheetInfo(title="Sheet2", sheet_id=123456)],
+        )
+        sheet_id = await _get_sheet_id(_raising_service(), "sid", "Sheet2", cache)
+        assert sheet_id == 123456
 
     async def test_with_cache_transient_api_error_propagates(self):
         cache = SheetStructureCache(db_path=":memory:", ttl=1000)
         with pytest.raises(TimeoutError):
-            await _get_sheet_id(_RaisingSheetsService(), "sid", "Sheet1", cache)
+            await _get_sheet_id(_raising_service(), "sid", "Sheet1", cache)
 
     async def test_with_cache_stale_fallback_still_returns_none_for_missing_sheet(self):
         # A stale cache entry exists but doesn't contain "Missing" — the API
@@ -168,7 +284,7 @@ class TestGetSheetIdExceptionPropagation:
         cache.store("sid", [SheetInfo(title="Other", sheet_id=0)])
         cache.mark_dirty("sid")  # force a refetch attempt that will fail
 
-        sheet_id = await _get_sheet_id(_RaisingSheetsService(), "sid", "Missing", cache)
+        sheet_id = await _get_sheet_id(_raising_service(), "sid", "Missing", cache)
 
         assert sheet_id is None
 
@@ -181,8 +297,14 @@ class TestGetSheetIndexExceptionPropagation:
 
     async def test_transient_api_error_propagates(self):
         with pytest.raises(TimeoutError):
-            await _get_sheet_index(_RaisingSheetsService(), "sid", 0)
+            await _get_sheet_index(_raising_service(), "sid", 0)
 
     async def test_genuine_missing_sheet_still_returns_none(self):
-        sheet_index = await _get_sheet_index(_EmptySheetsService(), "sid", 999)
+        sheet_index = await _get_sheet_index(_empty_service(), "sid", 999)
         assert sheet_index is None
+
+    async def test_matching_sheet_returns_its_index(self):
+        """Happy-path coverage (PR #442 review, issue #442) — same gap as
+        TestGetSheetIdExceptionPropagation above."""
+        sheet_index = await _get_sheet_index(_matching_service(), "sid", 123456)
+        assert sheet_index == 1

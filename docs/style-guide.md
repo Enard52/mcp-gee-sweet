@@ -39,10 +39,11 @@ A single-file domain (no subpackage in `src/`) gets a single flat test file — 
 
 ## Linting — Ruff
 
-**Current config** (`pyproject.toml`): `line-length = 100`, `target-version = "py310"`, and an empty `[tool.ruff.lint]` — meaning only Ruff's bare defaults are active (`E`/`F`/`I`/`W`: pycodestyle errors, pyflakes, import sorting, pycodestyle warnings; confirmed via `ruff check --show-settings`, not assumed). The repo currently passes `ruff check .` cleanly under this set.
+**Current config** lives in `pyproject.toml`'s `[tool.ruff]` and `[tool.ruff.lint]` tables; `uv run ruff check --show-settings` prints the resolved rule set. It isn't copied here, since a copy drifts out of date.
 
-Expanding the rule set is tracked, not decided here:
-- #377 — adopt `UP`/`B`/`C4`/`SIM`/`RUF` (low-churn, recommended)
+The Ruff version is the project's own locked dev dependency (`uv.lock`). CI and the pre-commit hooks both run it through `uv run --frozen ruff`, so pre-commit applies the same Ruff version and config as CI (#974). Pre-commit checks staged Python files; CI checks the whole tree. A commit that changes `pyproject.toml` or `uv.lock` also runs a whole-tree `ruff check .` and `ruff format --check .`, since a config or version change can fail files the commit doesn't touch.
+
+Expanding the rule set further is tracked, not decided here:
 - #378 — `ASYNC` (needs a manual per-call-site look, not a blanket enable)
 - #379 — `ANN` (needs a phased adoption plan, not a flag flip)
 
@@ -50,7 +51,7 @@ Expanding the rule set is tracked, not decided here:
 
 ## Formatting
 
-`ruff-format` runs via pre-commit (`.pre-commit-config.yaml`) alongside `ruff --fix`. Nothing further to configure here — formatting is already automatic and enforced at commit time.
+`ruff format` runs via pre-commit (`.pre-commit-config.yaml`) alongside `ruff check --fix`, both as `uv run --frozen` hooks on the locked Ruff version. Nothing further to configure here — formatting is already automatic and enforced at commit time.
 
 ---
 

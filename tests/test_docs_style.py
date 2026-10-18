@@ -16,6 +16,7 @@ from mcp_gee_sweet.tools.docs.emitter import (
     _run_style_requests,
 )
 from mcp_gee_sweet.tools.docs.style import (
+    _add_or_clear_field,
     _build_named_style_requests,
     _read_body_styles,
     _read_named_styles,
@@ -26,7 +27,7 @@ from mcp_gee_sweet.tools.docs.style import (
 def _make_tool_registry():
     captured = {}
 
-    def tool(annotations=None):
+    def tool(annotations=None, local_only=False):
         def decorator(func):
             captured[func.__name__] = func
             return func
@@ -145,6 +146,53 @@ class TestTextStyleAndFieldsLinkClearing:
         text_style, fields = _text_style_and_fields({"bold": True})
         assert "link" not in text_style
         assert "link" not in fields
+
+
+class TestAddOrClearField:
+    """#448: the general "omit key but keep field mask" helper factored out
+    of _text_style_and_fields's link_url case, now also used directly by
+    content.py's heading-anchor link resolve/strip code — tested on its own
+    generic contract (an arbitrary api_field/value), not just "link", since
+    a future nullable field (e.g. foreground_color) is expected to reuse it
+    without ever touching links at all."""
+
+    def test_truthy_value_sets_field_and_masks_it(self):
+        text_style: dict = {}
+        fields: list[str] = []
+        _add_or_clear_field(text_style, fields, "foregroundColor", {"color": "red"})
+        assert text_style == {"foregroundColor": {"color": "red"}}
+        assert fields == ["foregroundColor"]
+
+    def test_none_value_omits_key_but_still_masks_it(self):
+        text_style: dict = {}
+        fields: list[str] = []
+        _add_or_clear_field(text_style, fields, "foregroundColor", None)
+        assert text_style == {}
+        assert fields == ["foregroundColor"]
+
+    def test_empty_dict_value_is_written_as_is_not_treated_as_clear(self):
+        # PR #778 QA round 1, finding 1: gating on "is not None" rather than
+        # truthiness is deliberate — an explicitly passed empty dict ({}) is
+        # a real value, not a clear request, and must be written into
+        # text_style verbatim rather than silently treated the same as
+        # None. (Whether {} is itself a *valid* Docs API value is the
+        # caller's problem, same as any other value this helper is handed —
+        # not something this generic helper can or should judge.)
+        text_style: dict = {}
+        fields: list[str] = []
+        _add_or_clear_field(text_style, fields, "foregroundColor", {})
+        assert text_style == {"foregroundColor": {}}
+        assert fields == ["foregroundColor"]
+
+    def test_accumulates_onto_existing_text_style_and_fields(self):
+        # Callers (e.g. content.py's heading-anchor code) reuse one
+        # text_style/fields pair across a single request's fields — a second
+        # call must not clobber what the first one already added.
+        text_style: dict = {"bold": True}
+        fields: list[str] = ["bold"]
+        _add_or_clear_field(text_style, fields, "link", {"url": "https://x.com"})
+        assert text_style == {"bold": True, "link": {"url": "https://x.com"}}
+        assert fields == ["bold", "link"]
 
 
 class TestRunStylePhase3:
@@ -628,6 +676,9 @@ class TestCreateParagraphBulletsTool:
     async def test_nesting_level_on_isolated_paragraph_inserts_tabs(self):
         # A single paragraph with no same-list neighbors in the doc at all —
         # nothing to expand, tabs inserted directly for the target itself.
+        # Every unit in the run sits at nesting_level > 0, so a throwaway
+        # 0-tab anchor paragraph is prepended and then deleted (#713) to
+        # stop the API collapsing the run to nestingLevel 0.
         tools = self._setup()
         doc = self._doc([(5, 15, "Item\n", {"listId": "L1"})])
         mock_docs, ctx = self._mocks(doc)
@@ -640,7 +691,64 @@ class TestCreateParagraphBulletsTool:
         reqs = mock_docs.documents().batchUpdate.call_args[1]["body"]["requests"]
         assert reqs[0]["deleteParagraphBullets"]["range"] == {"startIndex": 5, "endIndex": 15}
         assert reqs[1]["insertText"] == {"location": {"index": 5}, "text": "\t\t"}
-        assert reqs[2]["createParagraphBullets"]["range"] == {"startIndex": 5, "endIndex": 17}
+        assert reqs[2]["insertText"] == {"location": {"index": 5}, "text": "\n"}
+        # endIndex = run_end (15) + total_tabs (2) + anchor newline (1)
+        assert reqs[3]["createParagraphBullets"]["range"] == {"startIndex": 5, "endIndex": 18}
+        assert reqs[4]["deleteContentRange"]["range"] == {"startIndex": 5, "endIndex": 6}
+
+    async def test_isolated_all_nonzero_run_wraps_zero_tab_anchor(self):
+        # #713: repairing part of an existing list whose contiguous
+        # same-listId run has NO level-0 member (every neighbour pulled in
+        # by the expansion pass is itself at nestingLevel >= 1). Without a
+        # 0-tab anchor, createParagraphBullets assigns every paragraph
+        # nestingLevel = (its tabs) - (min tabs in range) = 0 and renders
+        # the depth-0 disc glyph despite the bumped indent — the same shape
+        # #439 fixed for emitter.py in PR #711.
+        tools = self._setup()
+        bullet = {"listId": "L1", "nestingLevel": 1}
+        doc = self._doc(
+            [
+                (1, 6, "One\n", bullet),
+                (6, 11, "Two\n", bullet),
+                (11, 17, "Three\n", bullet),
+            ]
+        )
+        mock_docs, ctx = self._mocks(doc)
+
+        result = await tools["create_paragraph_bullets"](
+            doc_id="doc123",
+            ranges=[{"start_index": 6, "end_index": 11, "nesting_level": 1}],
+            ctx=ctx,
+        )
+        assert "error" not in result
+        reqs = mock_docs.documents().batchUpdate.call_args[1]["body"]["requests"]
+        kinds = [next(iter(r)) for r in reqs]
+        # tabs for all three items, then the anchor newline, then one
+        # createParagraphBullets, then the anchor delete.
+        assert kinds == [
+            "deleteParagraphBullets",
+            "insertText",
+            "insertText",
+            "insertText",
+            "insertText",
+            "createParagraphBullets",
+            "deleteContentRange",
+        ]
+        # Tabs are inserted in descending-start order (Three, Two, One), each
+        # unit's own single tab at its own start index — the load-bearing
+        # invariant is that these three land in the request array *before*
+        # the anchor insert below, since both the last of these (index 1) and
+        # the anchor target the identical run_start index (1) and Docs API
+        # requests at the same location apply in array order.
+        assert reqs[1]["insertText"] == {"location": {"index": 11}, "text": "\t"}
+        assert reqs[2]["insertText"] == {"location": {"index": 6}, "text": "\t"}
+        assert reqs[3]["insertText"] == {"location": {"index": 1}, "text": "\t"}
+        anchor_insert = reqs[4]["insertText"]
+        assert anchor_insert == {"location": {"index": 1}, "text": "\n"}
+        create = reqs[5]["createParagraphBullets"]
+        # run_end (17) + total_tabs (1 per item * 3) + anchor newline (1)
+        assert create["range"] == {"startIndex": 1, "endIndex": 21}
+        assert reqs[6]["deleteContentRange"]["range"] == {"startIndex": 1, "endIndex": 2}
 
     async def test_expands_to_include_same_list_neighbors(self):
         # #334 round 2's core fix: nesting the middle paragraph of an
@@ -732,7 +840,12 @@ class TestCreateParagraphBulletsTool:
         )
         reqs = mock_docs.documents().batchUpdate.call_args[1]["body"]["requests"]
         insert_indices = [r["insertText"]["location"]["index"] for r in reqs if "insertText" in r]
-        assert insert_indices == [20, 1]
+        # Each run is all-nesting_level>0, so each emits a tab insert plus a
+        # 0-tab anchor newline insert (#713), both at the run start. The
+        # higher-position run (20) is still fully emitted before the lower
+        # one (1) so an earlier tab/anchor insert never shifts a
+        # not-yet-processed run's indices.
+        assert insert_indices == [20, 20, 1, 1]
 
     async def test_omitted_preset_preserves_existing_numbered_list(self):
         # #334 round 2's core fix: repairing part of an existing NUMBERED

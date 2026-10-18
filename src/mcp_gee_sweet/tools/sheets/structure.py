@@ -1,4 +1,6 @@
-from typing import Any
+import textwrap
+from itertools import groupby
+from typing import Any, NamedTuple
 
 from mcp.server.mcpserver import Context
 from mcp.types import ToolAnnotations
@@ -10,6 +12,7 @@ from .helpers import (
     _get_sheet_id,
     _get_sheet_index,
     _parse_a1_notation,
+    _parse_a1_notation_or_error,
     _quote_sheet_name,
 )
 
@@ -27,12 +30,15 @@ _VALID_BORDER_STYLES = [
 
 _VALID_SORT_ORDERS = ["ASCENDING", "DESCENDING"]
 
+# Only the BooleanCondition types setDataValidation accepts. BLANK, NOT_BLANK,
+# TEXT_STARTS_WITH and TEXT_ENDS_WITH are conditional-formatting/filter-only
+# (the discovery doc's enum descriptions say so), and the API rejects each
+# with "ConditionType '<type>' is not supported in data validation" (live-
+# confirmed, PR #986 QA round 2), so they're rejected locally instead.
 _VALID_CONDITION_TYPES = [
     "BOOLEAN",
     "TEXT_CONTAINS",
     "TEXT_NOT_CONTAINS",
-    "TEXT_STARTS_WITH",
-    "TEXT_ENDS_WITH",
     "TEXT_EQ",
     "TEXT_IS_EMAIL",
     "TEXT_IS_URL",
@@ -54,14 +60,187 @@ _VALID_CONDITION_TYPES = [
     "NUMBER_NOT_BETWEEN",
     "ONE_OF_RANGE",
     "ONE_OF_LIST",
-    "BLANK",
-    "NOT_BLANK",
     "CUSTOM_FORMULA",
 ]
 
 
+class _ConditionSpec(NamedTuple):
+    """One entry in _CONDITION_SPECS: the expected `values` shape for a
+    condition_type, plus the prose describing it.
+
+    `counts`: valid values-list lengths, or None meaning "at least 1, no
+    upper bound" (ONE_OF_LIST's dropdown items). `doc`: text describing what
+    `values` means for this condition_type. `group`: an explicit tag naming
+    which docstring line this condition_type renders on — deliberately
+    independent of (counts, doc) equality. Two condition_types can end up
+    with identical counts and doc text while remaining semantically distinct
+    (TEXT_IS_EMAIL/TEXT_IS_URL and the since-removed BLANK/NOT_BLANK both
+    rendered "no values", but text-format validity and blank-cell checks
+    aren't the same concept)
+    — grouping on the explicit tag instead of incidental text equality means
+    the two can never silently merge onto one line just because their
+    rendered text happens to coincide (PR #759 review, live-confirmed
+    regression in an earlier version of this fix).
+
+    All three fields are consumed from this one place — `counts` by
+    `_condition_value_count_error`, `doc`/`group` (via
+    `_condition_type_doc_block`) by add_data_validation's generated
+    docstring — so the facts can no longer drift apart the way the old
+    separately hand-maintained _CONDITION_VALUE_COUNTS dict and docstring
+    prose could (issue #751).
+    """
+
+    counts: tuple[int, ...] | None
+    doc: str
+    group: str
+
+
+_CONDITION_SPECS: dict[str, _ConditionSpec] = {
+    "ONE_OF_LIST": _ConditionSpec(
+        None, "dropdown of custom values (values = the list items)", "one_of_list"
+    ),
+    "ONE_OF_RANGE": _ConditionSpec(
+        (1,),
+        "dropdown sourced from another range (values = one item, the source range "
+        'in A1 notation, e.g. ["Sheet2!A:A"] — a leading "=" is added automatically '
+        "if you omit it)",
+        "one_of_range",
+    ),
+    "BOOLEAN": _ConditionSpec(
+        (0, 2),
+        "checkbox (omit values for a plain TRUE/FALSE checkbox, or give two values "
+        "for custom checked/unchecked labels)",
+        "boolean",
+    ),
+    "NUMBER_GREATER": _ConditionSpec((1,), "one numeric value", "number_single"),
+    "NUMBER_GREATER_THAN_EQ": _ConditionSpec((1,), "one numeric value", "number_single"),
+    "NUMBER_LESS": _ConditionSpec((1,), "one numeric value", "number_single"),
+    "NUMBER_LESS_THAN_EQ": _ConditionSpec((1,), "one numeric value", "number_single"),
+    "NUMBER_EQ": _ConditionSpec((1,), "one numeric value", "number_single"),
+    "NUMBER_NOT_EQ": _ConditionSpec((1,), "one numeric value", "number_single"),
+    "NUMBER_BETWEEN": _ConditionSpec((2,), "two numeric values", "number_pair"),
+    "NUMBER_NOT_BETWEEN": _ConditionSpec((2,), "two numeric values", "number_pair"),
+    "DATE_EQ": _ConditionSpec((1,), 'one date value, e.g. "2025-01-01"', "date_single"),
+    "DATE_BEFORE": _ConditionSpec((1,), 'one date value, e.g. "2025-01-01"', "date_single"),
+    "DATE_AFTER": _ConditionSpec((1,), 'one date value, e.g. "2025-01-01"', "date_single"),
+    "DATE_ON_OR_BEFORE": _ConditionSpec((1,), 'one date value, e.g. "2025-01-01"', "date_single"),
+    "DATE_ON_OR_AFTER": _ConditionSpec((1,), 'one date value, e.g. "2025-01-01"', "date_single"),
+    "DATE_BETWEEN": _ConditionSpec((2,), "two date values", "date_pair"),
+    "DATE_NOT_BETWEEN": _ConditionSpec((2,), "two date values", "date_pair"),
+    "DATE_IS_VALID": _ConditionSpec((0,), "no values; any parseable date passes", "date_valid"),
+    "TEXT_CONTAINS": _ConditionSpec((1,), "one text value", "text_single"),
+    "TEXT_NOT_CONTAINS": _ConditionSpec((1,), "one text value", "text_single"),
+    "TEXT_EQ": _ConditionSpec((1,), "one text value", "text_single"),
+    "TEXT_IS_EMAIL": _ConditionSpec((0,), "no values", "text_format"),
+    "TEXT_IS_URL": _ConditionSpec((0,), "no values", "text_format"),
+    "CUSTOM_FORMULA": _ConditionSpec((1,), 'one formula string, e.g. "=A1>0"', "custom_formula"),
+}
+
+
+def _condition_type_doc_block(indent: str = " " * 16) -> str:
+    """Render add_data_validation's `condition_type` docstring bullet list
+    from _CONDITION_SPECS, grouping consecutive condition_types by their
+    explicit `group` tag (dict insertion order already puts each group's
+    members together) onto one line each — e.g. every one-numeric-value
+    NUMBER_* type — the same grouping the original hand-written prose used,
+    so the generated text reads the same way but can't drift from what
+    _condition_value_count_error actually enforces (issue #751). Asserts
+    every member of a group shares an identical spec, since two entries
+    tagged with the same group but different counts/doc would be a
+    _CONDITION_SPECS authoring bug, not a legitimate grouping.
+    """
+    lines: list[str] = []
+    for _, entries_iter in groupby(_CONDITION_SPECS.items(), key=lambda kv: kv[1].group):
+        entries = list(entries_iter)
+        specs = {spec for _, spec in entries}
+        assert len(specs) == 1, f"inconsistent specs sharing one group tag: {entries!r}"
+        types = [condition_type for condition_type, _ in entries]
+        lines.append(_render_condition_group(types, entries[0][1], indent))
+    return "\n".join(lines)
+
+
+def _render_condition_group(
+    types: list[str], spec: _ConditionSpec, indent: str, width: int = 92
+) -> str:
+    """Render one group's line(s), soft-wrapping like the rest of this file's
+    hand-written docstrings do for a long line (PR #759 review) rather than
+    emitting one unwrapped ~115-char line."""
+    names = ", ".join(f'"{t}"' for t in types)
+    text = f"{names} — {spec.doc}"
+    wrapped = textwrap.wrap(
+        text,
+        width=width,
+        initial_indent=indent,
+        subsequent_indent=indent,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+    return "\n".join(wrapped)
+
+
+_ADD_DATA_VALIDATION_DOCSTRING = f"""Set a data validation rule on a cell range — dropdown lists, checkboxes, or
+        date/number/text constraints.
+
+        Args:
+            spreadsheet_id: The ID of the spreadsheet
+            sheet: The name of the sheet
+            range: A1 notation range to validate (e.g. "A2:A100")
+            condition_type: One of the Sheets API's condition types:
+{_condition_type_doc_block()}
+            values: Condition values as plain strings — see condition_type above for
+                    how many each type expects. Numbers and dates are passed as
+                    strings; the Sheets API parses them per the cell's format.
+            input_message: Optional help text shown when a user selects a cell in range.
+            strict: If True (default), reject input that fails the rule. If False,
+                    show a warning but still allow it.
+            show_custom_ui: If True (default), show the built-in dropdown/checkbox UI
+                    for condition types that support one (ONE_OF_LIST, ONE_OF_RANGE,
+                    BOOLEAN). Ignored by condition types with no UI (e.g. NUMBER_*,
+                    TEXT_*).
+
+        Returns:
+            Result of the batchUpdate operation.
+        """
+
+
+def _condition_value_count_error(
+    condition_type: str, values: list[str] | None
+) -> dict[str, Any] | None:
+    """Return an {"error": ...} dict if `values` doesn't match the count
+    condition_type expects. Assumes condition_type is already a valid,
+    upper-cased member of _VALID_CONDITION_TYPES.
+
+    condition_type not being a key in _CONDITION_SPECS (a future desync
+    between it and _VALID_CONDITION_TYPES — guarded against by
+    TestAddDataValidation::test_condition_specs_covers_every_valid_condition_type)
+    skips the local check rather than raising a KeyError; the real Sheets
+    API still validates the request either way (PR #750 review).
+    """
+    if condition_type not in _CONDITION_SPECS:
+        return None
+    count = len(values) if values else 0
+    expected = _CONDITION_SPECS[condition_type].counts
+    if expected is None:
+        if count < 1:
+            return {
+                "error": f"condition_type '{condition_type}' requires at least 1 value, got {count}"
+            }
+        return None
+    if count not in expected:
+        needed = " or ".join(str(n) for n in expected)
+        return {
+            "error": f"condition_type '{condition_type}' requires exactly {needed} value(s), got {count}"
+        }
+    return None
+
+
 def _border_spec(border: dict) -> dict[str, Any]:
-    """Convert a {"style", "color", "width"} dict into a Sheets API Border object."""
+    """Convert a {"style", "color", "width"} dict into a Sheets API Border object.
+
+    Only "style" is validated locally (by the caller, against
+    _VALID_BORDER_STYLES) — "color"/"width" are passed through unchecked, so a
+    malformed value surfaces only as a raw Sheets API 400.
+    """
     spec: dict[str, Any] = {"style": border["style"].upper()}
     if "color" in border:
         spec["color"] = border["color"]
@@ -70,19 +249,127 @@ def _border_spec(border: dict) -> dict[str, Any]:
     return spec
 
 
+def _grid_range(range_str: str) -> dict[str, Any]:
+    """Build a Sheets API GridRange dict, minus its sheetId, from an A1
+    notation range string. Only _resolve_grid_range calls this; it adds the
+    sheetId."""
+    indices = _parse_a1_notation(range_str)
+    grid_range: dict[str, Any] = {
+        "startRowIndex": indices.get("startRowIndex", 0),
+        "startColumnIndex": indices.get("startColumnIndex", 0),
+    }
+    if "endRowIndex" in indices:
+        grid_range["endRowIndex"] = indices["endRowIndex"]
+    if "endColumnIndex" in indices:
+        grid_range["endColumnIndex"] = indices["endColumnIndex"]
+    return grid_range
+
+
+async def _resolve_grid_range(
+    sheets_service: Any,
+    spreadsheet_id: str,
+    sheet: str,
+    range_str: str,
+    cache: Any,
+    drive_service: Any,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Parse range_str, resolve `sheet`, and return a complete GridRange.
+
+    The range is parsed first, so a malformed range is rejected before the
+    sheet lookup, which is an API call when the structure cache is cold
+    (#955). The sheetId is set here, in one place, because a GridRange
+    without one silently targets the first tab (sheet 0) instead of failing
+    (PR #986 QA round 1).
+
+    Returns (None, grid_range) on success, or (error, None) for invalid A1
+    notation (issue #747) or a sheet that isn't found, matching this
+    codebase's error-or-None convention (_enum_value_error,
+    _resolve_end_index_or_error above).
+    """
+    try:
+        grid_range = _grid_range(range_str)
+    except ValueError as e:
+        return {"error": str(e)}, None
+
+    sheet_id = await _get_sheet_id(sheets_service, spreadsheet_id, sheet, cache, drive_service)
+    if sheet_id is None:
+        return {"error": f"Sheet '{sheet}' not found"}, None
+    return None, {"sheetId": sheet_id, **grid_range}
+
+
+async def _apply_data_validation(
+    sheets_service,
+    spreadsheet_id: str,
+    sheet: str,
+    range_str: str,
+    cache,
+    drive_service,
+    rule: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Resolve `sheet` to a sheetId and issue a setDataValidation request.
+
+    `rule=None` omits the rule field, which clears any existing rule on the
+    range (clear_data_validation); a rule dict sets one (add_data_validation).
+    Shared scaffolding extracted per PR #745 review — the two callers were
+    duplicating this sheet-resolution + _grid_range + batchUpdate block
+    almost verbatim.
+    """
+    error, grid_range = await _resolve_grid_range(
+        sheets_service, spreadsheet_id, sheet, range_str, cache, drive_service
+    )
+    if error:
+        return error
+
+    set_data_validation: dict[str, Any] = {"range": grid_range}
+    if rule is not None:
+        set_data_validation["rule"] = rule
+
+    return await execute_in_thread(
+        sheets_service.spreadsheets()
+        .batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"requests": [{"setDataValidation": set_data_validation}]},
+        )
+        .execute,
+        sheets_service,
+    )
+
+
+def _enum_value_error(
+    value: str, valid_values: list[str], field_name: str, context: str | None = None
+) -> dict[str, Any] | None:
+    """Return an {"error": ...} dict if value.upper() isn't in valid_values.
+
+    context, when given, is appended to the message verbatim (e.g.
+    "for 'top'" or "for column_index 0") for a caller that validates the
+    same field under several different keys — the caller controls the full
+    wording, including any quoting, since callers disagree on the shape.
+    """
+    if value.upper() not in valid_values:
+        suffix = f" {context}" if context else ""
+        return {
+            "error": f"Invalid {field_name} '{value}'{suffix}. Must be one of: {', '.join(valid_values)}"
+        }
+    return None
+
+
 def _per_column_ranges(sheet_id: int, indices: dict) -> list[dict]:
     """Split a parsed A1 range into one source-range dict per column.
 
     The Sheets addChart API requires each entry in a ChartSourceRange.sources
     list to span exactly one row or one column.  Passing a multi-column
     rectangle as a single source produces a 400 error.
+
+    The caller must ensure `indices` has an explicit `endColumnIndex`
+    (`_chart_range_error`); there's no safe default for a range
+    with an open column end (#954).
     """
     row_start = indices.get("startRowIndex", 0)
     row_end = indices.get("endRowIndex")
     col_start = indices.get("startColumnIndex", 0)
-    col_end = indices.get("endColumnIndex", col_start + 1)
+    col_end = indices["endColumnIndex"]
 
-    base = {"sheetId": sheet_id, "startRowIndex": row_start, "startColumnIndex": 0}
+    base = {"sheetId": sheet_id, "startRowIndex": row_start}
     if row_end is not None:
         base["endRowIndex"] = row_end
 
@@ -92,14 +379,93 @@ def _per_column_ranges(sheet_id: int, indices: dict) -> list[dict]:
     ]
 
 
-async def _set_dimension_hidden(
+def _chart_range_error(chart_type: str, data_range: str, indices: dict) -> dict[str, Any] | None:
+    """Return an {"error": ...} dict if a chart range can't build the chart it names.
+
+    Each rejected shape used to succeed and silently chart the wrong data:
+    - No end column: `_parse_a1_notation` accepts a cell-to-row range
+      (`B2:5`) and a row-only range (`1:5`). Expanding to the sheet's full
+      width would chart every empty trailing column as a series, and
+      assuming one column builds a domain with no real series (#954).
+    - Fewer than 2 columns for a domain-based type: the first column is the
+      domain, so a single column leaves nothing to chart against it.
+      HISTOGRAM has no domain and takes one column.
+    - More than 2 columns for PIE: a pie chart has exactly one series, so
+      every column past the second would be dropped.
+
+    `chart_type` must already be upper-cased.
+    """
+    if "endColumnIndex" not in indices:
+        return {
+            "error": (
+                f"data_range '{data_range}' has no end column; add_chart needs explicit "
+                "column bounds (e.g. 'A1:C10' or 'A:C')"
+            )
+        }
+    num_cols = indices["endColumnIndex"] - indices.get("startColumnIndex", 0)
+    if chart_type == "PIE" and num_cols != 2:
+        return {
+            "error": (
+                f"data_range '{data_range}' spans {num_cols} column(s); a PIE chart needs "
+                "exactly 2 (labels, then values)"
+            )
+        }
+    if chart_type != "HISTOGRAM" and num_cols < 2:
+        return {
+            "error": (
+                f"data_range '{data_range}' spans 1 column; a {chart_type} chart needs at "
+                "least 2 (the first column is the domain, the rest are series)"
+            )
+        }
+    return None
+
+
+def _range_order_error(
+    start: int, end: int | None, start_label: str, end_label: str
+) -> dict[str, Any] | None:
+    """Return an {"error": ...} dict if end (inclusive, when given) precedes start."""
+    if end is not None and end < start:
+        return {"error": f"{end_label} ({end}) must be >= {start_label} ({start})"}
+    return None
+
+
+def _positive_value_error(name: str, value: int) -> dict[str, Any] | None:
+    """Return an {"error": ...} dict if value is not a positive integer."""
+    if value <= 0:
+        return {"error": f"{name} must be positive, got {value}"}
+    return None
+
+
+def _non_negative_value_error(name: str, value: int) -> dict[str, Any] | None:
+    """Return an {"error": ...} dict if value is negative."""
+    if value < 0:
+        return {"error": f"{name} must be non-negative, got {value}"}
+    return None
+
+
+def _resolve_end_index_or_error(
+    start: int, end: int | None, start_label: str, end_label: str
+) -> tuple[dict[str, Any] | None, int | None]:
+    """Validate an inclusive end (if given) against start, then compute the
+    exclusive end index the Sheets API expects.
+
+    Returns (error, None) on failure, or (None, end_index) on success.
+    """
+    error = _range_order_error(start, end, start_label, end_label)
+    if error:
+        return error, None
+    return None, (end if end is not None else start) + 1
+
+
+async def _update_dimension_properties(
     sheets_service,
     spreadsheet_id: str,
     sheet_id: int,
     dimension: str,
     start_index: int,
     end_index: int,
-    hidden: bool,
+    properties: dict[str, Any],
+    fields: str,
 ) -> dict[str, Any]:
     return await execute_in_thread(
         sheets_service.spreadsheets()
@@ -115,43 +481,8 @@ async def _set_dimension_hidden(
                                 "startIndex": start_index,
                                 "endIndex": end_index,
                             },
-                            "properties": {"hiddenByUser": hidden},
-                            "fields": "hiddenByUser",
-                        }
-                    }
-                ]
-            },
-        )
-        .execute,
-        sheets_service,
-    )
-
-
-async def _set_dimension_pixel_size(
-    sheets_service,
-    spreadsheet_id: str,
-    sheet_id: int,
-    dimension: str,
-    start_index: int,
-    end_index: int,
-    pixel_size: int,
-) -> dict[str, Any]:
-    return await execute_in_thread(
-        sheets_service.spreadsheets()
-        .batchUpdate(
-            spreadsheetId=spreadsheet_id,
-            body={
-                "requests": [
-                    {
-                        "updateDimensionProperties": {
-                            "range": {
-                                "sheetId": sheet_id,
-                                "dimension": dimension,
-                                "startIndex": start_index,
-                                "endIndex": end_index,
-                            },
-                            "properties": {"pixelSize": pixel_size},
-                            "fields": "pixelSize",
+                            "properties": properties,
+                            "fields": fields,
                         }
                     }
                 ]
@@ -191,6 +522,87 @@ async def _auto_resize_dimension(
         )
         .execute,
         sheets_service,
+    )
+
+
+def _validate_resize_params(
+    start_index: int,
+    end_index_inclusive: int | None,
+    pixel_size: int | None,
+    auto_resize: bool,
+    start_label: str,
+    end_label: str,
+) -> tuple[dict[str, Any] | None, int | None]:
+    """Pure parameter validation for resize_rows/resize_columns — no I/O, so it
+    can be unit-tested without a mock service.
+
+    Returns (error, None) on failure, or (None, end_index) on success.
+    """
+    if pixel_size is None and not auto_resize:
+        return {"error": "Specify pixel_size or set auto_resize=True"}, None
+    if pixel_size is not None and auto_resize:
+        return {"error": "Specify only one of pixel_size or auto_resize"}, None
+
+    error = _non_negative_value_error(start_label, start_index)
+    if error:
+        return error, None
+
+    error, end_index = _resolve_end_index_or_error(
+        start_index, end_index_inclusive, start_label, end_label
+    )
+    if error:
+        return error, None
+
+    if pixel_size is not None:
+        error = _positive_value_error("pixel_size", pixel_size)
+        if error:
+            return error, None
+
+    return None, end_index
+
+
+async def _resize_dimension(
+    lc,
+    spreadsheet_id: str,
+    sheet: str,
+    dimension: str,
+    start_index: int,
+    end_index_inclusive: int | None,
+    pixel_size: int | None,
+    auto_resize: bool,
+    start_label: str,
+    end_label: str,
+) -> dict[str, Any]:
+    """Shared implementation behind resize_rows/resize_columns."""
+    sheets_service = lc.sheets_service
+
+    sheet_id = await _get_sheet_id(
+        sheets_service, spreadsheet_id, sheet, lc.cache, lc.drive_service
+    )
+    if sheet_id is None:
+        return {"error": f"Sheet '{sheet}' not found"}
+
+    error, end_index = _validate_resize_params(
+        start_index, end_index_inclusive, pixel_size, auto_resize, start_label, end_label
+    )
+    if error:
+        return error
+    assert end_index is not None  # guaranteed whenever error is None
+
+    if auto_resize:
+        return await _auto_resize_dimension(
+            sheets_service, spreadsheet_id, sheet_id, dimension, start_index, end_index
+        )
+
+    return await _update_dimension_properties(
+        sheets_service,
+        spreadsheet_id,
+        sheet_id,
+        dimension,
+        start_index,
+        end_index,
+        {"pixelSize": pixel_size},
+        "pixelSize",
     )
 
 
@@ -235,17 +647,8 @@ def register(tool):
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
 
-        src = await execute_in_thread(
-            sheets_service.spreadsheets().get(spreadsheetId=src_spreadsheet).execute,
-            sheets_service,
-        )
-        src_sheet_id = next(
-            (
-                s["properties"]["sheetId"]
-                for s in src["sheets"]
-                if s["properties"]["title"] == src_sheet
-            ),
-            None,
+        src_sheet_id = await _get_sheet_id(
+            sheets_service, src_spreadsheet, src_sheet, lc.cache, lc.drive_service
         )
 
         if src_sheet_id is None:
@@ -373,19 +776,9 @@ def register(tool):
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
 
-        spreadsheet_data = await execute_in_thread(
-            sheets_service.spreadsheets().get(spreadsheetId=spreadsheet).execute,
-            sheets_service,
+        sheet_id = await _get_sheet_id(
+            sheets_service, spreadsheet, sheet, lc.cache, lc.drive_service
         )
-        sheet_id = next(
-            (
-                s["properties"]["sheetId"]
-                for s in spreadsheet_data["sheets"]
-                if s["properties"]["title"] == sheet
-            ),
-            None,
-        )
-
         if sheet_id is None:
             return {"error": f"Sheet '{sheet}' not found"}
 
@@ -464,7 +857,8 @@ def register(tool):
             start_row: 0-based row index to start adding. If not provided, adds at the beginning.
 
         Returns:
-            Result of the operation
+            Result of the operation. Returns {"error": ...} without calling the
+            Sheets API if start_row is negative or count isn't positive.
         """
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
@@ -474,6 +868,15 @@ def register(tool):
         )
         if sheet_id is None:
             return {"error": f"Sheet '{sheet}' not found"}
+
+        if start_row is not None:
+            error = _non_negative_value_error("start_row", start_row)
+            if error:
+                return error
+
+        error = _positive_value_error("count", count)
+        if error:
+            return error
 
         start = start_row if start_row is not None else 0
         result = await execute_in_thread(
@@ -520,7 +923,8 @@ def register(tool):
             start_column: 0-based column index to start adding. If not provided, adds at the beginning.
 
         Returns:
-            Result of the operation
+            Result of the operation. Returns {"error": ...} without calling the
+            Sheets API if start_column is negative or count isn't positive.
         """
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
@@ -530,6 +934,15 @@ def register(tool):
         )
         if sheet_id is None:
             return {"error": f"Sheet '{sheet}' not found"}
+
+        if start_column is not None:
+            error = _non_negative_value_error("start_column", start_column)
+            if error:
+                return error
+
+        error = _positive_value_error("count", count)
+        if error:
+            return error
 
         start = start_column if start_column is not None else 0
         result = await execute_in_thread(
@@ -611,7 +1024,8 @@ def register(tool):
                      If omitted, deletes only start_row.
 
         Returns:
-            Result of the operation
+            Result of the operation. Returns {"error": ...} without calling the
+            Sheets API if start_row is negative or end_row precedes start_row.
         """
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
@@ -622,7 +1036,13 @@ def register(tool):
         if sheet_id is None:
             return {"error": f"Sheet '{sheet}' not found"}
 
-        end_index = (end_row if end_row is not None else start_row) + 1  # exclusive
+        error = _non_negative_value_error("start_row", start_row)
+        if error:
+            return error
+
+        error, end_index = _resolve_end_index_or_error(start_row, end_row, "start_row", "end_row")
+        if error:
+            return error
 
         return await execute_in_thread(
             sheets_service.spreadsheets()
@@ -666,7 +1086,8 @@ def register(tool):
                         If omitted, deletes only start_column.
 
         Returns:
-            Result of the operation
+            Result of the operation. Returns {"error": ...} without calling the
+            Sheets API if start_column is negative or end_column precedes start_column.
         """
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
@@ -677,7 +1098,15 @@ def register(tool):
         if sheet_id is None:
             return {"error": f"Sheet '{sheet}' not found"}
 
-        end_index = (end_column if end_column is not None else start_column) + 1  # exclusive
+        error = _non_negative_value_error("start_column", start_column)
+        if error:
+            return error
+
+        error, end_index = _resolve_end_index_or_error(
+            start_column, end_column, "start_column", "end_column"
+        )
+        if error:
+            return error
 
         return await execute_in_thread(
             sheets_service.spreadsheets()
@@ -721,7 +1150,8 @@ def register(tool):
                      If omitted, hides only start_row.
 
         Returns:
-            Result of the batchUpdate operation
+            Result of the batchUpdate operation. Returns {"error": ...} without
+            calling the Sheets API if start_row is negative or end_row precedes start_row.
         """
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
@@ -732,10 +1162,23 @@ def register(tool):
         if sheet_id is None:
             return {"error": f"Sheet '{sheet}' not found"}
 
-        end_index = (end_row if end_row is not None else start_row) + 1  # exclusive
+        error = _non_negative_value_error("start_row", start_row)
+        if error:
+            return error
 
-        return await _set_dimension_hidden(
-            sheets_service, spreadsheet_id, sheet_id, "ROWS", start_row, end_index, True
+        error, end_index = _resolve_end_index_or_error(start_row, end_row, "start_row", "end_row")
+        if error:
+            return error
+
+        return await _update_dimension_properties(
+            sheets_service,
+            spreadsheet_id,
+            sheet_id,
+            "ROWS",
+            start_row,
+            end_index,
+            {"hiddenByUser": True},
+            "hiddenByUser",
         )
 
     @tool(annotations=ToolAnnotations(title="Unhide Rows", destructiveHint=True))
@@ -757,7 +1200,8 @@ def register(tool):
                      If omitted, unhides only start_row.
 
         Returns:
-            Result of the batchUpdate operation
+            Result of the batchUpdate operation. Returns {"error": ...} without
+            calling the Sheets API if start_row is negative or end_row precedes start_row.
         """
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
@@ -768,10 +1212,23 @@ def register(tool):
         if sheet_id is None:
             return {"error": f"Sheet '{sheet}' not found"}
 
-        end_index = (end_row if end_row is not None else start_row) + 1  # exclusive
+        error = _non_negative_value_error("start_row", start_row)
+        if error:
+            return error
 
-        return await _set_dimension_hidden(
-            sheets_service, spreadsheet_id, sheet_id, "ROWS", start_row, end_index, False
+        error, end_index = _resolve_end_index_or_error(start_row, end_row, "start_row", "end_row")
+        if error:
+            return error
+
+        return await _update_dimension_properties(
+            sheets_service,
+            spreadsheet_id,
+            sheet_id,
+            "ROWS",
+            start_row,
+            end_index,
+            {"hiddenByUser": False},
+            "hiddenByUser",
         )
 
     @tool(annotations=ToolAnnotations(title="Hide Columns", destructiveHint=True))
@@ -793,7 +1250,8 @@ def register(tool):
                         If omitted, hides only start_column.
 
         Returns:
-            Result of the batchUpdate operation
+            Result of the batchUpdate operation. Returns {"error": ...} without
+            calling the Sheets API if start_column is negative or end_column precedes start_column.
         """
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
@@ -804,10 +1262,25 @@ def register(tool):
         if sheet_id is None:
             return {"error": f"Sheet '{sheet}' not found"}
 
-        end_index = (end_column if end_column is not None else start_column) + 1  # exclusive
+        error = _non_negative_value_error("start_column", start_column)
+        if error:
+            return error
 
-        return await _set_dimension_hidden(
-            sheets_service, spreadsheet_id, sheet_id, "COLUMNS", start_column, end_index, True
+        error, end_index = _resolve_end_index_or_error(
+            start_column, end_column, "start_column", "end_column"
+        )
+        if error:
+            return error
+
+        return await _update_dimension_properties(
+            sheets_service,
+            spreadsheet_id,
+            sheet_id,
+            "COLUMNS",
+            start_column,
+            end_index,
+            {"hiddenByUser": True},
+            "hiddenByUser",
         )
 
     @tool(annotations=ToolAnnotations(title="Unhide Columns", destructiveHint=True))
@@ -829,7 +1302,8 @@ def register(tool):
                         If omitted, unhides only start_column.
 
         Returns:
-            Result of the batchUpdate operation
+            Result of the batchUpdate operation. Returns {"error": ...} without
+            calling the Sheets API if start_column is negative or end_column precedes start_column.
         """
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
@@ -840,10 +1314,25 @@ def register(tool):
         if sheet_id is None:
             return {"error": f"Sheet '{sheet}' not found"}
 
-        end_index = (end_column if end_column is not None else start_column) + 1  # exclusive
+        error = _non_negative_value_error("start_column", start_column)
+        if error:
+            return error
 
-        return await _set_dimension_hidden(
-            sheets_service, spreadsheet_id, sheet_id, "COLUMNS", start_column, end_index, False
+        error, end_index = _resolve_end_index_or_error(
+            start_column, end_column, "start_column", "end_column"
+        )
+        if error:
+            return error
+
+        return await _update_dimension_properties(
+            sheets_service,
+            spreadsheet_id,
+            sheet_id,
+            "COLUMNS",
+            start_column,
+            end_index,
+            {"hiddenByUser": False},
+            "hiddenByUser",
         )
 
     @tool(annotations=ToolAnnotations(title="Resize Rows", destructiveHint=True))
@@ -870,31 +1359,22 @@ def register(tool):
                          an explicit pixel_size.
 
         Returns:
-            Result of the batchUpdate operation
+            Result of the batchUpdate operation. Returns {"error": ...} without
+            calling the Sheets API if start_row is negative, end_row precedes
+            start_row, or pixel_size isn't positive.
         """
         lc = ctx.request_context.lifespan_context
-        sheets_service = lc.sheets_service
-
-        if pixel_size is None and not auto_resize:
-            return {"error": "Specify pixel_size or set auto_resize=True"}
-        if pixel_size is not None and auto_resize:
-            return {"error": "Specify only one of pixel_size or auto_resize"}
-
-        sheet_id = await _get_sheet_id(
-            sheets_service, spreadsheet_id, sheet, lc.cache, lc.drive_service
-        )
-        if sheet_id is None:
-            return {"error": f"Sheet '{sheet}' not found"}
-
-        end_index = (end_row if end_row is not None else start_row) + 1  # exclusive
-
-        if auto_resize:
-            return await _auto_resize_dimension(
-                sheets_service, spreadsheet_id, sheet_id, "ROWS", start_row, end_index
-            )
-
-        return await _set_dimension_pixel_size(
-            sheets_service, spreadsheet_id, sheet_id, "ROWS", start_row, end_index, pixel_size
+        return await _resize_dimension(
+            lc,
+            spreadsheet_id,
+            sheet,
+            "ROWS",
+            start_row,
+            end_row,
+            pixel_size,
+            auto_resize,
+            "start_row",
+            "end_row",
         )
 
     @tool(annotations=ToolAnnotations(title="Resize Columns", destructiveHint=True))
@@ -921,31 +1401,22 @@ def register(tool):
                          an explicit pixel_size.
 
         Returns:
-            Result of the batchUpdate operation
+            Result of the batchUpdate operation. Returns {"error": ...} without
+            calling the Sheets API if start_column is negative, end_column precedes
+            start_column, or pixel_size isn't positive.
         """
         lc = ctx.request_context.lifespan_context
-        sheets_service = lc.sheets_service
-
-        if pixel_size is None and not auto_resize:
-            return {"error": "Specify pixel_size or set auto_resize=True"}
-        if pixel_size is not None and auto_resize:
-            return {"error": "Specify only one of pixel_size or auto_resize"}
-
-        sheet_id = await _get_sheet_id(
-            sheets_service, spreadsheet_id, sheet, lc.cache, lc.drive_service
-        )
-        if sheet_id is None:
-            return {"error": f"Sheet '{sheet}' not found"}
-
-        end_index = (end_column if end_column is not None else start_column) + 1  # exclusive
-
-        if auto_resize:
-            return await _auto_resize_dimension(
-                sheets_service, spreadsheet_id, sheet_id, "COLUMNS", start_column, end_index
-            )
-
-        return await _set_dimension_pixel_size(
-            sheets_service, spreadsheet_id, sheet_id, "COLUMNS", start_column, end_index, pixel_size
+        return await _resize_dimension(
+            lc,
+            spreadsheet_id,
+            sheet,
+            "COLUMNS",
+            start_column,
+            end_column,
+            pixel_size,
+            auto_resize,
+            "start_column",
+            "end_column",
         )
 
     @tool(annotations=ToolAnnotations(title="Format Cells", destructiveHint=True))
@@ -990,14 +1461,6 @@ def register(tool):
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
 
-        sheet_id = await _get_sheet_id(
-            sheets_service, spreadsheet_id, sheet, lc.cache, lc.drive_service
-        )
-        if sheet_id is None:
-            return {"error": f"Sheet '{sheet}' not found"}
-
-        indices = _parse_a1_notation(range)
-
         cell_format: dict[str, Any] = {}
         fields: list[str] = []
 
@@ -1040,15 +1503,11 @@ def register(tool):
         if not fields:
             return {"error": "No formatting parameters provided"}
 
-        grid_range = {
-            "sheetId": sheet_id,
-            "startRowIndex": indices.get("startRowIndex", 0),
-            "startColumnIndex": indices.get("startColumnIndex", 0),
-        }
-        if "endRowIndex" in indices:
-            grid_range["endRowIndex"] = indices["endRowIndex"]
-        if "endColumnIndex" in indices:
-            grid_range["endColumnIndex"] = indices["endColumnIndex"]
+        error, grid_range = await _resolve_grid_range(
+            sheets_service, spreadsheet_id, sheet, range, lc.cache, lc.drive_service
+        )
+        if error:
+            return error
 
         return await execute_in_thread(
             sheets_service.spreadsheets()
@@ -1110,12 +1569,6 @@ def register(tool):
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
 
-        sheet_id = await _get_sheet_id(
-            sheets_service, spreadsheet_id, sheet, lc.cache, lc.drive_service
-        )
-        if sheet_id is None:
-            return {"error": f"Sheet '{sheet}' not found"}
-
         edges = {
             "top": top,
             "bottom": bottom,
@@ -1128,31 +1581,25 @@ def register(tool):
         if not provided:
             return {"error": "No border parameters provided"}
 
+        update_borders_request: dict[str, Any] = {}
         for key, border in provided.items():
             if "style" not in border:
                 return {"error": f"Border spec for '{key}' is missing required 'style' key"}
             if not isinstance(border["style"], str):
                 return {"error": f"Border spec for '{key}' has a non-string 'style' value"}
-            if border["style"].upper() not in _VALID_BORDER_STYLES:
-                return {
-                    "error": f"Invalid border style '{border['style']}' for '{key}'. "
-                    f"Must be one of: {', '.join(_VALID_BORDER_STYLES)}"
-                }
-
-        indices = _parse_a1_notation(range)
-        grid_range = {
-            "sheetId": sheet_id,
-            "startRowIndex": indices.get("startRowIndex", 0),
-            "startColumnIndex": indices.get("startColumnIndex", 0),
-        }
-        if "endRowIndex" in indices:
-            grid_range["endRowIndex"] = indices["endRowIndex"]
-        if "endColumnIndex" in indices:
-            grid_range["endColumnIndex"] = indices["endColumnIndex"]
-
-        update_borders_request: dict[str, Any] = {"range": grid_range}
-        for key, border in provided.items():
+            error = _enum_value_error(
+                border["style"], _VALID_BORDER_STYLES, "border style", f"for '{key}'"
+            )
+            if error:
+                return error
             update_borders_request[key] = _border_spec(border)
+
+        error, grid_range = await _resolve_grid_range(
+            sheets_service, spreadsheet_id, sheet, range, lc.cache, lc.drive_service
+        )
+        if error:
+            return error
+        update_borders_request["range"] = grid_range
 
         return await execute_in_thread(
             sheets_service.spreadsheets()
@@ -1164,7 +1611,6 @@ def register(tool):
             sheets_service,
         )
 
-    @tool(annotations=ToolAnnotations(title="Add Data Validation", destructiveHint=True))
     async def add_data_validation(
         spreadsheet_id: str,
         sheet: str,
@@ -1176,75 +1622,17 @@ def register(tool):
         show_custom_ui: bool = True,
         ctx: Context = None,
     ) -> dict[str, Any]:
-        """
-        Set a data validation rule on a cell range — dropdown lists, checkboxes, or
-        date/number/text constraints.
-
-        Args:
-            spreadsheet_id: The ID of the spreadsheet
-            sheet: The name of the sheet
-            range: A1 notation range to validate (e.g. "A2:A100")
-            condition_type: One of the Sheets API's condition types:
-                "ONE_OF_LIST"      — dropdown of custom values (values = the list items)
-                "ONE_OF_RANGE"     — dropdown sourced from another range (values = one
-                                     item, the source range in A1 notation, e.g.
-                                     ["Sheet2!A:A"] — a leading "=" is added
-                                     automatically if you omit it)
-                "BOOLEAN"          — checkbox (omit values for a plain TRUE/FALSE
-                                     checkbox, or give two values for custom
-                                     checked/unchecked labels)
-                "NUMBER_GREATER", "NUMBER_GREATER_THAN_EQ", "NUMBER_LESS",
-                "NUMBER_LESS_THAN_EQ", "NUMBER_EQ", "NUMBER_NOT_EQ" — one numeric value
-                "NUMBER_BETWEEN", "NUMBER_NOT_BETWEEN" — two numeric values
-                "DATE_EQ", "DATE_BEFORE", "DATE_AFTER", "DATE_ON_OR_BEFORE",
-                "DATE_ON_OR_AFTER" — one date value, e.g. "2025-01-01"
-                "DATE_BETWEEN", "DATE_NOT_BETWEEN" — two date values
-                "DATE_IS_VALID"    — no values; any parseable date passes
-                "TEXT_CONTAINS", "TEXT_NOT_CONTAINS", "TEXT_STARTS_WITH",
-                "TEXT_ENDS_WITH", "TEXT_EQ" — one text value
-                "TEXT_IS_EMAIL", "TEXT_IS_URL" — no values
-                "BLANK", "NOT_BLANK" — no values
-                "CUSTOM_FORMULA"   — one formula string, e.g. "=A1>0"
-            values: Condition values as plain strings — see condition_type above for
-                    how many each type expects. Numbers and dates are passed as
-                    strings; the Sheets API parses them per the cell's format.
-            input_message: Optional help text shown when a user selects a cell in range.
-            strict: If True (default), reject input that fails the rule. If False,
-                    show a warning but still allow it.
-            show_custom_ui: If True (default), show the built-in dropdown/checkbox UI
-                    for condition types that support one (ONE_OF_LIST, ONE_OF_RANGE,
-                    BOOLEAN). Ignored by condition types with no UI (e.g. NUMBER_*,
-                    TEXT_*).
-
-        Returns:
-            Result of the batchUpdate operation.
-        """
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
 
+        error = _enum_value_error(condition_type, _VALID_CONDITION_TYPES, "condition_type")
+        if error:
+            return error
         normalized_type = condition_type.upper()
-        if normalized_type not in _VALID_CONDITION_TYPES:
-            return {
-                "error": f"Invalid condition_type '{condition_type}'. "
-                f"Must be one of: {', '.join(_VALID_CONDITION_TYPES)}"
-            }
 
-        sheet_id = await _get_sheet_id(
-            sheets_service, spreadsheet_id, sheet, lc.cache, lc.drive_service
-        )
-        if sheet_id is None:
-            return {"error": f"Sheet '{sheet}' not found"}
-
-        indices = _parse_a1_notation(range)
-        grid_range = {
-            "sheetId": sheet_id,
-            "startRowIndex": indices.get("startRowIndex", 0),
-            "startColumnIndex": indices.get("startColumnIndex", 0),
-        }
-        if "endRowIndex" in indices:
-            grid_range["endRowIndex"] = indices["endRowIndex"]
-        if "endColumnIndex" in indices:
-            grid_range["endColumnIndex"] = indices["endColumnIndex"]
+        error = _condition_value_count_error(normalized_type, values)
+        if error:
+            return error
 
         condition: dict[str, Any] = {"type": normalized_type}
         if values:
@@ -1267,15 +1655,19 @@ def register(tool):
         if input_message is not None:
             rule["inputMessage"] = input_message
 
-        return await execute_in_thread(
-            sheets_service.spreadsheets()
-            .batchUpdate(
-                spreadsheetId=spreadsheet_id,
-                body={"requests": [{"setDataValidation": {"range": grid_range, "rule": rule}}]},
-            )
-            .execute,
-            sheets_service,
+        return await _apply_data_validation(
+            sheets_service, spreadsheet_id, sheet, range, lc.cache, lc.drive_service, rule
         )
+
+    # Docstring is generated from _CONDITION_SPECS (issue #751), so it can't be a
+    # plain literal — assigned here, before `tool()` wraps the function, since
+    # functools.wraps (inside _timed, which tool() applies) copies __doc__ at
+    # wrap time; mutating it after wrapping wouldn't reach the wrapper mcp.tool()
+    # actually registers.
+    add_data_validation.__doc__ = _ADD_DATA_VALIDATION_DOCSTRING
+    add_data_validation = tool(
+        annotations=ToolAnnotations(title="Add Data Validation", destructiveHint=True)
+    )(add_data_validation)
 
     @tool(annotations=ToolAnnotations(title="Get Data Validation", readOnlyHint=True))
     async def get_data_validation(
@@ -1349,6 +1741,31 @@ def register(tool):
 
         return matches
 
+    @tool(annotations=ToolAnnotations(title="Clear Data Validation", destructiveHint=True))
+    async def clear_data_validation(
+        spreadsheet_id: str,
+        sheet: str,
+        range: str,
+        ctx: Context = None,
+    ) -> dict[str, Any]:
+        """
+        Clear any data validation rule from a cell range.
+
+        Args:
+            spreadsheet_id: The ID of the spreadsheet
+            sheet: The name of the sheet
+            range: A1 notation range to clear (e.g. "A2:A100")
+
+        Returns:
+            Result of the batchUpdate operation.
+        """
+        lc = ctx.request_context.lifespan_context
+        sheets_service = lc.sheets_service
+
+        return await _apply_data_validation(
+            sheets_service, spreadsheet_id, sheet, range, lc.cache, lc.drive_service, None
+        )
+
     @tool(annotations=ToolAnnotations(title="Merge Cells", destructiveHint=True))
     async def merge_cells(
         spreadsheet_id: str,
@@ -1373,22 +1790,11 @@ def register(tool):
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
 
-        sheet_id = await _get_sheet_id(
-            sheets_service, spreadsheet_id, sheet, lc.cache, lc.drive_service
+        error, grid_range = await _resolve_grid_range(
+            sheets_service, spreadsheet_id, sheet, range, lc.cache, lc.drive_service
         )
-        if sheet_id is None:
-            return {"error": f"Sheet '{sheet}' not found"}
-
-        indices = _parse_a1_notation(range)
-        grid_range = {
-            "sheetId": sheet_id,
-            "startRowIndex": indices.get("startRowIndex", 0),
-            "startColumnIndex": indices.get("startColumnIndex", 0),
-        }
-        if "endRowIndex" in indices:
-            grid_range["endRowIndex"] = indices["endRowIndex"]
-        if "endColumnIndex" in indices:
-            grid_range["endColumnIndex"] = indices["endColumnIndex"]
+        if error:
+            return error
 
         return await execute_in_thread(
             sheets_service.spreadsheets()
@@ -1430,22 +1836,11 @@ def register(tool):
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
 
-        sheet_id = await _get_sheet_id(
-            sheets_service, spreadsheet_id, sheet, lc.cache, lc.drive_service
+        error, grid_range = await _resolve_grid_range(
+            sheets_service, spreadsheet_id, sheet, range, lc.cache, lc.drive_service
         )
-        if sheet_id is None:
-            return {"error": f"Sheet '{sheet}' not found"}
-
-        indices = _parse_a1_notation(range)
-        grid_range = {
-            "sheetId": sheet_id,
-            "startRowIndex": indices.get("startRowIndex", 0),
-            "startColumnIndex": indices.get("startColumnIndex", 0),
-        }
-        if "endRowIndex" in indices:
-            grid_range["endRowIndex"] = indices["endRowIndex"]
-        if "endColumnIndex" in indices:
-            grid_range["endColumnIndex"] = indices["endColumnIndex"]
+        if error:
+            return error
 
         return await execute_in_thread(
             sheets_service.spreadsheets()
@@ -1619,29 +2014,13 @@ def register(tool):
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
 
-        sheet_id = await _get_sheet_id(
-            sheets_service, spreadsheet_id, sheet, lc.cache, lc.drive_service
-        )
-        if sheet_id is None:
-            return {"error": f"Sheet '{sheet}' not found"}
-
-        indices = _parse_a1_notation(range)
-        col_start = indices.get("startColumnIndex", 0)
-
-        grid_range = {
-            "sheetId": sheet_id,
-            "startRowIndex": indices.get("startRowIndex", 0),
-            "startColumnIndex": col_start,
-        }
-        if "endRowIndex" in indices:
-            grid_range["endRowIndex"] = indices["endRowIndex"]
-        if "endColumnIndex" in indices:
-            grid_range["endColumnIndex"] = indices["endColumnIndex"]
-
         if sort_order is None:
             sort_order = [{"column_index": 0, "order": "ASCENDING"}]
 
-        sort_specs = []
+        # Validated before _resolve_grid_range so a bad spec costs no sheet
+        # lookup; dimensionIndex needs the range's start column, so the specs
+        # themselves are built after it.
+        validated_orders: list[tuple[int, str]] = []
         for i, s in enumerate(sort_order):
             if "column_index" not in s:
                 return {"error": f"Sort spec at index {i} is missing required 'column_index' key"}
@@ -1654,18 +2033,25 @@ def register(tool):
                     "error": f"Sort spec for column_index {s['column_index']} "
                     "has a non-string 'order' value"
                 }
-            if order.upper() not in _VALID_SORT_ORDERS:
-                return {
-                    "error": f"Invalid sort order '{order}' for column_index {s['column_index']}. "
-                    f"Must be one of: {', '.join(_VALID_SORT_ORDERS)}"
-                }
-
-            sort_specs.append(
-                {
-                    "dimensionIndex": col_start + s["column_index"],
-                    "sortOrder": order.upper(),
-                }
+            error = _enum_value_error(
+                order, _VALID_SORT_ORDERS, "sort order", f"for column_index {s['column_index']}"
             )
+            if error:
+                return error
+
+            validated_orders.append((s["column_index"], order.upper()))
+
+        error, grid_range = await _resolve_grid_range(
+            sheets_service, spreadsheet_id, sheet, range, lc.cache, lc.drive_service
+        )
+        if error:
+            return error
+
+        col_start = grid_range["startColumnIndex"]
+        sort_specs = [
+            {"dimensionIndex": col_start + column_index, "sortOrder": order}
+            for column_index, order in validated_orders
+        ]
 
         return await execute_in_thread(
             sheets_service.spreadsheets()
@@ -1721,6 +2107,12 @@ def register(tool):
                        - HISTOGRAM: Histogram
             data_range: A1 notation range for chart data (e.g., 'A1:C10').
                        The first row is typically treated as headers.
+                       The first column is the domain (x-axis labels) and each
+                       remaining column is a series. Must name an end column:
+                       a cell-to-row ('B2:5') or row-only ('1:5') range returns
+                       an error. PIE needs exactly 2 columns, HISTOGRAM at
+                       least 1 (no domain; every column is a series), and
+                       every other type at least 2.
             title: Optional title for the chart
             x_axis_label: Optional label for the X axis (bottom axis)
             y_axis_label: Optional label for the Y axis (left axis)
@@ -1756,11 +2148,17 @@ def register(tool):
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
 
+        error = _enum_value_error(chart_type, _VALID_CHART_TYPES, "chart type")
+        if error:
+            return error
         chart_type = chart_type.upper()
-        if chart_type not in _VALID_CHART_TYPES:
-            return {
-                "error": f"Invalid chart type '{chart_type}'. Must be one of: {', '.join(_VALID_CHART_TYPES)}"
-            }
+
+        error, range_indices = _parse_a1_notation_or_error(data_range)
+        if error:
+            return error
+        error = _chart_range_error(chart_type, data_range, range_indices)
+        if error:
+            return error
 
         sheet_id = await _get_sheet_id(
             sheets_service, spreadsheet_id, sheet, lc.cache, lc.drive_service
@@ -1768,14 +2166,9 @@ def register(tool):
         if sheet_id is None:
             return {"error": f"Sheet '{sheet}' not found in spreadsheet"}
 
-        try:
-            range_indices = _parse_a1_notation(data_range)
-        except ValueError as e:
-            return {"error": str(e)}
-
         col_ranges = _per_column_ranges(sheet_id, range_indices)
         domain_col = col_ranges[0]
-        series_cols = col_ranges[1:] if len(col_ranges) > 1 else col_ranges
+        series_cols = col_ranges[1:]
 
         if chart_type == "PIE":
             chart_spec: dict[str, Any] = {

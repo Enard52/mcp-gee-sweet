@@ -5,6 +5,7 @@ from mcp.server.mcpserver import Context
 from mcp.types import ToolAnnotations
 
 from ...auth import execute_in_thread
+from .indices import isolated_bullet_run_wrap_requests
 
 logger = logging.getLogger(__name__)
 
@@ -117,12 +118,55 @@ def _read_named_styles(doc: dict) -> dict:
     return theme
 
 
+def _add_or_clear_field(
+    text_style: dict, fields: list[str], api_field: str, value: dict | None
+) -> None:
+    """Docs API field-mask helper: sets `api_field` to `value` in `text_style`
+    when `value` is not None, or omits the key entirely while still naming
+    `api_field` in `fields` when it is — the documented way to reset a
+    nested message field to its API default. Confirmed for `link` via #408:
+    the API rejects an empty `Link{}` object outright ("must include at
+    least one type"), since that isn't a valid `Link` value, but omitting
+    the key while keeping the field-mask entry clears it correctly. `fields`
+    always gains `api_field` either way, so a caller must gate on whether to
+    send the request on `fields` (or its own local flag), never on whether
+    `text_style` itself is non-empty — a clear-only call legitimately
+    produces an empty `text_style` with a non-empty `fields` list. The
+    `is not None` check is deliberate, not just "falsy" — an explicitly
+    passed empty dict (`{}`) is a value, not a clear request, and would
+    otherwise be silently written into `text_style` as an invalid/empty
+    nested object, the exact class of bug (#408) this helper exists to
+    prevent (PR #778 QA round 1, finding 1).
+
+    Mutates `text_style`/`fields` in place and returns nothing — a
+    deliberate deviation from `_text_style_and_fields`'s own
+    build-and-return-a-fresh-tuple convention in this same file, chosen so
+    a caller can accumulate several fields (some set, some cleared) onto
+    one shared `text_style`/`fields` pair across multiple calls, the way
+    `content.py`'s heading-anchor code does — a return-tuple version would
+    force each caller to merge dicts/lists back together itself instead
+    (PR #778 QA round 1, finding 2).
+
+    Reused by any nullable nested-message field this shape applies to (not
+    just `link`) so a future one (e.g. `foreground_color: null`) doesn't
+    need to hand-roll the same omit-but-mask trick inline a third time
+    (issue #448) the way both `_text_style_and_fields`'s own `link_url`
+    case and `content.py`'s heading-anchor link-clearing code once did.
+    """
+    if value is not None:
+        text_style[api_field] = value
+    fields.append(api_field)
+
+
 def _text_style_and_fields(style: dict) -> tuple[dict, list[str]]:
     """Build a Docs API textStyle dict + field mask from a flat style dict keyed
     by bold/italic/underline/strikethrough/font_size/foreground_color/link_url.
 
     Shared by style_doc_range and insert_softbreak_paragraph so both tools draw
     per-run styling from the same key vocabulary and request-building logic.
+    May return an empty text_style with a non-empty fields list (a
+    clear-only call, e.g. link_url=None/"") — see _add_or_clear_field's own
+    docstring for why a caller must gate on `fields`, not `text_style`.
     """
     text_style: dict = {}
     fields: list[str] = []
@@ -137,15 +181,8 @@ def _text_style_and_fields(style: dict) -> tuple[dict, list[str]]:
         text_style["foregroundColor"] = {"color": {"rgbColor": style["foreground_color"]}}
         fields.append("foregroundColor")
     if "link_url" in style:
-        # Clearing a link (link_url falsy) must omit "link" from textStyle
-        # entirely rather than setting it to an empty Link{} object — the API
-        # rejects an empty Link ("must include at least one type") since
-        # that's not a valid Link value, but omitting the key while still
-        # naming "link" in the field mask is the documented way to reset a
-        # nested message field to its default (no link) (#408).
-        if style["link_url"]:
-            text_style["link"] = {"url": style["link_url"]}
-        fields.append("link")
+        link = {"url": style["link_url"]} if style["link_url"] else None
+        _add_or_clear_field(text_style, fields, "link", link)
     return text_style, fields
 
 
@@ -496,7 +533,12 @@ def register(tool):
           preset are then submitted as a single createParagraphBullets call
           each, applied in descending document-position order so no
           not-yet-processed span's indices are invalidated by an earlier
-          span's tab insertions.
+          span's tab insertions. A span in which every paragraph sits at
+          nesting_level > 0 (no level-0 member to anchor the API's relative
+          depth inference) is wrapped with a throwaway 0-tab anchor paragraph
+          that is bulleted alongside the real items and then deleted, so the
+          items land at their true nesting level instead of collapsing to 0
+          (issue #713; the same fix emitter.py carries for #439).
 
         Use get_doc_structure to obtain start_index/end_index for each target
         range — typically one paragraph's own startIndex/endIndex, or a
@@ -693,7 +735,10 @@ def register(tool):
                         }
                     }
                 )
+                total_tabs = 0
+                min_nesting = min(u["nesting_level"] for u in run)
                 for unit in sorted(run, key=lambda u: u["start"], reverse=True):
+                    total_tabs += unit["nesting_level"]
                     if unit["nesting_level"]:
                         requests.append(
                             {
@@ -703,18 +748,39 @@ def register(tool):
                                 }
                             }
                         )
-                total_tabs = sum(u["nesting_level"] for u in run)
-                requests.append(
-                    {
-                        "createParagraphBullets": {
-                            "range": {
-                                "startIndex": run_start,
-                                "endIndex": run_end + total_tabs,
-                            },
-                            "bulletPreset": resolved_preset,
+                if min_nesting == 0:
+                    requests.append(
+                        {
+                            "createParagraphBullets": {
+                                "range": {
+                                    "startIndex": run_start,
+                                    "endIndex": run_end + total_tabs,
+                                },
+                                "bulletPreset": resolved_preset,
+                            }
                         }
-                    }
-                )
+                    )
+                else:
+                    # Isolated run: no unit sits at nesting_level 0, so
+                    # createParagraphBullets — which assigns each paragraph
+                    # nestingLevel = (its leading-tab count) - (the minimum
+                    # across the call's whole range) — would collapse the entire
+                    # run to nestingLevel 0, rendering the depth-0 disc glyph
+                    # even though the per-level indent is bumped (issue #713;
+                    # same shape as #439, fixed for emitter.py in PR #711).
+                    # isolated_bullet_run_wrap_requests (indices.py, shared with
+                    # emitter.py per #727) prepends a throwaway 0-tab anchor
+                    # paragraph, bullets the extended range (anchor -> level 0,
+                    # real items -> their true level and correct glyph), then
+                    # deletes the anchor. The insert (+1) and delete (-1) cancel,
+                    # so every position outside [run_start, run_end] is left
+                    # exactly where the non-isolated path leaves it and the
+                    # descending-run application order still holds.
+                    requests.extend(
+                        isolated_bullet_run_wrap_requests(
+                            run_start, run_end + total_tabs, resolved_preset
+                        )
+                    )
 
             await execute_in_thread(
                 lc.docs_service.documents()

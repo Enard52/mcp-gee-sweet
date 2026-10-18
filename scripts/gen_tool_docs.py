@@ -40,7 +40,7 @@ def collect_tools():
     FastMCP one, so this script never touches the mcp/auth machinery."""
     captured = []
 
-    def tool(annotations=None):
+    def tool(annotations=None, local_only=False):
         def decorator(func):
             captured.append(func)
             return func
@@ -160,6 +160,15 @@ SECTIONS = [
         "`list_calendars`.",
     ),
     (
+        "Gmail",
+        lambda f: f.__module__ == "mcp_gee_sweet.tools.gmail",
+        "**Note:** Gmail tools require OAuth (personal mailbox) auth today. "
+        "Service-account / domain-wide delegation is not wired yet (no delegated "
+        "subject). Composites such as find-unanswered / send-reminders are out of "
+        "scope — compose them from these primitives (see "
+        "[decision-composite-tools](decisions/decision-composite-tools.md)).",
+    ),
+    (
         "Cache",
         lambda f: f.__module__ == "mcp_gee_sweet.tools.cache",
         "Omit all parameters to flush the entire cache. See [Configuration]"
@@ -249,6 +258,22 @@ SUBSETS = [
             "update_event",
             "delete_event",
             "find_free_slots",
+        ],
+    ),
+    (
+        "Gmail only",
+        [
+            "list_messages",
+            "get_message",
+            "list_threads",
+            "get_thread",
+            "list_labels",
+            "send_message",
+            "create_draft",
+            "send_draft",
+            "reply_to_message",
+            "modify_labels",
+            "trash_message",
         ],
     ),
 ]

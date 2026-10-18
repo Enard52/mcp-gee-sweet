@@ -2,20 +2,56 @@
 API -> AST walker, ast_to_markdown.py's AST -> Markdown serializer, and the
 get_doc_as_markdown tool wiring them together."""
 
+from html import escape
 from unittest.mock import MagicMock
+from xml.etree import ElementTree
+
+import markdown
+import pytest
+from markdown_it import MarkdownIt
 
 from mcp_gee_sweet.tools import docs as docs_module
 from mcp_gee_sweet.tools.docs.ast import (
     BulletItem,
+    Cell,
     Heading,
     Image,
     NamedBlock,
     Paragraph,
+    Row,
     Run,
     Table,
 )
 from mcp_gee_sweet.tools.docs.ast_to_markdown import ast_to_markdown
 from mcp_gee_sweet.tools.docs.doc_to_ast import document_to_ast
+
+# Strict CommonMark, plus GFM pipe tables. Python-Markdown (used by some older
+# tests below) strips whitespace inside code spans and closes a fence only on an
+# exact-length match, so it can't catch padding or fence-length regressions
+# (#938).
+_COMMONMARK = MarkdownIt("commonmark").enable("table")
+
+
+def _code(text, **kwargs):
+    return Run(text=text, font_family="Courier New", **kwargs)
+
+
+@pytest.mark.parametrize("ticks", [3, 4, 6])
+@pytest.mark.parametrize("interleaved_image", [False, True])
+def test_code_block_preserves_literal_backtick_fences(ticks, interleaved_image):
+    content = f"before\n{'`' * ticks}\nafter"
+    runs = [Run(text=content, font_family="Courier New")]
+    if interleaved_image:
+        runs += [Image(src="https://example.com/image.png"), *runs]
+    rendered = ast_to_markdown([Paragraph(runs=runs)])
+    assert rendered.startswith("`" * (ticks + 1) + "\nbefore\n")
+    tokens = _COMMONMARK.parse(rendered)
+    blocks = [t.content for t in tokens if t.type == "fence"]
+    expected = [content + "\n"] * (2 if interleaved_image else 1)
+    assert blocks == expected
+    assert sum(t.type == "image" for t in tokens for t in (t.children or [])) == int(
+        interleaved_image
+    )
 
 
 def _para(text, style=None, bullet=None, para_style=None):
@@ -31,7 +67,7 @@ def _make_tool_registry():
     captured = {}
     captured_annotations = {}
 
-    def tool(annotations=None):
+    def tool(annotations=None, local_only=False):
         def decorator(func):
             captured[func.__name__] = func
             captured_annotations[func.__name__] = annotations
@@ -103,6 +139,24 @@ class TestDocToAstParagraphs:
         assert run.font_family == "Courier New"
         assert run.foreground_color.red == 1.0
         assert run.foreground_color.green == 0.0
+
+    def test_courier_new_run_converts_soft_break_to_newline(self):
+        # #719: emitter.py writes a multi-line fenced code block's internal
+        # line breaks as "\v" (soft break) rather than "\n", so the whole
+        # block stays one Docs paragraph instead of fragmenting into one
+        # paragraph per line. This is the read-side reversal.
+        style = {"weightedFontFamily": {"fontFamily": "Courier New"}}
+        doc = {"body": {"content": [_para("line1\vline2\vline3\n", style=style)]}}
+        run = document_to_ast(doc)[0].runs[0]
+        assert run.text == "line1\nline2\nline3"
+
+    def test_non_code_run_leaves_soft_break_untouched(self):
+        # The "\v" -> "\n" reversal is scoped to Courier-New-styled runs only
+        # (the one place emitter.py ever writes it) — an unrelated soft break
+        # from insert_softbreak_paragraph must not be touched by this fix.
+        doc = {"body": {"content": [_para("line1\vline2\n")]}}
+        run = document_to_ast(doc)[0].runs[0]
+        assert run.text == "line1\vline2"
 
 
 class TestDocToAstBullets:
@@ -197,6 +251,72 @@ class TestDocToAstBlockquote:
         assert node.blockquote_depth == 2
 
 
+class TestDocToAstLinks:
+    """PR #976 QA round 1: Docs reports a same-document link by ID, with no
+    url (live shape: `{"headingId": "h.x"}`), on text runs and images alike."""
+
+    _BASE = "https://docs.google.com/document/d/DOC/edit"
+
+    def _doc(self, link):
+        return {
+            "documentId": "DOC",
+            "body": {
+                "content": [
+                    {
+                        "paragraph": {
+                            "elements": [
+                                {"textRun": {"content": "jump", "textStyle": {"link": link}}},
+                                {
+                                    "inlineObjectElement": {
+                                        "inlineObjectId": "img1",
+                                        "textStyle": {"link": link},
+                                    }
+                                },
+                                {"textRun": {"content": "\n", "textStyle": {}}},
+                            ]
+                        }
+                    }
+                ]
+            },
+            "inlineObjects": {
+                "img1": {
+                    "inlineObjectProperties": {
+                        "embeddedObject": {"imageProperties": {"contentUri": "https://i/p.png"}}
+                    }
+                }
+            },
+        }
+
+    @pytest.mark.parametrize(
+        "link, expected",
+        [
+            ({"url": "https://example.com"}, "https://example.com"),
+            ({"headingId": "h.abc"}, f"{_BASE}?tab=t.0#heading=h.abc"),
+            ({"heading": {"id": "h.abc", "tabId": "t.7"}}, f"{_BASE}?tab=t.7#heading=h.abc"),
+            ({"bookmarkId": "id.xyz"}, f"{_BASE}?tab=t.0#bookmark=id.xyz"),
+            ({"bookmark": {"id": "id.xyz", "tabId": "t.2"}}, f"{_BASE}?tab=t.2#bookmark=id.xyz"),
+            ({"headingId": "h.abc", "tabId": "t.3"}, f"{_BASE}?tab=t.3#heading=h.abc"),
+        ],
+    )
+    def test_link_url_on_run_and_image(self, link, expected):
+        run, image = document_to_ast(self._doc(link))[0].runs
+        assert run.link_url == expected
+        assert isinstance(image, Image)
+        assert image.link_url == expected
+
+    def test_internal_link_without_document_id_is_dropped(self):
+        doc = self._doc({"headingId": "h.abc"})
+        del doc["documentId"]
+        run, image = document_to_ast(doc)[0].runs
+        assert run.link_url is None
+        assert image.link_url is None
+
+    def test_heading_link_exports_as_markdown_link(self):
+        md = ast_to_markdown(document_to_ast(self._doc({"headingId": "h.abc"})))
+        url = f"{self._BASE}?tab=t.0#heading=h.abc"
+        assert md == f"[jump]({url})[![](https://i/p.png)]({url})\n"
+
+
 class TestDocToAstImages:
     def test_inline_object_resolves_to_image(self):
         doc = {
@@ -233,6 +353,44 @@ class TestDocToAstImages:
         assert image.src == "https://example.com/img.png"
         assert image.alt == "A photo"
         assert image.width == 100.0
+        assert image.link_url is None
+
+    def test_linked_inline_object_carries_link_url(self):
+        # #951: shape confirmed live, the link sits on the element's own textStyle.
+        doc = {
+            "body": {
+                "content": [
+                    {
+                        "paragraph": {
+                            "elements": [
+                                {
+                                    "inlineObjectElement": {
+                                        "inlineObjectId": "img1",
+                                        "textStyle": {"link": {"url": "https://x.com/t"}},
+                                    }
+                                },
+                                {"textRun": {"content": "\n", "textStyle": {}}},
+                            ]
+                        }
+                    }
+                ]
+            },
+            "inlineObjects": {
+                "img1": {
+                    "inlineObjectProperties": {
+                        "embeddedObject": {
+                            "imageProperties": {"contentUri": "https://example.com/img.png"},
+                        }
+                    }
+                }
+            },
+        }
+        image = document_to_ast(doc)[0].runs[0]
+        assert isinstance(image, Image)
+        assert image.link_url == "https://x.com/t"
+        assert ast_to_markdown(document_to_ast(doc)) == (
+            "[![](https://example.com/img.png)](https://x.com/t)\n"
+        )
 
     def test_inline_object_with_no_content_uri_is_dropped(self):
         doc = {
@@ -563,6 +721,14 @@ class TestAstToMarkdownInline:
         nodes = [Paragraph(runs=[Run(text="x = 1", font_family="Courier New")])]
         assert ast_to_markdown(nodes) == "```\nx = 1\n```\n"
 
+    def test_multiline_code_paragraph_renders_as_one_fenced_block(self):
+        # #719: a multi-line fenced code block round-trips as one Paragraph
+        # node (its internal line breaks already restored to "\n" by
+        # doc_to_ast.py's _text_run_to_run) and must render as a single
+        # fence, not one fence per line.
+        nodes = [Paragraph(runs=[Run(text="line1\nline2\nline3", font_family="Courier New")])]
+        assert ast_to_markdown(nodes) == "```\nline1\nline2\nline3\n```\n"
+
     def test_image_mixed_into_code_styled_paragraph_is_not_dropped(self):
         # An Image sitting alongside Courier-New-styled Runs in the same
         # paragraph used to vanish entirely (#594) — `_is_code_block` filtered
@@ -626,6 +792,113 @@ class TestAstToMarkdownInline:
         assert ast_to_markdown(nodes) == f"![pic](<{url}>)\n"
 
 
+def _links(markdown_text):
+    """Every (href, child token types) pair CommonMark parses out of `markdown_text`."""
+    found = []
+    for block in _COMMONMARK.parse(markdown_text):
+        children = block.children or []
+        for i, tok in enumerate(children):
+            if tok.type == "link_open":
+                inner = []
+                for t in children[i + 1 :]:
+                    if t.type == "link_close":
+                        break
+                    inner.append(t.type)
+                found.append((tok.attrs["href"], inner))
+    return found
+
+
+class TestCodeBlockLinks:
+    """#951: a fenced block's content is literal, so a link inside one was lost."""
+
+    def test_linked_code_only_paragraph_keeps_link_as_inline_code(self):
+        nodes = [Paragraph(runs=[_code("pkg", link_url="https://pypi.org/p/pkg")])]
+        md = ast_to_markdown(nodes)
+        assert md == "[`pkg`](https://pypi.org/p/pkg)\n"
+        assert _links(md) == [("https://pypi.org/p/pkg", ["code_inline"])]
+
+    def test_partly_linked_code_paragraph_keeps_every_run(self):
+        nodes = [
+            Paragraph(
+                runs=[
+                    _code("pip install "),
+                    _code("pkg", link_url="https://pypi.org/p/pkg"),
+                ]
+            )
+        ]
+        md = ast_to_markdown(nodes)
+        assert md == "`pip install `[`pkg`](https://pypi.org/p/pkg)\n"
+        assert not any(t.type == "fence" for t in _COMMONMARK.parse(md))
+        assert _links(md) == [("https://pypi.org/p/pkg", ["code_inline"])]
+
+    def test_multiline_linked_code_paragraph_stays_one_paragraph(self):
+        # Each line becomes its own span joined by <br>; a raw newline could
+        # start a new block ("# x" as a heading).
+        nodes = [Paragraph(runs=[_code("a\n# b", link_url="https://x.com")])]
+        md = ast_to_markdown(nodes)
+        assert md == "[`a`<br>`# b`](https://x.com)\n"
+        tokens = _COMMONMARK.parse(md)
+        assert [t.type for t in tokens] == ["paragraph_open", "inline", "paragraph_close"]
+
+    def test_link_on_only_a_line_break_keeps_the_fence(self):
+        # PR #976 QA round 1: a link covering just the soft break renders as
+        # bare <br> with no link, so it must not cost the paragraph its fence.
+        nodes = [Paragraph(runs=[_code("a"), _code("\n", link_url="https://x.com"), _code("b")])]
+        assert ast_to_markdown(nodes) == "```\na\nb\n```\n"
+
+    def test_unlinked_code_paragraph_still_fenced(self):
+        nodes = [Paragraph(runs=[_code("x = 1")])]
+        assert ast_to_markdown(nodes) == "```\nx = 1\n```\n"
+
+    def test_linked_image_in_code_paragraph_keeps_link_and_fence(self):
+        nodes = [
+            Paragraph(
+                runs=[
+                    _code("x = 1"),
+                    Image(src="https://x.com/i.png", alt="pic", link_url="https://x.com/target"),
+                ]
+            )
+        ]
+        md = ast_to_markdown(nodes)
+        assert md == "```\nx = 1\n```\n\n[![pic](https://x.com/i.png)](https://x.com/target)\n"
+        assert _links(md) == [("https://x.com/target", ["image"])]
+
+    def test_linked_image_in_plain_paragraph_keeps_link(self):
+        url = "https://x.com/Foo_(bar)"
+        nodes = [Paragraph(runs=[Image(src="https://x.com/i.png", alt="pic", link_url=url)])]
+        md = ast_to_markdown(nodes)
+        assert md == f"[![pic](https://x.com/i.png)](<{url}>)\n"
+        assert _links(md) == [(url, ["image"])]
+
+    def test_linked_image_in_table_cell_keeps_link(self):
+        nodes = [
+            Table(
+                rows=[
+                    Row(
+                        cells=[
+                            Cell(
+                                children=[
+                                    Image(
+                                        src="https://x.com/i.png",
+                                        alt="pic",
+                                        link_url="https://x.com/t",
+                                    )
+                                ]
+                            )
+                        ]
+                    )
+                ]
+            )
+        ]
+        md = ast_to_markdown(nodes)
+        assert "[![pic](https://x.com/i.png)](https://x.com/t)" in md
+        assert _links(md) == [("https://x.com/t", ["image"])]
+
+    def test_blockquoted_linked_code_paragraph(self):
+        nodes = [Paragraph(runs=[_code("pkg", link_url="https://x.com")], blockquote_depth=1)]
+        assert ast_to_markdown(nodes) == "> [`pkg`](https://x.com)\n"
+
+
 class TestAstToMarkdownBlocks:
     def test_heading_level_renders_hashes(self):
         nodes = [Heading(level=3, runs=[Run(text="Sub")])]
@@ -679,6 +952,35 @@ class TestAstToMarkdownBlocks:
     def test_paragraph_starting_with_bullet_marker_is_escaped(self):
         nodes = [Paragraph(runs=[Run(text="- not a bullet")])]
         assert ast_to_markdown(nodes) == "\\- not a bullet\n"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            " - a",
+            "  - a",
+            "   - a",
+            "  # h",
+            "## h",
+            "###### h",
+            "  ### h",
+            "   > q",
+            " 1. x",
+            "---",
+            "- - -",
+            "--",
+            "===",
+            "===  ",
+            "* * *",
+            "___",
+            "    four-space indent",
+            "\ttab indent",
+        ],
+    )
+    def test_paragraph_never_renders_as_another_block(self, text):
+        # Leading spaces before a marker, rule lines, and 4+ space or tab
+        # indents (an indented code block) all stay a plain paragraph (#993).
+        html = _COMMONMARK.render(ast_to_markdown([Paragraph(runs=[Run(text=text)])]))
+        assert html == f"<p>{escape(text.strip(), quote=False)}</p>\n"
 
     def test_paragraph_starting_with_digit_but_no_marker_punctuation_is_untouched(self):
         # "123 apples" isn't an ordered-list marker (no "." or ")" after the
@@ -802,6 +1104,115 @@ class TestAstToMarkdownComments:
         assert "please fix" in md
         assert "**Bob**: done" in md
 
+    def _quote_md(self, quoted_text):
+        comments = [{"author": {"display_name": "A"}, "quoted_text": quoted_text, "content": "fix"}]
+        md = ast_to_markdown([Paragraph(runs=[Run(text="body")])], comments=comments)
+        return md.split("## Comments\n\n", 1)[1]
+
+    def test_quote_keeps_plain_text_and_escapes_only_markdown_syntax(self):
+        # "&" before a non-entity and "<" before a space stay as-is; "*" and
+        # a "<" that could open a tag are escaped (#984).
+        section = self._quote_md('Café & Tom, a < b, <x> "hi" *two*')
+        assert section == '**A**\n> Café & Tom, a < b, \\<x> "hi" \\*two\\*\n\nfix\n'
+
+    def test_multiline_quote_prefixes_every_line_and_escapes_block_markers(self):
+        section = self._quote_md("one\n\n# head\n- item\n1. num")
+        assert section == "**A**\n> one\n>\n> \\# head\\\n> \\- item\\\n> 1\\. num\n\nfix\n"
+
+    def test_quote_is_closed_before_the_comment_text(self):
+        # Without the blank line, "fix" would be a lazy continuation of the quote.
+        assert "> the sentence\n\nfix" in self._quote_md("the sentence")
+
+    def test_author_content_and_replies_are_escaped_as_plain_text(self):
+        comments = [
+            {
+                "author": {"display_name": "A_b*"},
+                "content": "use <b> and *x*\n# not a heading",
+                "replies": [{"author": {"display_name": "C"}, "content": "ok *y*\n- not an item"}],
+            }
+        ]
+        md = ast_to_markdown([Paragraph(runs=[Run(text="body")])], comments=comments)
+        section = md.split("## Comments\n\n", 1)[1]
+        assert section == (
+            "**A\\_b\\***\\\n"
+            "use \\<b> and \\*x\\*\\\n"
+            "\\# not a heading\n"
+            "  - **C**: ok \\*y\\*\\\n"
+            "    \\- not an item\n"
+        )
+
+    def _render(self, content=None, quoted_text=None, reply=None):
+        comment = {"author": {"display_name": "A"}, "content": content or "c", "replies": []}
+        if quoted_text is not None:
+            comment["quoted_text"] = quoted_text
+        if reply is not None:
+            comment["replies"].append({"author": {"display_name": "B"}, "content": reply})
+        md = ast_to_markdown([Paragraph(runs=[Run(text="body")])], comments=[comment])
+        return _COMMONMARK.render(md.split("## Comments\n\n", 1)[1])
+
+    @pytest.mark.parametrize(
+        "content, lines",
+        [
+            # setext underline / thematic break (PR #991 QA round 1)
+            ("Summary\n---\nmore", ["Summary", "---", "more"]),
+            ("Title\n===\n--", ["Title", "===", "--"]),
+            # multi-"#" ATX headings (PR #991 QA round 2)
+            ("Probe heading\n## Notes\n###### six", ["Probe heading", "## Notes", "###### six"]),
+            # leading spaces before a marker
+            ("Points:\n - a\n   - b\n  # c", ["Points:", "- a", "- b", "# c"]),
+            # GFM table
+            ("a | b\n-|-\nc | d", ["a | b", "-|-", "c | d"]),
+            # every line keeps its own line, not one soft-wrapped line
+            ("step 1\nstep 2\nstep 3", ["step 1", "step 2", "step 3"]),
+            # a literal trailing backslash stays literal before the hard break
+            ("path C:\\\nnext", ["path C:\\", "next"]),
+        ],
+    )
+    def test_content_lines_render_as_plain_text_lines(self, content, lines):
+        html = self._render(content=content)
+        assert html == "<p><strong>A</strong><br />\n" + "<br />\n".join(lines) + "</p>\n"
+
+    def test_indented_content_after_blank_line_is_not_a_code_block(self):
+        html = self._render(content="intro\n\n    indented *x*")
+        assert "<pre>" not in html
+        assert "<p>indented *x*</p>" in html
+
+    def test_quote_ending_in_equals_with_trailing_spaces_is_not_a_setext_heading(self):
+        # Drive keeps trailing whitespace in quoted_text (PR #991 QA round 2, live).
+        html = self._render(quoted_text="Summary\n===  ")
+        assert "<h1>" not in html
+        assert "<blockquote>\n<p>Summary<br />\n===</p>\n</blockquote>" in html
+
+    def test_indented_quote_line_is_not_a_list(self):
+        html = self._render(quoted_text="   - indented quote")
+        assert "<blockquote>\n<p>- indented quote</p>\n</blockquote>" in html
+
+    @pytest.mark.parametrize(
+        "reply, expected",
+        [
+            ("r\n\n---", "<p><strong>B</strong>: r</p>\n<p>---</p>"),
+            ("r\n\n        deep *x*", "<p><strong>B</strong>: r</p>\n<p>deep *x*</p>"),
+            ("r\n- not an item", "<strong>B</strong>: r<br />\n- not an item"),
+        ],
+    )
+    def test_reply_continuation_stays_plain_text_in_the_item(self, reply, expected):
+        html = self._render(reply=reply)
+        assert "<pre>" not in html and "<hr" not in html
+        assert expected in html
+        assert html.count("<li>") == 1
+
+    def test_reply_first_line_is_not_block_escaped(self):
+        # It follows "**B**: " on the same line, so "1." can't start a list.
+        comments = [
+            {
+                "author": {"display_name": "A"},
+                "content": "c",
+                "replies": [{"author": {"display_name": "B"}, "content": "1. agreed"}],
+            }
+        ]
+        md = ast_to_markdown([Paragraph(runs=[Run(text="body")])], comments=comments)
+        assert "  - **B**: 1. agreed\n" in md
+
     def test_no_comments_section_when_comments_is_none(self):
         nodes = [Paragraph(runs=[Run(text="body")])]
         assert "## Comments" not in ast_to_markdown(nodes, comments=None)
@@ -889,9 +1300,335 @@ class TestGetDocAsMarkdownTool:
             "body": {"content": [_para("Hello\n")]},
         }
         ctx = _make_ctx(docs_service=docs_service, drive_service=MagicMock())
-        dest = tmp_path / "out.json"
+        dest = tmp_path / "out.md"
         result = await _docs_tools["get_doc_as_markdown"](
             doc_id="doc1", local_path=str(dest), ctx=ctx
         )
-        assert result["local_path"] == str(dest)
-        assert dest.exists()
+        assert result == {
+            "local_path": str(dest),
+            "bytes_written": dest.stat().st_size,
+            "doc_id": "doc1",
+            "title": "My Doc",
+        }
+
+    async def test_local_path_file_is_byte_identical_to_inline_markdown(self, tmp_path):
+        """#958: the file holds the raw Markdown (comments included), not the JSON envelope."""
+        docs_service = MagicMock()
+        docs_service.documents.return_value.get.return_value.execute.return_value = {
+            "documentId": "doc1",
+            "title": "My Doc",
+            "body": {"content": [_para('Héllo 😀 "quoted"\n'), _para("Second\n")]},
+        }
+        drive_service = MagicMock()
+        drive_service.comments.return_value.list.return_value.execute.return_value = {
+            "comments": [
+                {
+                    "id": "c1",
+                    "content": "open one",
+                    "author": {"displayName": "Alice"},
+                    "resolved": False,
+                    "deleted": False,
+                    "replies": [],
+                }
+            ]
+        }
+        ctx = _make_ctx(docs_service=docs_service, drive_service=drive_service)
+        inline = await _docs_tools["get_doc_as_markdown"](
+            doc_id="doc1", include_comments=True, ctx=ctx
+        )
+        dest = tmp_path / "out.md"
+        result = await _docs_tools["get_doc_as_markdown"](
+            doc_id="doc1", include_comments=True, local_path=str(dest), ctx=ctx
+        )
+        assert "## Comments" in inline["markdown"]
+        assert dest.read_bytes() == inline["markdown"].encode("utf-8")
+        assert result["bytes_written"] == len(inline["markdown"].encode("utf-8"))
+
+    async def test_local_path_directory_writes_doc_id_md(self, tmp_path):
+        docs_service = MagicMock()
+        docs_service.documents.return_value.get.return_value.execute.return_value = {
+            "documentId": "doc1",
+            "title": "My Doc",
+            "body": {"content": [_para("Hello\n")]},
+        }
+        ctx = _make_ctx(docs_service=docs_service, drive_service=MagicMock())
+        result = await _docs_tools["get_doc_as_markdown"](
+            doc_id="doc1", local_path=str(tmp_path), ctx=ctx
+        )
+        assert result["local_path"] == str(tmp_path / "doc1.md")
+        assert (tmp_path / "doc1.md").read_text(encoding="utf-8").startswith("Hello")
+
+
+@pytest.mark.parametrize("text", ["call(`value`)", "`leading", "trailing`", "``nested``"])
+@pytest.mark.parametrize("link_url", [None, "https://example.com/code"])
+def test_inline_code_backticks_survive_markdown_rendering(text, link_url):
+    nodes = [
+        Paragraph(
+            runs=[Run(text="see "), Run(text=text, font_family="Courier New", link_url=link_url)]
+        )
+    ]
+    rendered = ElementTree.fromstring(markdown.markdown(ast_to_markdown(nodes)))
+    code = rendered.find(".//code")
+    assert code is not None
+    assert code.text == text
+    if link_url:
+        assert rendered.find("a").attrib["href"] == link_url
+
+
+def _inline_code(markdown_text):
+    """Each code span's content in the first paragraph, as strict CommonMark parses it."""
+    inline = next(t for t in _COMMONMARK.parse(markdown_text) if t.type == "inline")
+    return [t.content for t in inline.children if t.type == "code_inline"]
+
+
+class TestInlineCodeCommonMark:
+    """#938: code-span edge cases checked against a strict CommonMark parser."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "call(`value`)",
+            "`leading",
+            "trailing`",
+            "``nested``",
+            " both ends ",
+            " leading only",
+            "trailing only ",
+            "  ",
+            " `x` ",
+            "  double  ",
+        ],
+    )
+    @pytest.mark.parametrize("link_url", [None, "https://example.com/code"])
+    def test_code_span_content_survives_exactly(self, text, link_url):
+        nodes = [Paragraph(runs=[Run(text="see "), _code(text, link_url=link_url), Run(text=".")])]
+        assert _inline_code(ast_to_markdown(nodes)) == [text]
+
+    def test_adjacent_code_runs_merge_into_one_span(self):
+        # Docs splits a run at a style change; Markdown can't show bold code.
+        nodes = [Paragraph(runs=[Run(text="a "), _code("x`"), _code("`y", bold=True)])]
+        assert _inline_code(ast_to_markdown(nodes)) == ["x``y"]
+
+    def test_adjacent_code_runs_with_same_link_merge(self):
+        url = "https://example.com"
+        nodes = [
+            Paragraph(runs=[Run(text="a "), _code("x", link_url=url), _code("y", link_url=url)])
+        ]
+        assert ast_to_markdown(nodes) == f"a [`xy`]({url})\n"
+
+    def test_adjacent_code_runs_with_different_links_stay_separate(self):
+        nodes = [
+            Paragraph(
+                runs=[
+                    Run(text="a "),
+                    _code("x", link_url="https://a.example"),
+                    _code("y", link_url="https://b.example"),
+                    _code("z"),
+                ]
+            )
+        ]
+        assert _inline_code(ast_to_markdown(nodes)) == ["x", "y", "z"]
+
+    def test_code_run_merge_does_not_mutate_input(self):
+        first, second = _code("x"), _code("y")
+        ast_to_markdown([Paragraph(runs=[Run(text="a "), first, second])])
+        assert (first.text, second.text) == ("x", "y")
+
+    def test_newline_in_inline_code_does_not_start_a_new_block(self):
+        nodes = [Paragraph(runs=[Run(text="a "), _code("x\n# y\n- z\n\nw"), Run(text=" b")])]
+        rendered = ast_to_markdown(nodes)
+        tokens = _COMMONMARK.parse(rendered)
+        assert [t.type for t in tokens] == ["paragraph_open", "inline", "paragraph_close"]
+        assert _inline_code(rendered) == ["x", "# y", "- z", "w"]
+        assert rendered == "a `x`<br>`# y`<br>`- z`<br><br>`w` b\n"
+
+    def test_newline_in_inline_code_inside_blockquote_stays_one_line(self):
+        nodes = [Paragraph(runs=[Run(text="a "), _code("x\ny")], blockquote_depth=1)]
+        assert ast_to_markdown(nodes) == "> a `x`<br>`y`\n"
+
+
+class TestTableCellCodeCommonMark:
+    """#938: inline code inside a GFM pipe-table cell."""
+
+    def _render_cell(self, children):
+        from mcp_gee_sweet.tools.docs.ast import Cell, Row
+
+        table = Table(
+            rows=[
+                Row(cells=[Cell(children=[Run(text="h")])]),
+                Row(cells=[Cell(children=children)]),
+            ]
+        )
+        rendered = ast_to_markdown([table])
+        html = _COMMONMARK.render(rendered)
+        return rendered, html[html.index("<td>") + 4 : html.index("</td>")]
+
+    def test_pipe_in_code_has_no_backslash(self):
+        rendered, cell = self._render_cell([_code("a|b")])
+        assert "\\" not in rendered
+        assert cell == "<code>a|b</code>"
+
+    def test_pipe_code_escapes_html_special_characters(self):
+        _, cell = self._render_cell([_code("<a> & b|c")])
+        assert cell == "<code>&lt;a&gt; &amp; b|c</code>"
+
+    def test_code_without_pipe_stays_a_code_span(self):
+        rendered, cell = self._render_cell([_code(" `x` ")])
+        assert "| ``  `x`  `` |" in rendered
+        assert cell == "<code> `x` </code>"
+
+    def test_newline_in_code_becomes_br_outside_the_code(self):
+        _, cell = self._render_cell([Run(text="t "), _code("x\ny")])
+        assert cell == "t <code>x</code><br><code>y</code>"
+
+    def test_code_paragraphs_in_one_cell_join_with_br(self):
+        # doc_to_ast prefixes the second paragraph's first run with "\n".
+        _, cell = self._render_cell([_code("x"), _code("\ny|z")])
+        assert cell == "<code>x</code><br><code>y|z</code>"
+
+    def test_plain_pipe_next_to_code_is_still_escaped(self):
+        _, cell = self._render_cell([Run(text="a|b "), _code("c")])
+        assert cell == "a|b <code>c</code>"
+
+    def test_linked_code_with_pipe_in_url_stays_in_one_cell(self):
+        rendered, cell = self._render_cell([_code("c", link_url="https://e.example/a|b")])
+        assert rendered.splitlines()[2].count("|") - rendered.splitlines()[2].count("\\|") == 2
+        assert cell == '<a href="https://e.example/a%7Cb"><code>c</code></a>'
+
+    def test_pipe_code_keeps_markdown_punctuation_literal(self):
+        # Text inside raw <code> is still parsed as Markdown (PR #968 QA round 1).
+        text = "a|*b* _c_ [x](y) ~~d~~ `e` <i> &amp;"
+        _, cell = self._render_cell([_code(text)])
+        assert cell == "<code>a|*b* _c_ [x](y) ~~d~~ `e` &lt;i&gt; &amp;amp;</code>"
+
+    def test_backslash_before_pipe_in_code_survives(self):
+        _, cell = self._render_cell([_code("C:\\|x")])
+        assert cell == "<code>C:\\|x</code>"
+
+    def test_linked_code_paragraph_break_lands_outside_the_link(self):
+        url = "https://e.example"
+        _, cell = self._render_cell([_code("x"), _code("\nb", link_url=url)])
+        assert cell == f'<code>x</code><br><a href="{url}"><code>b</code></a>'
+
+    def test_plain_run_rendered_in_table_is_table_safe(self):
+        from mcp_gee_sweet.tools.docs.ast_to_markdown import _render_run
+
+        assert _render_run(Run(text="a|b\nc"), in_table=True) == "a\\|b<br>c"
+
+
+class TestPlainTextEscapingCommonMark:
+    """PR #968 QA round 1: plain text that looks like HTML, an entity, or GFM
+    strikethrough must export as literal text."""
+
+    def test_html_entity_and_tilde_render_literally(self):
+        text = "Use <br> or &#124; and &amp; and ~~old~~ </p> <!-- x -->"
+        rendered = ast_to_markdown([Paragraph(runs=[Run(text=text)])])
+        inline = next(t for t in _COMMONMARK.parse(rendered) if t.type == "inline")
+        assert [t.type for t in inline.children] == ["text"]
+        assert inline.children[0].content == text
+
+    def test_prose_ampersand_and_less_than_stay_unescaped(self):
+        rendered = ast_to_markdown([Paragraph(runs=[Run(text="AT&T: a < b & c")])])
+        assert rendered == "AT&T: a < b & c\n"
+
+    def test_linked_code_trailing_soft_break_lands_outside_the_link(self):
+        url = "https://e.example"
+        nodes = [Paragraph(runs=[Run(text="a "), _code("x\n", link_url=url), Run(text="b")])]
+        rendered = ast_to_markdown(nodes)
+        assert rendered == f"a [`x`]({url})<br>b\n"
+        assert _COMMONMARK.render(rendered) == (
+            f'<p>a <a href="{url}"><code>x</code></a><br>b</p>\n'
+        )
+
+
+class TestBangBeforeLinkCommonMark:
+    """#969: a run ending in "!" followed by a linked run exported as
+    "wow![x](url)", which CommonMark reads as an image."""
+
+    URL = "https://e.example"
+
+    def _html(self, runs):
+        return _COMMONMARK.render(ast_to_markdown([Paragraph(runs=runs)]))
+
+    def test_plain_bang_before_link_stays_text(self):
+        runs = [Run(text="wow!"), Run(text="x", link_url=self.URL)]
+        assert ast_to_markdown([Paragraph(runs=runs)]) == f"wow\\![x]({self.URL})\n"
+        assert self._html(runs) == f'<p>wow!<a href="{self.URL}">x</a></p>\n'
+
+    def test_plain_bang_before_linked_code(self):
+        runs = [Run(text="wow!"), _code("x", link_url=self.URL)]
+        assert self._html(runs) == f'<p>wow!<a href="{self.URL}"><code>x</code></a></p>\n'
+
+    def test_plain_bang_before_linked_image(self):
+        runs = [Run(text="wow!"), Image(src="https://i.example/p.png", alt="p", link_url=self.URL)]
+        assert self._html(runs) == (
+            f'<p>wow!<a href="{self.URL}"><img src="https://i.example/p.png" alt="p" /></a></p>\n'
+        )
+
+    def test_empty_run_between_does_not_hide_the_boundary(self):
+        runs = [Run(text="wow!"), Run(text=""), Run(text="x", link_url=self.URL)]
+        assert self._html(runs) == f'<p>wow!<a href="{self.URL}">x</a></p>\n'
+
+    def test_literal_backslash_before_bang(self):
+        # "a\" escapes to "a\\", which leaves the "!" live, so it still needs one.
+        runs = [Run(text="a\\!"), Run(text="x", link_url=self.URL)]
+        assert self._html(runs) == f'<p>a\\!<a href="{self.URL}">x</a></p>\n'
+
+    def test_bang_not_before_link_is_left_alone(self):
+        assert ast_to_markdown([Paragraph(runs=[Run(text="wow! "), Run(text="ok!")])]) == (
+            "wow! ok!\n"
+        )
+        runs = [Run(text="wow!"), Image(src="https://i.example/p.png", alt="p")]
+        assert ast_to_markdown([Paragraph(runs=runs)]) == "wow!![p](https://i.example/p.png)\n"
+        assert self._html(runs) == '<p>wow!<img src="https://i.example/p.png" alt="p" /></p>\n'
+
+    def test_table_cell(self):
+        cell = Cell(children=[Run(text="wow!"), Run(text="x", link_url=self.URL)])
+        table = Table(rows=[Row(cells=[cell]), Row(cells=[Cell(children=[Run(text="b")])])])
+        html = _COMMONMARK.render(ast_to_markdown([table]))
+        assert f'<th>wow!<a href="{self.URL}">x</a></th>' in html
+
+
+class TestLookaheadEscapeAcrossRunsCommonMark:
+    """PR #981 QA round 1: "<" and "&" are escaped only when the text after
+    them would make a tag, autolink, or entity. A run boundary (e.g. a color
+    change mid-word, which Markdown doesn't render) hid that text."""
+
+    def _render(self, *texts):
+        rendered = ast_to_markdown([Paragraph(runs=[Run(text=t) for t in texts])])
+        inline = next(t for t in _COMMONMARK.parse(rendered) if t.type == "inline")
+        return rendered, inline
+
+    @pytest.mark.parametrize(
+        "texts",
+        [
+            ("a <", "b> text"),
+            ("AT&", "amp;T"),
+            ("see <", "https://x.io>"),
+            ("x &", "#124; y"),
+            ("&", "am", "p; split three ways"),
+            ("a <", "", "b> empty run between"),
+        ],
+    )
+    def test_split_syntax_renders_literally(self, texts):
+        _, inline = self._render(*texts)
+        assert [t.type for t in inline.children] == ["text"]
+        assert inline.children[0].content == "".join(texts)
+
+    @pytest.mark.parametrize(
+        "texts",
+        [("a <", " b"), ("AT&", "T"), ("a &", " b"), ("1 <", "2")],
+    )
+    def test_prose_stays_unescaped(self, texts):
+        rendered, _ = self._render(*texts)
+        assert rendered == "".join(texts) + "\n"
+
+    def test_less_than_before_inline_code_is_left_alone(self):
+        rendered = ast_to_markdown([Paragraph(runs=[Run(text="a <"), _code("b")])])
+        assert rendered == "a <`b`\n"
+
+    def test_table_cell(self):
+        cell = Cell(children=[Run(text="a <"), Run(text="b> text")])
+        table = Table(rows=[Row(cells=[cell]), Row(cells=[Cell(children=[Run(text="c")])])])
+        html = _COMMONMARK.render(ast_to_markdown([table]))
+        assert "<th>a &lt;b&gt; text</th>" in html

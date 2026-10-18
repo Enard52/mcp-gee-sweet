@@ -22,6 +22,9 @@ Fixtures: see [`docs/qa/setup.md`](../setup.md). Substitute your `{SPREADSHEET_I
 **Result (2026-09-04) ✅ PASS**
 6 rows, 4 cols; Totals computed 650/670/705, not formula strings; no error
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
 ---
 
 ### TC-R02: Explicit range
@@ -38,6 +41,9 @@ Fixtures: see [`docs/qa/setup.md`](../setup.md). Substitute your `{SPREADSHEET_I
 **Result (2026-09-04) ✅ PASS**
 A1:C3 → 3×3, Product/Q1/Q2, Widget/100/120, Gadget/200/180
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
 ---
 
 ### TC-R03: Grid data with an explicit range
@@ -52,6 +58,9 @@ A1:C3 → 3×3, Product/Q1/Q2, Widget/100/120, Gadget/200/180
 
 **Result (2026-09-04) ✅ PASS**
 rowData present; range A1:D6 honored; no auto-detect probe (range given)
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
 
 ---
 
@@ -71,6 +80,9 @@ Called live against the actual Sales fixture (`gridProperties: rowCount=3016, co
 
 **Result (2026-09-04) ✅ PASS**
 No range + grid data: rowData scoped to used 6×4 range only (grid is 1000×26); no error/truncation
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
 
 ---
 
@@ -94,6 +106,9 @@ Exact size (4,325,100 chars) confirms the fetch completed before the check ran, 
 **Result (2026-09-04) ✅ PASS**
 Fetch succeeded; size check raised ValueError naming actual size 4,085,918 chars, cap 1,000,000, and narrow-range/local_path/MAX_TOOL_RESPONSE_CHARS options. Cap default is now 1,000,000 (#519); Setup text in test doc citing 40,000 is stale, behavior correct
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
 ---
 
 ### TC-R03d: Grid data with local_path writes to disk instead of returning inline (issue #235)
@@ -112,6 +127,9 @@ Same scratch-sheet setup as TC-R03c. Call returned `{"local_path": "/tmp/qa_grid
 **Result (2026-09-04) ✅ PASS**
 local_path set → returned {local_path, bytes_written 4,085,918, spreadsheet_id, sheet, range}; file on disk has rowData + formatting
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
 ---
 
 ### TC-R03e: MAX_TOOL_RESPONSE_CHARS raises the cap (issue #235)
@@ -127,6 +145,9 @@ Set `MAX_TOOL_RESPONSE_CHARS=200000` in server config and restart the server (e.
 
 **Result (2026-09-04) ⏭️ SKIP**
 Requires server restart with changed MAX_TOOL_RESPONSE_CHARS env var — not possible this pass (pre-existing pending)
+
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+Needs a server restart with a changed MAX_TOOL_RESPONSE_CHARS.
 
 ---
 
@@ -150,23 +171,33 @@ If the measured response lands outside the 40,000–1,000,000 band (formatting d
 **Result (2026-09-04) ✅ PASS**
 Formatted A1:Z23 on scratch sheet; get_sheet_data(grid) returned 428,765-char response with NO server ValueError (between old 40k and new 1M default). Claude Code client-side cap wrote it to a file; rowData + bold:true confirmed present
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
 ---
 
 ### TC-R04: Non-existent sheet name
+
+**Background:** The 2026-09-04 result below found this call leaked a raw `HttpError` instead of the `{"error": ...}` shape every other validation failure in these tools returns — this is `get_sheet_data`'s own instance of the broader gap tracked as issue #757 (no local validation on the raw range string handed to the Sheets values API). Fixed by wrapping this call site (and its `include_grid_data=True` sibling — see TC-R41) in `try/except HttpError`. The Checks below describe the post-fix expected behavior; the dated Result above predates the fix.
 
 **Prompt**
 > "Get data from a sheet called 'DoesNotExist' in {SPREADSHEET_ID}"
 
 **Checks**
-- Returns a clear error — not an empty result
+- Returns `{"error": "<HttpError text, e.g. ...Unable to parse range: DoesNotExist...>"}`  — a clean `{"error": ...}` dict, not a raw exception propagating to the client
 - Error message references the sheet name or indicates it was not found
 
 **Result (2026-09-04) ✅ PASS**
 Nonexistent sheet → HttpError 400 "Unable to parse range: DoesNotExist" — clear error, names the sheet, not empty result (raw HttpError, not friendly {"error"})
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
 ---
 
 ### TC-R05: Non-existent spreadsheet ID
+
+**Background:** Exercises the same `get_sheet_data` non-grid call site as TC-R04 (`values().get()`, issue #757), via an invalid `spreadsheet_id` instead of an invalid `sheet` name — same defect, same fix (`try/except HttpError`, now `_execute_or_error`). The dated Result below predates the fix and shows the pre-fix raw-`HttpError` behavior; post-fix, this returns `{"error": "<HttpError 404 ... Requested entity was not found ...>"}` instead.
 
 **Prompt**
 > "Get data from the Sales sheet of spreadsheet 'invalidid123xyz'"
@@ -177,6 +208,9 @@ Nonexistent sheet → HttpError 400 "Unable to parse range: DoesNotExist" — cl
 
 **Result (2026-09-04) ✅ PASS**
 Invalid spreadsheet ID → HttpError 404 "Requested entity was not found." — no crash, no silent empty
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
 
 ---
 
@@ -192,6 +226,9 @@ Invalid spreadsheet ID → HttpError 404 "Requested entity was not found." — n
 **Result (2026-09-04) ✅ PASS**
 A100:Z200 → values: [], no error
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
 ---
 
 ### TC-R07: Sheet name with spaces and special characters
@@ -206,6 +243,49 @@ A100:Z200 → values: [], no error
 
 **Result (2026-09-04) ✅ PASS**
 'Notes & Misc' resolved (spaces + &); 2 rows; date cell computed
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
+---
+
+### TC-R41: Malformed range with include_grid_data=True returns a clean error (issue #757)
+
+**Background:** TC-R04 covers this same defect class on `get_sheet_data`'s non-grid (`values().get()`) call site. The `include_grid_data=True` path uses a separate call (`spreadsheets().get(..., includeGridData=True)`) and had the identical gap — no local validation on the raw caller-supplied `range` string, so a malformed one reached the client as an uncaught `HttpError`. Fixed in the same PR, same `try/except HttpError` pattern.
+
+**Prompt**
+> "Get data from the Sales sheet of {SPREADSHEET_ID}, range '!!!BadRange!!!', with include_grid_data=True"
+
+**Checks**
+- Returns `{"error": "<HttpError text>"}` — not a raw exception
+- No response-size-cap check runs (the call fails before the grid data is ever fetched)
+
+**Cleanup:** none — no write occurred.
+
+**Result (2026-09-18) ✅ PASS** — `get_sheet_data(spreadsheet_id, sheet="Sales", range="!!!BadRange!!!", include_grid_data=True)` returned `{"error": "<HttpError 400 ... Unable to parse range: Sales!!!!BadRange!!! ...>"}`, not a raw exception.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
+---
+
+### TC-R43: Malformed sheet name during auto-detection returns a clean error (issue #757)
+
+**Background:** QA round 1 on PR #764 found a third, earlier call site the first pass missed: `include_grid_data=True` with no `range` triggers an auto-detect-used-range probe (`values().get()`, issue #235) *before* either TC-R04's or TC-R41's own call ever runs. A bad `sheet` name reaches this probe call raw, same gap, same fix.
+
+**Prompt**
+> "Get data from a sheet called 'DoesNotExist' in {SPREADSHEET_ID}, with include_grid_data=True and no range"
+
+**Checks**
+- Returns `{"error": "<HttpError text>"}` — not a raw exception
+- The `spreadsheets().get(..., includeGridData=True)` call is never made (the probe fails first)
+
+**Cleanup:** none — no write occurred.
+
+**Result (2026-09-18) ✅ PASS** — `get_sheet_data(spreadsheet_id, sheet="DoesNotExist", include_grid_data=True)` against the fixture spreadsheet returned `{"error": "<HttpError 400 ... Unable to parse range: DoesNotExist ...>"}`, not a raw exception.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
 
 ---
 
@@ -223,6 +303,9 @@ A100:Z200 → values: [], no error
 **Result (2026-09-04) ✅ PASS**
 Row 6 → =SUM(B2:B5)/=SUM(C2:C5)/=SUM(D2:D5); data rows literal ints
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
 ---
 
 ### TC-R09: Sheet with no formulas
@@ -235,6 +318,9 @@ Row 6 → =SUM(B2:B5)/=SUM(C2:C5)/=SUM(D2:D5); data rows literal ints
 
 **Result (2026-09-04) ✅ PASS**
 Empty sheet formulas → []
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
 
 ---
 
@@ -251,6 +337,9 @@ Empty sheet formulas → []
 **Result (2026-09-04) ✅ PASS**
 A2 → "=TODAY()"; B2 → "Setup complete" literal
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
 ---
 
 ### TC-R11: No range provided — fetches entire sheet
@@ -265,6 +354,28 @@ A2 → "=TODAY()"; B2 → "Setup complete" literal
 
 **Result (2026-09-04) ✅ PASS**
 No range → all 6 rows, row 6 formula strings; matches TC-R08
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
+---
+
+### TC-R42: Malformed range returns a clean error, not a raw exception (issue #757)
+
+**Background:** `get_sheet_formulas` had the same gap as TC-R04/TC-R41 — no local validation on the raw caller-supplied `range` string before handing it to `values().get(..., valueRenderOption="FORMULA")`.
+
+**Prompt**
+> "Get formulas from the Sales sheet of {SPREADSHEET_ID}, range '!!!BadRange!!!'"
+
+**Checks**
+- Returns `{"error": "<HttpError text>"}` — not a raw exception propagating to the client
+
+**Cleanup:** none — no write occurred.
+
+**Result (2026-09-18) ✅ PASS** — `get_sheet_formulas(spreadsheet_id, sheet="Sales", range="!!!BadRange!!!")` returned `{"error": "<HttpError 400 ... Unable to parse range: Sales!!!!BadRange!!! ...>"}`, not a raw exception.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
 
 ---
 
@@ -283,6 +394,9 @@ No range → all 6 rows, row 6 formula strings; matches TC-R08
 **Result (2026-09-04) ✅ PASS**
 Two results, correct data per sheet, no errors
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
 ---
 
 ### TC-R13: One query with missing required keys
@@ -296,6 +410,9 @@ Two results, correct data per sheet, no errors
 
 **Result (2026-09-04) ✅ PASS**
 Sales ok; 2nd query (no sheet) → error "Missing required keys (spreadsheet_id, sheet)"; first unaffected
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
 
 ---
 
@@ -311,6 +428,9 @@ Sales ok; 2nd query (no sheet) → error "Missing required keys (spreadsheet_id,
 **Result (2026-09-04) ✅ PASS**
 Both entries have error fields; list of 2 error objects, not top-level error
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
 ---
 
 ### TC-R15: Empty queries list
@@ -323,6 +443,9 @@ Both entries have error fields; list of 2 error objects, not top-level error
 
 **Result (2026-09-04) ✅ PASS**
 []
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
 
 ---
 
@@ -352,6 +475,30 @@ No fixture setup needed — query 5 different single-cell ranges from the `Sales
 **Result (2026-09-04) ✅ PASS**
 5 ranges A1/B1/C1/A2/B2 → 5 results in order, each correct (Product/Q1/Q2/Widget/100), zero errors. Fresh pass supersedes 2026-07-12 FAIL
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Three 5-range orderings returned cell-exact, in-order results.
+
+---
+
+### TC-R39: `get_multiple_sheet_data` emits `notifications/progress` updates as each query completes (issue #355)
+
+**Background:** #355 extends #316/#319's per-item `ctx.report_progress()` pattern (originally added to `download_folder`/`sync_folder` — see TC-D199) to `get_multiple_sheet_data`'s concurrent per-query fetches: `ctx.report_progress(completed, total, f"{spreadsheet_id}/{sheet}: {outcome}")` fires from inside each query's own coroutine as it finishes, wrapped in try/except so a broken notification channel can't demote an already-successful fetch. The exact per-query call count, `total`, and message content are asserted against a mocked `ctx` in `tests/sheets/test_data.py::TestGetMultipleSheetData::test_reports_progress_per_query`/`test_report_progress_failure_does_not_demote_a_successful_fetch`.
+
+**Note:** Same protocol-level caveat as TC-D199 — `notifications/progress` isn't part of the tool's JSON response, so visibility depends on whether this QA client sets a `progressToken`. If it doesn't, this check can only confirm the call still completes normally with the new `ctx.report_progress(...)` call path in place.
+
+**Prompt**
+> "In one call, get these 2 ranges from {SPREADSHEET_ID}: Sales!A1:B2 and Notes & Misc!A1"
+
+**Checks**
+- Call completes normally, returns 2 results, no error
+- If progress notifications are visible in the client: 2 discrete updates appear, one per query, not a single update at the very end
+
+**Teardown**
+None.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Correct results; progress notifications aren't visible in this client.
+
 ---
 
 ## `get_multiple_spreadsheet_summary`
@@ -368,6 +515,9 @@ No fixture setup needed — query 5 different single-cell ranges from the `Sales
 
 **Result (2026-09-04) ✅ PASS**
 All 3 sheets; Sales headers + first rows; Empty headers [] / first_rows []
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
 
 ---
 
@@ -392,6 +542,9 @@ Delete the 2 throwaway spreadsheets.
 **Result (2026-09-04) ✅ PASS**
 3 distinct spreadsheets in one call → 3 entries in order, each title/contents match its own (marker-B / marker-C), no cross-attribution, no errors. Throwaway sheets deleted
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
 ---
 
 ### TC-R17: Cache hit — second call skips API
@@ -406,6 +559,9 @@ Delete the 2 throwaway spreadsheets.
 **Result (2026-09-04) ✅ PASS**
 2nd call returns identical data (server log cache-hit line not checkable from QA session)
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Second call identical; the cache-hit log line isn't visible to the client.
+
 ---
 
 ### TC-R18: rows_to_fetch=1 — only header returned
@@ -419,6 +575,9 @@ Delete the 2 throwaway spreadsheets.
 
 **Result (2026-09-04) ✅ PASS**
 rows_to_fetch=1 → headers present, first_rows []
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
 
 ---
 
@@ -437,6 +596,9 @@ rows_to_fetch=1 → headers present, first_rows []
 **Result (2026-09-04) ✅ PASS**
 rows_to_fetch=0 clamped to 1: first_rows [] for Sales, same as TC-R18
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
 ---
 
 ### TC-R20: Spreadsheet with empty sheet
@@ -451,6 +613,9 @@ rows_to_fetch=0 clamped to 1: first_rows [] for Sales, same as TC-R18
 
 **Result (2026-09-04) ✅ PASS**
 Empty sheet entry headers [] / first_rows []; no error; other sheets fine
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
 
 ---
 
@@ -467,6 +632,9 @@ Empty sheet entry headers [] / first_rows []; no error; other sheets fine
 **Result (2026-09-04) ✅ PASS**
 Valid → normal summary; "invalidid123xyz" → error field; both present
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
 ---
 
 ### TC-R22: Range format verification
@@ -481,6 +649,30 @@ Valid → normal summary; "invalidid123xyz" → error field; both present
 
 **Result (2026-09-04) ✅ PASS**
 rows_to_fetch=3 → Sales header + 2 data rows (Widget, Gadget); cols B/C/D present
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
+---
+
+### TC-R40: `get_multiple_spreadsheet_summary` emits `notifications/progress` updates as each spreadsheet finishes (issue #355)
+
+**Background:** Same #355 pattern as TC-R39, applied to `get_multiple_spreadsheet_summary`'s concurrent per-spreadsheet outer loop (the same loop TC-R37 exercises for cross-attribution): `ctx.report_progress(completed, total, f"{spreadsheet_id}: {outcome}")` fires from inside each spreadsheet's own coroutine as its summary finishes. Unit-tested against a mocked `ctx` in `tests/sheets/test_data.py::TestGetMultipleSpreadsheetSummary::test_reports_progress_per_spreadsheet`/`test_report_progress_failure_does_not_demote_a_successful_summary`.
+
+**Note:** Same protocol-level caveat as TC-D199/TC-R39 — visibility depends on whether this QA client sets a `progressToken`.
+
+**Prompt**
+> "Give me summaries of {SPREADSHEET_ID} and 'invalidid123xyz' in one call"
+
+**Checks**
+- Call completes normally, returns 2 entries (one with an `error` field for the invalid ID), no top-level error
+- If progress notifications are visible in the client: 2 discrete updates appear, one per spreadsheet, not a single update at the very end
+
+**Teardown**
+None.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Correct results; progress notifications aren't visible in this client.
 
 ---
 
@@ -498,6 +690,9 @@ rows_to_fetch=3 → Sales header + 2 data rows (Widget, Gadget); cols B/C/D pres
 **Result (2026-09-04) ✅ PASS**
 Sales A3 "Gadget" (row 3)
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
 ---
 
 ### TC-R24: Match across all sheets
@@ -511,6 +706,9 @@ Sales A3 "Gadget" (row 3)
 
 **Result (2026-09-04) ✅ PASS**
 Match in 'Notes & Misc' B2; all sheets searched
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
 
 ---
 
@@ -526,6 +724,9 @@ Match in 'Notes & Misc' B2; all sheets searched
 **Result (2026-09-04) ✅ PASS**
 lowercase 'gadget' matched "Gadget" (case-insensitive default)
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
 ---
 
 ### TC-R26: Case-sensitive match
@@ -539,6 +740,9 @@ lowercase 'gadget' matched "Gadget" (case-insensitive default)
 
 **Result (2026-09-04) ✅ PASS**
 case_sensitive=true 'gadget' → []
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
 
 ---
 
@@ -554,6 +758,9 @@ case_sensitive=true 'gadget' → []
 **Result (2026-09-04) ✅ PASS**
 'Q' max_results=2 → exactly 2 results
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
 ---
 
 ### TC-R28: No matches
@@ -566,6 +773,9 @@ case_sensitive=true 'gadget' → []
 
 **Result (2026-09-04) ✅ PASS**
 'ZZZnoMatch' → []
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
 
 ---
 
@@ -581,6 +791,9 @@ case_sensitive=true 'gadget' → []
 **Result (2026-09-04) ✅ PASS**
 sheet 'DoesNotExist' → [{"error":"Sheet 'DoesNotExist' not found"}], names the sheet
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
 ---
 
 ### TC-R30: Multiple column matches in same row
@@ -594,6 +807,9 @@ sheet 'DoesNotExist' → [{"error":"Sheet 'DoesNotExist' not found"}], names the
 
 **Result (2026-09-04) ✅ PASS**
 'Q' in Sales → separate results for Q1/Q2/Q3 (per-cell granularity)
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
 
 ---
 
@@ -627,6 +843,9 @@ Clear `userEnteredFormat` from A1 via `batch_update → repeatCell { cell: {}, f
 **Result (2026-09-04) ✅ PASS**
 A1 effectiveFormat.textFormat.bold=true, italic=false, formattedValue "Product"; format cleared in teardown
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
 ---
 
 ### TC-R32: Background color and italic readable via effectiveFormat
@@ -653,6 +872,9 @@ Clear `userEnteredFormat` from B1.
 **Result (2026-09-04) ✅ PASS**
 B1 effectiveFormat italic=true, bold=false, backgroundColor {red:1,green:0.8980392,blue:0.6}; cleared
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
 ---
 
 ### TC-R33: Number format and formattedValue readable via effectiveFormat
@@ -678,6 +900,9 @@ Clear `userEnteredFormat` from B2.
 **Result (2026-09-04) ✅ PASS**
 B2 numberFormat {CURRENCY, "$#,##0.00"}, formattedValue "$100.00", effectiveValue.numberValue 100; cleared
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.
+
 ---
 
 ### TC-R34: get_multiple_sheet_data — many small queries trips the response-size cap (issue #242)
@@ -696,6 +921,9 @@ No fixture setup needed — repeat the same tiny query (`{spreadsheet_id: {SPREA
 
 **Result (2026-09-04) ✅ PASS**
 local_path branch: 2 queries → {local_path, bytes_written 440, query_count 2}, file has full per-query results. Cap-trip check (200 queries → ValueError naming 40,000 cap) is stale: #519 raised default to 1,000,000, a ~150k-char 200-query response no longer trips it; cap mechanism itself verified via TC-R03c
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+local_path part passes; the 200-query cap check is stale since #519 and was not run.
 
 ---
 
@@ -719,3 +947,29 @@ Write 10 cells (`Empty!A1:A10`) each containing a ~4,785-character string with a
 **Result (2026-09-04) ⏭️ SKIP**
 Stale: references retired 40,000 cap; ~42k-char 10-match response no longer trips the 1,000,000 default. Cap + local_path mechanism covered by TC-R03c/d. Skipped rather than add fixture churn for no signal
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+40 REPT cells of 30k chars (1,201,911 chars) trip the 1M cap; local_path returns match_count 40. TC setup still cites the 40k cap (stale).
+
+
+---
+
+### TC-R44: A sheet name with `/` or `..` writes inside the chosen `local_path` directory (PR #1000 QA round 2, issue #990) ⚠️ local-filesystem
+`get_sheet_data` names its file `<sheet>_data.json`. Before the fix, a tab named `../x` wrote `x_data.json` beside the chosen directory, and a tab named `a/b` created a subdirectory.
+
+**Setup:** `rm -rf /tmp/qa-990-sheet`. `create_sheet(spreadsheet_id={SPREADSHEET_ID}, title="../x")` and `create_sheet(spreadsheet_id={SPREADSHEET_ID}, title="a/b")`.
+
+**Steps**
+1. `get_sheet_data(spreadsheet_id={SPREADSHEET_ID}, sheet="../x", local_path="/tmp/qa-990-sheet/out/")`
+2. `get_sheet_data(spreadsheet_id={SPREADSHEET_ID}, sheet="a/b", local_path="/tmp/qa-990-sheet/out/")`
+
+**Checks**
+- Step 1 returns `local_path` `/tmp/qa-990-sheet/out/.._x_data.json`
+- Step 2 returns `local_path` `/tmp/qa-990-sheet/out/a_b_data.json`
+- `ls -A /tmp/qa-990-sheet` lists only `out`, and `ls -A /tmp/qa-990-sheet/out` lists exactly `.._x_data.json` and `a_b_data.json` (no `a/` subdirectory)
+
+**Cleanup:** `delete_sheet` both tabs; `rm -rf /tmp/qa-990-sheet`
+
+**Result (2026-10-11) ✅ PASS — Kit, PR #1000 round 3 (`290f5bc`).** Ran under this job's scratch dir instead of `/tmp`. Used `TEST_SPREADSHEET_ID`. Step 1 returned `<dir>/out/.._x_data.json` (117 bytes), step 2 `<dir>/out/a_b_data.json` (116 bytes). `<dir>` lists only `out`, and `out` lists exactly those two files. Both tabs deleted afterward.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-sa) or run 2 re-run (kai-oauth); observed values matched the TC checks.

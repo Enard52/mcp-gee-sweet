@@ -1,6 +1,7 @@
 import asyncio
 import csv
 import logging
+from contextlib import aclosing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -10,12 +11,63 @@ from mcp.server.mcpserver import Context
 from mcp.types import ToolAnnotations
 
 from ...auth import execute_in_thread
+from ...local_files import LocalFileAccessError, check_read
+from ..concurrency import gather_with_fallback, report_progress_safe
+from ..http_errors import is_storage_quota_error
+from ..pagination import iter_pages
+from ..response_limits import clamp_max_results
 from ..sheets.helpers import _quote_sheet_name
-from . import _SA_QUOTA_ERROR
+from . import _escape_drive_query_mime_type, _quota_error_text
 
 logger = logging.getLogger(__name__)
 
 _CSV_IMPORT_CHUNK_ROWS = 5000
+
+# max_results caps list_drives at 200 drives (2 full pages); the page bound only
+# stops a nextPageToken that never goes falsy over empty pages (#615).
+_LIST_DRIVES_MAX_PAGES = 50
+
+
+async def _list_drive_files(
+    drive_service,
+    q: str,
+    max_results: int,
+    error_prefix: str,
+    extra_kwargs: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Shared execute+map+error-handling body for list_shared_with_me/list_recent_files.
+
+    Both tools query files().list() against the same result field set and shape
+    the response identically; only the query string, page size, and (for
+    list_recent_files) the cross-Drive flags differ, passed via extra_kwargs.
+    """
+    try:
+        results = await execute_in_thread(
+            drive_service.files()
+            .list(
+                q=q,
+                pageSize=max_results,
+                spaces="drive",
+                fields="files(id, name, mimeType, modifiedTime, owners, webViewLink)",
+                orderBy="modifiedTime desc",
+                **(extra_kwargs or {}),
+            )
+            .execute,
+            drive_service,
+        )
+        return [
+            {
+                "id": f["id"],
+                "name": f["name"],
+                "mime_type": f["mimeType"],
+                "modified_time": f.get("modifiedTime"),
+                "owners": [o.get("emailAddress") for o in f.get("owners", [])],
+                "web_link": f.get("webViewLink"),
+            }
+            for f in results.get("files", [])
+        ]
+    except Exception as e:
+        return [{"error": f"{error_prefix} failed: {e!s}"}]
 
 
 def register(tool):
@@ -58,8 +110,8 @@ def register(tool):
                 drive_service,
             )
         except HttpError as e:
-            if e.resp.status == 403 and b"storageQuotaExceeded" in (e.content or b""):
-                return {"error": _SA_QUOTA_ERROR}
+            if is_storage_quota_error(e):
+                return {"error": _quota_error_text(drive_service)}
             raise
 
         spreadsheet_id = spreadsheet.get("id")
@@ -79,7 +131,10 @@ def register(tool):
             "folder": parents[0] if parents else "root",
         }
 
-    @tool(annotations=ToolAnnotations(title="Import CSV to Sheet", destructiveHint=True))
+    @tool(
+        annotations=ToolAnnotations(title="Import CSV to Sheet", destructiveHint=True),
+        local_only=True,
+    )
     async def import_csv_to_sheet(
         local_path: str,
         title: str,
@@ -89,10 +144,15 @@ def register(tool):
     ) -> dict[str, Any]:
         """
         Create a new Google Spreadsheet populated from a local CSV file.
+        Not available when the server runs with LOCAL_FILE_ACCESS=off.
 
         Reads the CSV, creates the spreadsheet, expands the sheet's grid to fit
         the data (avoiding the default 1000-row/26-column limit), and writes
         every row in one or more batched value updates.
+
+        Row chunks write concurrently rather than one at a time (#183). If the
+        caller supplied a progressToken, a `notifications/progress` update is sent
+        as each chunk finishes (#355).
 
         Args:
             local_path: Absolute path to the local .csv file.
@@ -116,11 +176,16 @@ def register(tool):
             Drive (no storage quota). Works on Shared Drives regardless of auth method.
             Check server://auth-status for your current auth method.
         """
-        path = Path(local_path)
+        try:
+            # Before any stat, so a refused path reads the same whether or not it exists.
+            path = check_read(local_path)
+        except LocalFileAccessError as e:
+            return {"error": str(e)}
         if not path.exists():
             return {"error": f"File not found: {local_path}"}
-        if path.suffix.lower() != ".csv":
-            return {"error": f"Unsupported file extension '{path.suffix}'. Use .csv"}
+        suffix = Path(local_path).suffix
+        if suffix.lower() != ".csv":
+            return {"error": f"Unsupported file extension '{suffix}'. Use .csv"}
 
         def _read_csv() -> list[list[str]]:
             with path.open(newline="", encoding="utf-8") as f:
@@ -155,8 +220,8 @@ def register(tool):
                 drive_service,
             )
         except HttpError as e:
-            if e.resp.status == 403 and b"storageQuotaExceeded" in (e.content or b""):
-                return {"error": _SA_QUOTA_ERROR}
+            if is_storage_quota_error(e):
+                return {"error": _quota_error_text(drive_service)}
             raise
 
         spreadsheet_id = spreadsheet.get("id")
@@ -215,7 +280,21 @@ def register(tool):
 
         quoted_sheet = _quote_sheet_name(sheet_name)
 
-        async def _write_chunk(start: int, chunk: list[list]) -> dict[str, Any]:
+        # Safe to parallelize: each chunk writes a disjoint row range of the same
+        # sheet (A{start+1} onward, non-overlapping), so there's no read-modify-write
+        # race between chunks. Unlike the old sequential loop — where a failure left a
+        # clean truncated prefix — a concurrent failure can leave a hole mid-sheet (an
+        # earlier chunk can still be in flight when a later one succeeds), so failures
+        # are reported per-range rather than as a single opaque exception.
+        chunks = [
+            (start, rows[start : start + _CSV_IMPORT_CHUNK_ROWS])
+            for start in range(0, len(rows), _CSV_IMPORT_CHUNK_ROWS)
+        ]
+        total_chunks = len(chunks)
+        completed = [0]
+
+        async def _write_chunk(item: tuple[int, list[list]]) -> dict[str, Any]:
+            start, chunk = item
             row_range = {"start_row": start + 1, "end_row": start + len(chunk)}
             try:
                 await execute_in_thread(
@@ -230,36 +309,37 @@ def register(tool):
                     .execute,
                     sheets_service,
                 )
-                return {**row_range, "ok": True}
+                result = {**row_range, "ok": True}
             except Exception as e:
-                return {**row_range, "ok": False, "error": str(e)}
+                result = {**row_range, "ok": False, "error": str(e)}
 
-        # Safe to parallelize: each chunk writes a disjoint row range of the same
-        # sheet (A{start+1} onward, non-overlapping), so there's no read-modify-write
-        # race between chunks. Unlike the old sequential loop — where a failure left a
-        # clean truncated prefix — a concurrent failure can leave a hole mid-sheet (an
-        # earlier chunk can still be in flight when a later one succeeds), so failures
-        # are reported per-range rather than as a single opaque exception.
-        chunks = [
-            (start, rows[start : start + _CSV_IMPORT_CHUNK_ROWS])
-            for start in range(0, len(rows), _CSV_IMPORT_CHUNK_ROWS)
-        ]
-        chunk_results: list[dict[str, Any]] = []
-        if chunks:
-            raw = await asyncio.gather(
-                *(_write_chunk(start, chunk) for start, chunk in chunks), return_exceptions=True
+            # Reported here, inside the per-item coroutine, so updates stream in as
+            # each concurrent chunk write finishes rather than arriving in one burst
+            # after asyncio.gather resolves — see #316/#319's original rationale,
+            # extended to this tool by #355.
+            completed[0] += 1
+            row_label = f"rows {row_range['start_row']}-{row_range['end_row']}"
+            await report_progress_safe(
+                ctx,
+                completed[0],
+                total_chunks,
+                f"{row_label}: {'ok' if result['ok'] else 'error'}",
+                row_label,
             )
-            chunk_results = [
-                r
-                if not isinstance(r, BaseException)
-                else {
-                    "start_row": start + 1,
-                    "end_row": start + len(chunk),
-                    "ok": False,
-                    "error": str(r),
-                }
-                for (start, chunk), r in zip(chunks, raw, strict=True)
-            ]
+            return result
+
+        def _chunk_fallback(item: tuple[int, list[list]], exc: BaseException) -> dict[str, Any]:
+            start, chunk = item
+            return {
+                "start_row": start + 1,
+                "end_row": start + len(chunk),
+                "ok": False,
+                "error": str(exc),
+            }
+
+        chunk_results: list[dict[str, Any]] = (
+            await gather_with_fallback(chunks, _write_chunk, _chunk_fallback) if chunks else []
+        )
 
         if target_folder_id:
             lc.drive_folder_cache.mark_dirty(target_folder_id)
@@ -308,11 +388,14 @@ def register(tool):
 
     @tool(annotations=ToolAnnotations(title="List Spreadsheets", readOnlyHint=True))
     async def list_spreadsheets(
-        folder_id: str | None = None, ctx: Context = None
+        folder_id: str | None = None, max_results: int = 100, ctx: Context = None
     ) -> list[dict[str, str]]:
         """
         List all spreadsheets in the specified Google Drive folder.
-        If no folder is specified, uses the configured default folder or lists from 'My Drive'.
+        If no folder is specified, uses the configured default folder; if that's
+        also unset, searches across 'My Drive' AND every shared drive the
+        authenticated account can access (includeItemsFromAllDrives=True) — not
+        just 'My Drive'.
 
         A strict, less-flexible special case of list_files pre-filtered to the
         spreadsheet MIME type. For a different result cap or other file types, use
@@ -321,26 +404,30 @@ def register(tool):
 
         Args:
             folder_id: Optional Google Drive folder ID to search in.
-                      If not provided, uses the configured default folder or searches 'My Drive'.
+                      If not provided, uses the configured default folder or searches
+                      'My Drive' and every shared drive the account can access.
+            max_results: Maximum number of results to return (default 100, max 1000).
 
         Returns:
             List of spreadsheets with their ID and title
         """
         drive_service = ctx.request_context.lifespan_context.drive_service
         target_folder_id = folder_id or ctx.request_context.lifespan_context.folder_id
+        max_results = clamp_max_results(max_results, 1000)
 
         query = "mimeType='application/vnd.google-apps.spreadsheet'"
         if target_folder_id:
             query += f" and '{target_folder_id}' in parents"
             logger.debug("Searching for spreadsheets in folder: %s", target_folder_id)
         else:
-            logger.debug("Searching for spreadsheets in 'My Drive'")
+            logger.debug("Searching for spreadsheets across 'My Drive' and shared drives")
 
         results = await execute_in_thread(
             drive_service.files()
             .list(
                 q=query,
                 spaces="drive",
+                pageSize=max_results,
                 includeItemsFromAllDrives=True,
                 supportsAllDrives=True,
                 fields="files(id, name)",
@@ -354,34 +441,43 @@ def register(tool):
 
     @tool(annotations=ToolAnnotations(title="List Folders", readOnlyHint=True))
     async def list_folders(
-        parent_folder_id: str | None = None, ctx: Context = None
+        parent_folder_id: str | None = None, max_results: int = 100, ctx: Context = None
     ) -> list[dict[str, str]]:
         """
         List all folders in the specified Google Drive folder.
-        If no parent folder is specified, lists folders from 'My Drive' root.
+        If no parent is specified, uses the configured default folder
+        (DRIVE_FOLDER_ID); if that is also unset, searches across 'My Drive' AND
+        every shared drive the authenticated account can access
+        (includeItemsFromAllDrives=True) — not just 'My Drive'.
 
         Args:
             parent_folder_id: Optional Google Drive folder ID to search within.
-                             If not provided, searches the root of 'My Drive'.
+                             If not provided, uses the configured default folder
+                             or searches 'My Drive' and every shared drive the
+                             account can access.
+            max_results: Maximum number of results to return (default 100, max 1000).
 
         Returns:
             List of folders with their ID, name, and parent information
         """
-        drive_service = ctx.request_context.lifespan_context.drive_service
+        lc = ctx.request_context.lifespan_context
+        drive_service = lc.drive_service
+        target_folder_id = parent_folder_id or lc.folder_id
+        max_results = clamp_max_results(max_results, 1000)
 
         query = "mimeType='application/vnd.google-apps.folder' and trashed=false"
-        if parent_folder_id:
-            query += f" and '{parent_folder_id}' in parents"
-            logger.debug("Searching for folders in parent folder: %s", parent_folder_id)
+        if target_folder_id:
+            query += f" and '{target_folder_id}' in parents"
+            logger.debug("Searching for folders in parent folder: %s", target_folder_id)
         else:
-            query += " and 'root' in parents"
-            logger.debug("Searching for folders in 'My Drive' root")
+            logger.debug("Searching for folders across 'My Drive' and shared drives")
 
         results = await execute_in_thread(
             drive_service.files()
             .list(
                 q=query,
                 spaces="drive",
+                pageSize=max_results,
                 includeItemsFromAllDrives=True,
                 supportsAllDrives=True,
                 fields="files(id, name, parents)",
@@ -420,7 +516,7 @@ def register(tool):
             capabilities summary (canAddChildren, canManageMembers, etc.).
         """
         drive_service = ctx.request_context.lifespan_context.drive_service
-        max_results = min(max(1, max_results), 200)
+        max_results = clamp_max_results(max_results, 200)
 
         kwargs: dict[str, Any] = {
             "pageSize": min(max_results, 100),
@@ -429,27 +525,26 @@ def register(tool):
         if query:
             kwargs["q"] = query
 
-        # Sequential by nature — each page's pageToken depends on the previous
-        # response, so this isn't a gather() candidate.
         drives: list[dict[str, Any]] = []
-        while len(drives) < max_results:
-            result = await execute_in_thread(
-                drive_service.drives().list(**kwargs).execute,
+        async with aclosing(
+            iter_pages(
+                lambda token: drive_service.drives().list(**kwargs, pageToken=token),
                 drive_service,
+                max_pages=_LIST_DRIVES_MAX_PAGES,
             )
-            for d in result.get("drives", []):
-                drives.append(
-                    {
-                        "id": d["id"],
-                        "name": d["name"],
-                        "created_time": d.get("createdTime"),
-                        "capabilities": d.get("capabilities", {}),
-                    }
-                )
-            next_token = result.get("nextPageToken")
-            if not next_token or len(drives) >= max_results:
-                break
-            kwargs["pageToken"] = next_token
+        ) as pages:
+            async for result in pages:
+                for d in result.get("drives", []):
+                    drives.append(
+                        {
+                            "id": d["id"],
+                            "name": d["name"],
+                            "created_time": d.get("createdTime"),
+                            "capabilities": d.get("capabilities", {}),
+                        }
+                    )
+                if len(drives) >= max_results:
+                    break
 
         logger.debug("Found %d shared drives", len(drives))
         return drives[:max_results]
@@ -477,20 +572,21 @@ def register(tool):
             max_results: Maximum number of results to return (default 100, max 1000)
 
         Returns:
-            List of files with their ID, name, MIME type, modified time, web link, and
-            md5_checksum. md5_checksum is only present for binary files — Google
-            Workspace files (Docs, Sheets, Slides, etc.) have no fixed byte content and
-            the Drive API omits the field for them, so it's None for those. Use it to
-            detect real content drift (e.g. after sync_folder's upload path, which
-            doesn't stamp modifiedTime the way sync_folder's own upload does) instead
-            of inferring change from modifiedTime alone.
+            List of files with their ID, name, MIME type, modified time, web link,
+            starred status, and md5_checksum. md5_checksum is only present for
+            binary files — Google Workspace files (Docs, Sheets, Slides, etc.) have
+            no fixed byte content and the Drive API omits the field for them, so
+            it's None for those. Compare it to a local file's md5 to detect real
+            content drift instead of inferring change from modifiedTime alone;
+            sync_folder(use_checksum=True) does that comparison itself (see its
+            docstring for the cases where modifiedTime misleads).
             Results are cached; call refresh_cache(folder_id=folder_id) to invalidate,
             or refresh_cache() to clear all caches.
         """
         lc = ctx.request_context.lifespan_context
         drive_service = lc.drive_service
         folder_cache = lc.drive_folder_cache
-        max_results = min(max(1, max_results), 1000)
+        max_results = clamp_max_results(max_results, 1000)
 
         cached = folder_cache.get(folder_id, mime_type, max_results)
         if cached is not None:
@@ -498,10 +594,11 @@ def register(tool):
 
         query = f"'{folder_id}' in parents and trashed=false"
         if mime_type:
-            safe_mime = mime_type.replace("'", "\\'")
+            safe_mime = _escape_drive_query_mime_type(mime_type)
             query += f" and mimeType='{safe_mime}'"
 
         try:
+            epoch = folder_cache.snapshot_epoch()
             results = await execute_in_thread(
                 drive_service.files()
                 .list(
@@ -510,7 +607,7 @@ def register(tool):
                     spaces="drive",
                     includeItemsFromAllDrives=True,
                     supportsAllDrives=True,
-                    fields="files(id, name, mimeType, modifiedTime, webViewLink, md5Checksum)",
+                    fields="nextPageToken, incompleteSearch, files(id, name, mimeType, modifiedTime, webViewLink, starred, md5Checksum)",
                     orderBy="name",
                 )
                 .execute,
@@ -524,11 +621,22 @@ def register(tool):
                     "mime_type": f["mimeType"],
                     "modified_time": f.get("modifiedTime"),
                     "web_link": f.get("webViewLink"),
+                    "starred": f.get("starred", False),
                     "md5_checksum": f.get("md5Checksum"),
                 }
                 for f in results.get("files", [])
             ]
-            folder_cache.store(folder_id, mime_type, files, max_results)
+            # Complete only with no nextPageToken and no incompleteSearch flag. A short
+            # page alone doesn't prove it — Drive may return fewer than pageSize with
+            # more left — and incompleteSearch marks a possibly partial result.
+            folder_cache.store(
+                folder_id,
+                mime_type,
+                files,
+                max_results,
+                epoch=epoch,
+                exhaustive=not results.get("nextPageToken") and not results.get("incompleteSearch"),
+            )
             return files
         except Exception as e:
             return [{"error": f"List files failed: {e!s}"}]
@@ -559,15 +667,15 @@ def register(tool):
 
         Returns:
             List of matching files with id, name, mimeType, modified time, owners,
-            parent folder, and webViewLink.
+            parent folder, webViewLink, and starred status.
         """
         drive_service = ctx.request_context.lifespan_context.drive_service
-        max_results = min(max(1, max_results), 100)
+        max_results = clamp_max_results(max_results, 100)
 
         safe_query = query.replace("\\", "\\\\").replace("'", "\\'")
         parts = [f"(name contains '{safe_query}' or fullText contains '{safe_query}')"]
         if mime_type:
-            safe_mime = mime_type.replace("'", "\\'")
+            safe_mime = _escape_drive_query_mime_type(mime_type)
             parts.append(f"mimeType='{safe_mime}'")
         if folder_id:
             parts.append(f"'{folder_id}' in parents")
@@ -581,7 +689,7 @@ def register(tool):
                     spaces="drive",
                     includeItemsFromAllDrives=True,
                     supportsAllDrives=True,
-                    fields="files(id, name, mimeType, createdTime, modifiedTime, owners, parents, webViewLink)",
+                    fields="files(id, name, mimeType, createdTime, modifiedTime, owners, parents, webViewLink, starred)",
                     orderBy="modifiedTime desc",
                 )
                 .execute,
@@ -596,6 +704,7 @@ def register(tool):
                     "owners": [o.get("emailAddress") for o in f.get("owners", [])],
                     "parent": f.get("parents", [None])[0],
                     "web_link": f.get("webViewLink"),
+                    "starred": f.get("starred", False),
                 }
                 for f in results.get("files", [])
             ]
@@ -624,10 +733,11 @@ def register(tool):
             max_results: Maximum number of results to return (default 20, max 100)
 
         Returns:
-            List of matching spreadsheets with their ID, name, and metadata
+            List of matching spreadsheets with their ID, name, metadata, and
+            starred status.
         """
         drive_service = ctx.request_context.lifespan_context.drive_service
-        max_results = min(max(1, max_results), 100)
+        max_results = clamp_max_results(max_results, 100)
 
         safe_query = query.replace("\\", "\\\\").replace("'", "\\'")
         search_query = (
@@ -644,7 +754,7 @@ def register(tool):
                     spaces="drive",
                     includeItemsFromAllDrives=True,
                     supportsAllDrives=True,
-                    fields="files(id, name, createdTime, modifiedTime, owners, webViewLink)",
+                    fields="files(id, name, createdTime, modifiedTime, owners, webViewLink, starred)",
                     orderBy="modifiedTime desc",
                 )
                 .execute,
@@ -659,6 +769,7 @@ def register(tool):
                     "modified_time": f.get("modifiedTime"),
                     "owners": [owner.get("emailAddress") for owner in f.get("owners", [])],
                     "web_link": f.get("webViewLink"),
+                    "starred": f.get("starred", False),
                 }
                 for f in results.get("files", [])
             ]
@@ -675,12 +786,15 @@ def register(tool):
 
         Returns:
             id, name, mimeType, parents, createdTime, modifiedTime, size,
-            owners, webViewLink, trashed status, and md5_checksum. md5_checksum
-            (like size) is only present for binary files — Google Workspace files
-            have no fixed byte content and the Drive API omits it for them. Use it
-            to detect real content drift instead of inferring change from
-            modifiedTime alone (e.g. after upload_local_file, which doesn't stamp
-            modifiedTime to match a local file's mtime the way sync_folder does).
+            owners, webViewLink, trashed status, starred status, and md5_checksum.
+            md5_checksum (like size) is only present for binary files — Google
+            Workspace files have no fixed byte content and the Drive API omits it
+            for them. Compare it to a local file's md5 to detect real content
+            drift instead of inferring change from modifiedTime alone;
+            sync_folder(use_checksum=True) does that comparison itself (see its
+            docstring for the cases where modifiedTime misleads). starred reflects star_file/unstar_file's own effect
+            (#388) — previously there was no way to read a file's starred state
+            independently of calling one of those two mutating tools.
         """
         drive_service = ctx.request_context.lifespan_context.drive_service
 
@@ -688,7 +802,7 @@ def register(tool):
             drive_service.files()
             .get(
                 fileId=file_id,
-                fields="id, name, mimeType, parents, createdTime, modifiedTime, size, owners, webViewLink, trashed, md5Checksum",
+                fields="id, name, mimeType, parents, createdTime, modifiedTime, size, owners, webViewLink, trashed, starred, md5Checksum",
                 supportsAllDrives=True,
             )
             .execute,
@@ -705,6 +819,7 @@ def register(tool):
             "owners": [o.get("emailAddress") for o in f.get("owners", [])],
             "web_link": f.get("webViewLink"),
             "trashed": f.get("trashed", False),
+            "starred": f.get("starred", False),
             "md5_checksum": f.get("md5Checksum"),
         }
         # Workspace files (Docs, Sheets, Slides, etc.) don't consume storage quota;
@@ -873,8 +988,8 @@ def register(tool):
                 drive_service,
             )
         except HttpError as e:
-            if e.resp.status == 403 and b"storageQuotaExceeded" in (e.content or b""):
-                return {"error": _SA_QUOTA_ERROR}
+            if is_storage_quota_error(e):
+                return {"error": _quota_error_text(drive_service)}
             raise
 
         parents = copied.get("parents", [])
@@ -998,12 +1113,14 @@ def register(tool):
                 fileId=file_id,
                 body={"starred": True},
                 supportsAllDrives=True,
-                fields="id, name, starred",
+                fields="id, name, starred, parents",
             )
             .execute,
             drive_service,
         )
 
+        for parent in updated.get("parents", []):
+            lc.drive_folder_cache.mark_dirty(parent)
         logger.debug("Starred file %s", file_id)
         return {
             "fileId": updated.get("id"),
@@ -1031,12 +1148,14 @@ def register(tool):
                 fileId=file_id,
                 body={"starred": False},
                 supportsAllDrives=True,
-                fields="id, name, starred",
+                fields="id, name, starred, parents",
             )
             .execute,
             drive_service,
         )
 
+        for parent in updated.get("parents", []):
+            lc.drive_folder_cache.mark_dirty(parent)
         logger.debug("Unstarred file %s", file_id)
         return {
             "fileId": updated.get("id"),
@@ -1065,39 +1184,16 @@ def register(tool):
             account email, not files shared with a personal user.
         """
         drive_service = ctx.request_context.lifespan_context.drive_service
-        max_results = min(max(1, max_results), 200)
+        max_results = clamp_max_results(max_results, 200)
 
         parts = ["sharedWithMe=true", "trashed=false"]
         if mime_type:
-            safe_mime = mime_type.replace("'", "\\'")
+            safe_mime = _escape_drive_query_mime_type(mime_type)
             parts.append(f"mimeType='{safe_mime}'")
 
-        try:
-            results = await execute_in_thread(
-                drive_service.files()
-                .list(
-                    q=" and ".join(parts),
-                    pageSize=max_results,
-                    spaces="drive",
-                    fields="files(id, name, mimeType, modifiedTime, owners, webViewLink)",
-                    orderBy="modifiedTime desc",
-                )
-                .execute,
-                drive_service,
-            )
-            return [
-                {
-                    "id": f["id"],
-                    "name": f["name"],
-                    "mime_type": f["mimeType"],
-                    "modified_time": f.get("modifiedTime"),
-                    "owners": [o.get("emailAddress") for o in f.get("owners", [])],
-                    "web_link": f.get("webViewLink"),
-                }
-                for f in results.get("files", [])
-            ]
-        except Exception as e:
-            return [{"error": f"List shared with me failed: {e!s}"}]
+        return await _list_drive_files(
+            drive_service, " and ".join(parts), max_results, "List shared with me"
+        )
 
     @tool(annotations=ToolAnnotations(title="List Recent Files", readOnlyHint=True))
     async def list_recent_files(
@@ -1119,7 +1215,7 @@ def register(tool):
             ordered by modification time descending.
         """
         drive_service = ctx.request_context.lifespan_context.drive_service
-        max_results = min(max(1, max_results), 100)
+        max_results = clamp_max_results(max_results, 100)
 
         parts = ["trashed=false"]
         if days is not None and days > 0:
@@ -1128,37 +1224,16 @@ def register(tool):
             )
             parts.append(f"modifiedTime > '{cutoff}'")
         if mime_type:
-            safe_mime = mime_type.replace("'", "\\'")
+            safe_mime = _escape_drive_query_mime_type(mime_type)
             parts.append(f"mimeType='{safe_mime}'")
 
-        try:
-            results = await execute_in_thread(
-                drive_service.files()
-                .list(
-                    q=" and ".join(parts),
-                    pageSize=max_results,
-                    spaces="drive",
-                    includeItemsFromAllDrives=True,
-                    supportsAllDrives=True,
-                    fields="files(id, name, mimeType, modifiedTime, owners, webViewLink)",
-                    orderBy="modifiedTime desc",
-                )
-                .execute,
-                drive_service,
-            )
-            return [
-                {
-                    "id": f["id"],
-                    "name": f["name"],
-                    "mime_type": f["mimeType"],
-                    "modified_time": f.get("modifiedTime"),
-                    "owners": [o.get("emailAddress") for o in f.get("owners", [])],
-                    "web_link": f.get("webViewLink"),
-                }
-                for f in results.get("files", [])
-            ]
-        except Exception as e:
-            return [{"error": f"List recent files failed: {e!s}"}]
+        return await _list_drive_files(
+            drive_service,
+            " and ".join(parts),
+            max_results,
+            "List recent files",
+            extra_kwargs={"includeItemsFromAllDrives": True, "supportsAllDrives": True},
+        )
 
     @tool(annotations=ToolAnnotations(title="Get Storage Quota", readOnlyHint=True))
     async def get_storage_quota(ctx: Context = None) -> dict[str, Any]:
@@ -1201,6 +1276,9 @@ def register(tool):
             file_id: The ID of the file or folder to remove.
             permanent: If False (default), moves to trash (recoverable).
                        If True, permanently deletes — this cannot be undone.
+                       Raises ValueError, without deleting anything, if the
+                       caller can't permanently delete the file (e.g. a
+                       Content manager on a Shared Drive, who can only trash).
 
         Returns:
             Confirmation with fileId and action taken ('trashed' or 'deleted').
@@ -1208,13 +1286,38 @@ def register(tool):
         lc = ctx.request_context.lifespan_context
         drive_service = lc.drive_service
 
-        # Fetch parents before deletion so we can invalidate the cache
+        # Fetch parents before deletion so we can invalidate the cache, plus
+        # capabilities: on a Shared Drive a Content manager can trash but not
+        # permanently delete, and Drive reports that missing permission as a
+        # misleading 404 "File not found" (#876).
         existing = await execute_in_thread(
             drive_service.files()
-            .get(fileId=file_id, fields="parents", supportsAllDrives=True)
+            .get(
+                fileId=file_id,
+                fields="parents,driveId,capabilities(canDelete,canTrash)",
+                supportsAllDrives=True,
+            )
             .execute,
             drive_service,
         )
+        capabilities = existing.get("capabilities", {})
+        if permanent and capabilities.get("canDelete") is False:
+            # canDelete is also false for a non-owner editor of a My Drive
+            # file, so only mention Shared Drive roles when the file is on one.
+            shared_drive_note = (
+                " On a Shared Drive this usually requires the Manager role."
+                if existing.get("driveId")
+                else ""
+            )
+            trash_hint = (
+                " Use permanent=False to move it to the trash instead."
+                if capabilities.get("canTrash")
+                else ""
+            )
+            raise ValueError(
+                f"Cannot permanently delete file {file_id}: the authenticated identity "
+                f"lacks permanent-delete permission on it.{shared_drive_note}{trash_hint}"
+            )
         for parent in existing.get("parents", []):
             lc.drive_folder_cache.mark_dirty(parent)
 

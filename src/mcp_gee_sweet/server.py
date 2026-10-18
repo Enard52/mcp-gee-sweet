@@ -4,6 +4,7 @@ Google Spreadsheet MCP Server
 A Model Context Protocol (MCP) server built with MCPServer for interacting with Google Sheets.
 """
 
+import argparse
 import functools
 import importlib.metadata
 import json
@@ -72,10 +73,30 @@ if _level_name := os.getenv("DEBUG_LEVEL"):
         _tool_access_fh.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
         _tool_access_logger.addHandler(_tool_access_fh)
 
+from google.auth.exceptions import GoogleAuthError, RefreshError  # noqa: E402
+from googleapiclient.errors import Error as GoogleApiClientError  # noqa: E402
+from httplib2 import HttpLib2Error  # noqa: E402
+from mcp import UrlElicitationRequiredError  # noqa: E402
 from mcp.server.mcpserver import Context, MCPServer  # noqa: E402
+from mcp.server.mcpserver.exceptions import ResourceError, ToolError  # noqa: E402
 from mcp.types import ToolAnnotations  # noqa: E402
+from starlette.requests import Request  # noqa: E402
 
-from .auth import execute_in_thread, get_lifespan_context, spreadsheet_lifespan  # noqa: E402
+from . import local_files, reauth  # noqa: E402
+from .auth import (  # noqa: E402
+    MissingOAuthScopesError,
+    execute_in_thread,
+    get_gmail_unauthorized_message,
+    get_lifespan_context,
+    reauthorize_instructions,
+    run_auth_command,
+    set_gmail_enabled,
+    set_interactive_consent,
+    set_raise_auth_failures,
+    spreadsheet_lifespan,
+)
+from .http_transport import track_refresh_failures  # noqa: E402
+from .sse_shutdown import SingleResponseGuard  # noqa: E402
 
 
 def _parse_enabled_tools() -> set | None:
@@ -108,11 +129,109 @@ mcp = MCPServer(
 )
 
 # mcp v2 moved host/port from the constructor to call-time kwargs on
-# sse_app()/run_sse_async()/run() itself (confirmed live against mcp==2.0.0, issue #175)
-app = mcp.sse_app(host=_resolved_host)
+# sse_app()/run_sse_async()/run() itself (confirmed live against mcp==2.0.0, issue #175).
+# SingleResponseGuard keeps a SIGTERM with an open SSE stream from logging an ASGI
+# traceback (#868); main() serves this app for every SSE launch so the guard applies.
+app = SingleResponseGuard(mcp.sse_app(host=_resolved_host))
 
 
 _tool_access_logger = logging.getLogger("mcp_gee_sweet.access")
+
+
+def _unauthorized_message(ctx) -> str | None:
+    """The degraded-start message on this call's own lifespan context, if any. Per
+    connection: under SSE each connection runs its own lifespan (#811)."""
+    message = getattr(reauth.lifespan_context(ctx), "unauthorized_message", None)
+    return message if isinstance(message, str) else None
+
+
+# Failures a caller can act on: auth problems, Google API client errors, network
+# failures, bad arguments a tool rejects with ValueError, and local file errors. From
+# mcp 2.3, only ToolError/ResourceError text reaches the client; any other exception
+# becomes a bare "Error executing tool <name>" (#872). So these are re-raised as
+# ToolError (or ResourceError, for a resource) with their own text. Anything else is a
+# crash: mcp withholds its text from the client and logs the traceback.
+_CLIENT_VISIBLE_ERRORS = (
+    MissingOAuthScopesError,
+    GoogleApiClientError,
+    GoogleAuthError,
+    HttpLib2Error,
+    ValueError,
+    OSError,
+)
+
+
+def _client_error(exc: Exception, ctx) -> tuple[str, int] | None:
+    """The text the client should see for `exc` and the access-log status, or None to
+    leave it to mcp as a crash."""
+    text = reauth.exception_text(exc)
+    if (
+        isinstance(exc, RefreshError)
+        and not exc.retryable
+        and getattr(reauth.lifespan_context(ctx), "auth_method", None) == "oauth"
+    ):
+        # A refresh token revoked or expired after startup: same fix as #811. Normally
+        # _timed's re-authorization offer (#873) handles this first. A retryable one
+        # (the token endpoint's own 5xx) says nothing about the token, so it gets no
+        # hint and falls through to a plain 500.
+        return (
+            f"Google rejected the OAuth token refresh: {text.rstrip('.')}. "
+            f"{reauthorize_instructions(restart=False)}",
+            401,
+        )
+    if isinstance(exc, MissingOAuthScopesError):
+        return text, 401
+    if isinstance(exc, _CLIENT_VISIBLE_ERRORS):
+        return text, 500
+    return None
+
+
+def _client_visible(
+    exc: Exception, ctx, error_cls: type[Exception]
+) -> tuple[Exception, int] | None:
+    """`exc` as `error_cls` (ToolError or ResourceError) plus its access-log status, or
+    None for a crash. mcp logs a ToolError/ResourceError without a traceback, and one of
+    these can still be our own bug (a malformed request's HttpError 400, a
+    JSONDecodeError), so the original is logged here with its traceback first."""
+    if (client_error := _client_error(exc, ctx)) is None:
+        return None
+    message, status = client_error
+    logger.warning("Reporting %s to the client: %s", type(exc).__name__, exc, exc_info=exc)
+    return error_cls(message), status
+
+
+async def _run_tracking_reauth(func, args, kwargs):
+    """Run the tool body, re-authorizing OAuth from this call when it needs it (#873).
+
+    A token refresh Google rejects is recorded by the HTTP transport as it happens, so
+    it's acted on even when the tool caught it and returned `{"error": ...}`, as most
+    tools do: the result is discarded in favor of the re-authorization offer."""
+    ctx = kwargs.get("ctx")
+    with track_refresh_failures() as call:
+        # Adopts a newer token, or on a connection degraded because OAuth needed
+        # consent, offers re-authorization (raises) instead of running the tool.
+        await reauth.before_call(ctx)
+        # Degraded start (#811) with nothing to offer: no Google services, so no
+        # tool can run. Raised rather than returned so it works whatever the
+        # tool's return type, and as a ToolError so mcp shows the client its text.
+        if unauthorized := _unauthorized_message(ctx):
+            raise reauth.ReauthorizationRequired(unauthorized)
+        try:
+            result = await func(*args, **kwargs)
+        except Exception as e:
+            if call.refresh_error is None:
+                raise
+            await reauth.after_refresh_failure(
+                ctx, call.refresh_error, reauth.describe_outcome(error=e)
+            )
+            raise
+        if call.refresh_error is not None:
+            # The tool's own result goes along with the offer: it may report work it
+            # finished before the refresh failed, and the call isn't re-run.
+            await reauth.after_refresh_failure(
+                ctx, call.refresh_error, reauth.describe_outcome(result=result)
+            )
+        return result
 
 
 def _timed(func):
@@ -120,12 +239,30 @@ def _timed(func):
     async def wrapper(*args, **kwargs):
         start = time.perf_counter()
         status = 200
+        # A Starlette Request under SSE and streamable HTTP, None under stdio: the
+        # local-file policy's tripwire for a defaulted `full` served over HTTP (#796).
+        request = getattr(getattr(kwargs.get("ctx"), "request_context", None), "request", None)
+        over_http = local_files.request_over_http.set(isinstance(request, Request))
         try:
-            return await func(*args, **kwargs)
-        except Exception:
+            return await _run_tracking_reauth(func, args, kwargs)
+        except UrlElicitationRequiredError:
+            # A protocol error, not a tool result: mcp sends it as-is (#873).
+            status = 401
+            raise
+        except reauth.ReauthorizationRequired:
+            status = 401
+            raise
+        except ToolError:
             status = 500
             raise
+        except Exception as e:
+            status = 500
+            if (visible := _client_visible(e, kwargs.get("ctx"), ToolError)) is None:
+                raise
+            error, status = visible
+            raise error from e
         finally:
+            local_files.request_over_http.reset(over_http)
             elapsed = time.perf_counter() - start
             ctx = kwargs.get("ctx")
             req = getattr(ctx, "request_context", None)
@@ -145,9 +282,9 @@ def _enforce_strict_tool_args(tool_name: str) -> None:
     MCPServer's auto-generated per-tool pydantic arg model defaults to extra="ignore"
     (pydantic's own default) — neither func_metadata() nor Tool.from_function expose
     a public way to opt into extra="forbid". Verified absent in mcp 1.27.1 through
-    2.0.0 (confirmed live against mcp==2.0.0, issue #175 — the private
-    _tool_manager/fn_metadata/arg_model chain this function relies on is unchanged
-    from v1 to v2). This reaches into
+    2.3.0 (confirmed live against mcp==2.0.0, issue #175, and re-checked against the
+    locked mcp==2.3.0, #872 — the private _tool_manager/fn_metadata/arg_model chain
+    this function relies on is unchanged from v1 through 2.3). This reaches into
     private ToolManager/FuncMetadata internals to flip it after registration.
     model_rebuild(force=True) is REQUIRED: pydantic v2 bakes `extra` behavior into a
     compiled core schema at class-creation time, so mutating model_config alone is
@@ -160,26 +297,52 @@ def _enforce_strict_tool_args(tool_name: str) -> None:
     arg_model.model_rebuild(force=True)
 
 
-def tool(annotations: ToolAnnotations | None = None):
+# Modules that registered at least one tool, so auth can request a domain's scopes
+# only when that domain has a registered tool (#790).
+_registered_tool_modules: set[str] = set()
+# Local-only tools that LOCAL_FILE_ACCESS=off kept from registering, though
+# ENABLED_TOOLS would have allowed them (#796). Reported by server://auth-status.
+_unregistered_local_only_tools: list[str] = []
+
+
+def tool(annotations: ToolAnnotations | None = None, *, local_only: bool = False):
+    """Register a tool unless ENABLED_TOOLS leaves it out. `local_only` marks a tool
+    that can only work on local files, which LOCAL_FILE_ACCESS=off doesn't register;
+    it's set at the tool's own decorator so a rename can't drop it from a list."""
+
     def decorator(func):
         tool_name = func.__name__
-        if ENABLED_TOOLS is None or tool_name in ENABLED_TOOLS:
-            timed = _timed(func)
-            if annotations:
-                mcp.tool(annotations=annotations)(timed)
-            else:
-                mcp.tool()(timed)
-            _enforce_strict_tool_args(tool_name)
-            return timed
-        return func
+        if ENABLED_TOOLS is not None and tool_name not in ENABLED_TOOLS:
+            return func
+        if local_only and not local_files.registers_local_only_tools():
+            _unregistered_local_only_tools.append(tool_name)
+            return func
+        _registered_tool_modules.add(func.__module__)
+        timed = _timed(func)
+        if annotations:
+            mcp.tool(annotations=annotations)(timed)
+        else:
+            mcp.tool()(timed)
+        _enforce_strict_tool_args(tool_name)
+        return timed
 
     return decorator
 
 
 # Register all tools
+from .tools import gmail as _gmail_tools  # noqa: E402
 from .tools import register_all  # noqa: E402
 
 register_all(tool)
+if ENABLED_TOOLS is not None and _unregistered_local_only_tools:
+    # An operator who named these in ENABLED_TOOLS should learn why they're missing.
+    logger.warning(
+        "LOCAL_FILE_ACCESS=off: not registering local-only tools named in ENABLED_TOOLS: %s",
+        ", ".join(sorted(_unregistered_local_only_tools)),
+    )
+# Runs before the lifespan (i.e. before auth), so Gmail's mailbox scope is only
+# requested when an ENABLED_TOOLS filter leaves at least one Gmail tool in (#790).
+set_gmail_enabled(_gmail_tools.__name__ in _registered_tool_modules)
 
 
 # Service-account restrictions fall into distinct failure classes with their own
@@ -223,6 +386,29 @@ _SA_LIMITATIONS = [
         # additionally know to point ADC at a real user credential specifically.
         "alternatives": "Switch to OAuth (CREDENTIALS_PATH) for full tool coverage.",
     },
+    {
+        "category": "no_user_mailbox",
+        "tools": [
+            "list_messages",
+            "get_message",
+            "list_threads",
+            "get_thread",
+            "list_labels",
+            "send_message",
+            "create_draft",
+            "send_draft",
+            "reply_to_message",
+            "modify_labels",
+            "trash_message",
+        ],
+        "reason": (
+            "Service accounts have no Gmail mailbox of their own, and acting on a "
+            "user's mailbox via domain-wide delegation isn't wired up yet, so every "
+            "Gmail tool fails."
+        ),
+        # Same reasoning as no_personal_drive_identity above for not offering ADC.
+        "alternatives": "Switch to OAuth (CREDENTIALS_PATH) to use the Gmail tools.",
+    },
 ]
 
 
@@ -248,8 +434,35 @@ def _sa_limitations_for(auth_method: str) -> list[dict]:
     return adjusted
 
 
-def _auth_status_json(auth_method: str, is_service_account_identity: bool = False) -> str:
+def _local_file_access_status() -> dict:
+    """The local-file policy as server://auth-status reports it (#796). `explicit`
+    false with mode "full" means a defaulted stdio policy, which an HTTP request's
+    tool call refuses anyway; this static resource can't see the reading request."""
+    policy = local_files.POLICY
+    return {
+        "mode": policy.mode.value,
+        "explicit": policy.explicit,
+        "roots": [spelling for spelling, _ in policy.roots],
+        "unregistered_tools": sorted(_unregistered_local_only_tools),
+    }
+
+
+def _auth_status_json(
+    auth_method: str,
+    is_service_account_identity: bool = False,
+    gmail_unauthorized: str | None = None,
+    oauth_unauthorized: str | None = None,
+) -> str:
     """Return a JSON string describing the auth method and its Drive limitations.
+
+    `oauth_unauthorized` is the context's `unauthorized_message`: set when the
+    server started without any Google access because OAuth needs consent it couldn't
+    ask for (#811). Every tool is limited then, reported as `"*"`.
+
+    `gmail_unauthorized` is `auth.get_gmail_unauthorized_message()`: set when an
+    OAuth token is missing only the Gmail scope, so the server started without Gmail
+    (#790). Reported as its own limitation so a client can see it before calling a
+    Gmail tool, not only from that tool's error.
 
     `is_service_account_identity` covers issue #506: `auth_method == "adc"` alone
     doesn't say whether `google.auth.default()` resolved to a real user or a
@@ -258,6 +471,28 @@ def _auth_status_json(auth_method: str, is_service_account_identity: bool = Fals
     exact same Drive limitations as `auth_method == "service_account"`, even though
     the auth *method* used to reach it was ADC.
     """
+    local_file_access = _local_file_access_status()
+    if oauth_unauthorized:
+        return json.dumps(
+            {
+                "auth_method": auth_method,
+                "is_service_account_identity": False,
+                "can_create_in_personal_drive": False,
+                "local_file_access": local_file_access,
+                "limited_tools": ["*"],
+                "limitations": [
+                    {
+                        "category": "oauth_not_authorized",
+                        "tools": ["*"],
+                        "reason": oauth_unauthorized,
+                        # #873: the first tool call offers the consent URL itself.
+                        "alternatives": "Call any tool to get a Google re-authorization "
+                        f"link. {reauthorize_instructions(restart=False, lead='Or run')}",
+                    }
+                ],
+            },
+            indent=2,
+        )
     if auth_method == "service_account" or is_service_account_identity:
         limitations = _sa_limitations_for(auth_method)
         return json.dumps(
@@ -265,18 +500,32 @@ def _auth_status_json(auth_method: str, is_service_account_identity: bool = Fals
                 "auth_method": auth_method,
                 "is_service_account_identity": True,
                 "can_create_in_personal_drive": False,
+                "local_file_access": local_file_access,
                 "limited_tools": [t for lim in limitations for t in lim["tools"]],
                 "limitations": limitations,
             },
             indent=2,
+        )
+    limitations = []
+    if gmail_unauthorized:
+        mailbox = next(lim for lim in _SA_LIMITATIONS if lim["category"] == "no_user_mailbox")
+        limitations.append(
+            {
+                "category": "gmail_not_authorized",
+                "tools": mailbox["tools"],
+                "reason": gmail_unauthorized,
+                "alternatives": f"{reauthorize_instructions()} Or leave the Gmail tools "
+                "out of ENABLED_TOOLS.",
+            }
         )
     return json.dumps(
         {
             "auth_method": auth_method,
             "is_service_account_identity": False,
             "can_create_in_personal_drive": True,
-            "limited_tools": [],
-            "limitations": [],
+            "local_file_access": local_file_access,
+            "limited_tools": [t for lim in limitations for t in lim["tools"]],
+            "limitations": limitations,
         },
         indent=2,
     )
@@ -289,13 +538,21 @@ def get_auth_status() -> str:
 
     Returns a JSON summary of the active auth method and which tools are
     restricted. Useful for deciding which tools to attempt before calling them.
+    `local_file_access` gives the LOCAL_FILE_ACCESS policy: its mode, whether it
+    was set explicitly, the allowed directories in roots mode, and the local-only
+    tools off mode left unregistered.
     """
     # mcp v2 dropped get_context() with no replacement for a static (non-templated)
     # resource — Context injection isn't supported there at all (confirmed live
     # against mcp==2.0.0, issue #175). SpreadsheetContext is a process-wide singleton
     # set once by the lifespan, so get_lifespan_context() reads it directly.
     context = get_lifespan_context()
-    return _auth_status_json(context.auth_method, context.is_service_account_identity)
+    return _auth_status_json(
+        context.auth_method,
+        context.is_service_account_identity,
+        get_gmail_unauthorized_message(),
+        context.unauthorized_message,
+    )
 
 
 @mcp.resource("spreadsheet://{spreadsheet_id}/info")
@@ -309,13 +566,21 @@ async def get_spreadsheet_info(spreadsheet_id: str, ctx: Context) -> str:
     Returns:
         JSON string with spreadsheet information
     """
+    if unauthorized := _unauthorized_message(ctx):
+        raise ResourceError(unauthorized)
     context = ctx.request_context.lifespan_context
     sheets_service = context.sheets_service
 
-    spreadsheet = await execute_in_thread(
-        sheets_service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute,
-        sheets_service,
-    )
+    try:
+        spreadsheet = await execute_in_thread(
+            sheets_service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute,
+            sheets_service,
+        )
+    except Exception as e:
+        # Same rule as _timed: mcp 2.3 withholds a non-ResourceError's text (#872).
+        if (visible := _client_visible(e, ctx, ResourceError)) is None:
+            raise
+        raise visible[0] from e
     info = {
         "title": spreadsheet.get("properties", {}).get("title", "Unknown"),
         "sheets": [
@@ -331,7 +596,82 @@ async def get_spreadsheet_info(spreadsheet_id: str, ctx: Context) -> str:
     return json.dumps(info, indent=2)
 
 
+# Server options that take a value, so their value isn't mistaken for a subcommand.
+_VALUE_OPTIONS = {"--include-tools", "--transport"}
+
+
+def _is_auth_command(argv: list[str]) -> bool:
+    """Whether the positional `auth` subcommand appears anywhere in argv, so
+    `mcp-gee-sweet --include-tools X auth` works as well as `auth --include-tools X`."""
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in _VALUE_OPTIONS:
+            i += 2
+            continue
+        if arg == "auth":
+            return True
+        i += 1
+    return False
+
+
+def _auth_main(argv: list[str]) -> int:
+    """`mcp-gee-sweet auth` (#811). Strict about its flags: a typo like --no-browswer
+    would otherwise silently open a browser. Tool registration has already run at
+    import, so --include-tools / ENABLED_TOOLS narrow the scopes the same way they
+    do for the server."""
+    parser = argparse.ArgumentParser(
+        prog="mcp-gee-sweet auth",
+        description="Authorize OAuth access and save the token to TOKEN_PATH.",
+    )
+    parser.add_argument("auth")
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="print the consent URL instead of opening a browser",
+    )
+    parser.add_argument(
+        "--include-tools",
+        help="comma-separated tools the server will register; narrows the scopes",
+    )
+    args = parser.parse_args(argv)
+    return run_auth_command(open_browser=not args.no_browser)
+
+
+def _streamable_http_app() -> SingleResponseGuard:
+    """Build the guarded streamable-http app (#917).
+
+    A factory rather than a module-level app like SSE's, since streamable_http_app()
+    installs the server's session manager. Also uvicorn's ``factory=True`` import
+    target for ``--reload``.
+    """
+    return SingleResponseGuard(mcp.streamable_http_app(host=_resolved_host))
+
+
+def _serve_guarded(guarded_app: SingleResponseGuard) -> None:
+    """Serve an HTTP transport's guarded app the way mcp's run_*_async() launches do.
+
+    anyio.run on the plain asyncio loop, which #833's auth handoff was built and
+    QA'd on; uvicorn.run() would pick uvloop whenever it's installed.
+    """
+    import anyio
+    import uvicorn
+
+    config = uvicorn.Config(
+        guarded_app,
+        host=_resolved_host,
+        port=_resolved_port,
+        log_level=mcp.settings.log_level.lower(),
+    )
+    anyio.run(uvicorn.Server(config).serve)
+
+
 def main():
+    if _is_auth_command(sys.argv[1:]):
+        sys.exit(_auth_main(sys.argv[1:]))
+    # Serving only: an invalid LOCAL_FILE_ACCESS setting still lets `auth` run (#796).
+    local_files.exit_if_invalid()
+
     try:
         version = importlib.metadata.version("mcp-gee-sweet")
     except importlib.metadata.PackageNotFoundError:
@@ -343,26 +683,49 @@ def main():
     else:
         logger.debug("Tool filtering disabled. All tools are enabled.")
 
-    transport = "stdio"
-    reload = False
-    for i, arg in enumerate(sys.argv):
-        if arg == "--transport" and i + 1 < len(sys.argv):
-            transport = sys.argv[i + 1]
-        if arg == "--reload":
-            reload = True
+    # The same parse the local-file policy made at import, so they agree (#796).
+    transport = local_files.cli_transport(sys.argv)
+    reload = "--reload" in sys.argv
 
-    if reload and transport == "sse":
+    if transport not in ("stdio", "sse", "streamable-http"):
+        sys.exit(
+            f"mcp-gee-sweet: unknown --transport {transport!r} (use stdio, sse, or streamable-http)"
+        )
+
+    if reload and transport == "stdio":
+        logger.warning(
+            "--reload applies only to the sse and streamable-http transports; ignoring it"
+        )
+
+    if reload and transport != "stdio":
         import uvicorn
 
+        # uvicorn's reloader needs an import string, so point it at the same guarded
+        # app the non-reload path serves.
+        if transport == "sse":
+            target, factory = "mcp_gee_sweet.server:app", False
+        else:
+            target, factory = "mcp_gee_sweet.server:_streamable_http_app", True
         uvicorn.run(
-            "mcp_gee_sweet.server:app",
+            target,
+            factory=factory,
             host=_resolved_host,
             port=_resolved_port,
             reload=True,
         )
     elif transport == "stdio":
-        mcp.run(transport=transport)
+        # stdout is the protocol channel and nobody is watching for a browser tab, so
+        # a missing token degrades instead of running the consent flow (#811).
+        set_interactive_consent(False)
+        # A failed auth stops a stdio server outright (#790); other transports start
+        # the connection without Google access instead (PR #867).
+        set_raise_auth_failures(True)
+        mcp.run(transport="stdio")
+    elif transport == "sse":
+        # mcp.run(transport="sse") would build a second, unguarded sse_app, so serve
+        # the guarded module-level app instead (#868).
+        _serve_guarded(app)
     else:
-        # mcp v2 moved host/port from the constructor to call-time kwargs (see the
-        # mcp.sse_app() call above) — stdio's own overload doesn't accept them.
-        mcp.run(transport=transport, host=_resolved_host, port=_resolved_port)
+        # Same for mcp.run(transport="streamable-http"), whose own app leaves an open
+        # GET /mcp stream unterminated at SIGTERM (#917).
+        _serve_guarded(_streamable_http_app())

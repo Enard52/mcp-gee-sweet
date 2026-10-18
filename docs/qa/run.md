@@ -52,6 +52,21 @@ When a test case is tagged `**Playwright: required**`, after the tool call the c
 - **Permission changes** — sharing confirmations are not visible in the Drive UI without navigating to the file's "Share" dialog. Use `list_permissions` API response as the confirmation source for share tests.
 - **Chart-covered grid (Sales sheet)** — repeated `add_chart` test runs leave floating chart objects on the Sales sheet (they're never cleaned up between runs), and as of 2026-07-15 there were ~12 stacked overlapping charts covering roughly rows 1–22. This blocks visual verification of anything in that region — row-height/column-width changes (`resize_rows`/`resize_columns`), cell formatting, etc. are not visible in a screenshot, and Playwright's accessibility snapshot doesn't expose per-cell grid geometry either (only the charts' own accessible text). When a test in that area needs precise confirmation, use `get_sheet_data(..., range=<affected range>, include_grid_data=True)` instead — the raw response includes `rowMetadata`/`columnMetadata` with each row/column's actual `pixelSize`, which is more precise than a screenshot anyway. The same call also works for border verification (`update_borders` QA, TC-S85–S87 on 2026-07-16): each cell's `userEnteredFormat.borders`/`effectiveFormat.borders` reports `top`/`bottom`/`left`/`right` style and color directly, so a border-covering-range test doesn't need the screenshot at all — check the per-cell `borders` dict instead of `rowMetadata`/`columnMetadata`. Longer term, `add_chart` QA test cases should delete the chart they create at the end of each run (see `docs/qa/tests/sheets_charts.md`) so the fixture doesn't accumulate; that cleanup is not yet in place.
 
+### Verifying Playwright is signed into the right account
+
+"Connected," "signed in," and "signed in *as the account that owns the fixtures*" are three different states, and only the third makes `**Playwright: required**` cases meaningful. Playwright MCP keeps a separate persistent browser profile per working directory — the main checkout, each `.claude/worktrees/*` slot, and every other project on the machine each get their own login. Any one of them can be signed into a Google account that isn't the one owning the `mcp-gee-sweet-shared` Shared Drive fixtures (see `setup.md`), or into none at all.
+
+The check, run once before the first `**Playwright: required**` case in any QA pass (lane QA or release pass):
+
+1. Get the fixture doc's real title via this role's own `get_file_metadata(TEST_DOC_ID)`.
+2. `browser_navigate` to `https://docs.google.com/document/d/<TEST_DOC_ID>/edit` (under the Playwright mutex below, if other shards may be running).
+3. **Pass** only if the page title contains that exact document name.
+4. **Fail** on either:
+   - a redirect to `accounts.google.com` — the profile isn't signed in;
+   - the URL staying on `docs.google.com` but the page showing "You need access" / "Request access," or a generic "Google Docs" title — the profile is signed into the **wrong account**. This one is easy to misread as a pass, since there's no sign-in redirect; it's what the old "not a sign-in page" check let through (confirmed 2026-09-23: a lane QA session's browser opened on the personal account instead of the Workspace-org one that owns the fixtures).
+
+On a fail, stop and tell the user which session's browser needs signing in, and to which account (the one that owns the Shared Drive fixtures). Then wait. The sign-in persists in that slot's profile, so this is a one-time fix per slot. Don't fall back to API-only verification for Playwright-required cases unless the user explicitly says to — that's the silent degradation `retro-v0.9.0.md` describes. Once the user says it's fixed, re-run the check before continuing.
+
 ### Coordinating Playwright across parallel shards
 
 A single Playwright MCP instance is one browser tab. If a QA run is split across multiple agents (e.g. one per domain), any two shards that both hit `**Playwright: required**` cases at the same time will fight over that tab — one shard's navigation clobbers the snapshot the other was about to take. Spinning up a second authenticated Playwright instance to get true parallelism is possible but costly: the browser profile needs its own logged-in Google session (see `playwright_oauth.md`), so a second instance means cloning that profile rather than just adding a server entry.
@@ -143,6 +158,30 @@ Some sheet-level state has a tool to *set* it but none to *clear* it, and no too
 
 Workaround for a *scratch* fixture sheet (never do this to a sheet with real data — it destroys everything on the tab, not just the state you're trying to clear): `delete_sheet(sheet="Empty")` then `create_sheet(title="Empty")`. Fully resets the tab to blank, including any validation/formatting/merges, and is safe here because every QA tool call references the sheet by name, never by the ID that changes on recreate.
 
+**Use disjoint ranges for independent TCs sharing one scratch sheet within a single run.** Confirmed on the v0.9.0 pass: re-verifying `merge_cells`/`unmerge_cells` TCs and `add_data_validation`/`get_data_validation` TCs against *overlapping* ranges on the `Empty` sheet in the same subagent run triggered Google Sheets' own merge → validation-carryover behavior (a merge overwrote the overlapping range's dropdown rule with a checkbox rule) — native Sheets semantics, not a tool defect, but it reads exactly like cross-test contamination until investigated. Give each independent TC its own non-overlapping block (e.g. `A1:C3` for one, `E1:G3` for another).
+
+---
+
+## Forcing a real `storageQuotaExceeded` (service account only)
+
+Several quota-error test cases say a quota error can't be forced live, so they verify only by unit test. That's true for a user identity, since the QA account's My Drive isn't full. A service account's error can be forced: it has no My Drive storage, so creating a file with no `parents` returns a real 403 `storageQuotaExceeded`. Run it from a fresh interpreter in the checkout under test (no MCP server involved), and pass the caught exception to the code under test:
+
+```
+uv run python -I -c "
+import mcp_gee_sweet
+from mcp_gee_sweet import auth
+from googleapiclient.discovery import build
+d = build('drive', 'v3', credentials=auth._service_account_creds(), cache_discovery=False)
+try:
+    r = d.files().create(body={'name': 'qa-sa-quota-probe', 'mimeType': 'application/vnd.google-apps.document'}, fields='id').execute()
+    print('UNEXPECTED: created'); d.files().delete(fileId=r['id']).execute()
+except Exception as e:
+    print(type(e).__name__, e.resp.status)  # then feed e to the helper under test
+"
+```
+
+This needs service-account credentials in `src/mcp_gee_sweet/.env` (`CREDENTIALS_CONFIG` or `SERVICE_ACCOUNT_PATH`). Nothing is created, so there's no teardown. Used for TC-D291 in PR #1006.
+
 ---
 
 ## Missing `docs/qa/.env` in a role worktree
@@ -153,12 +192,25 @@ Workaround: the fixture files have fixed, documented names (`setup.md`'s seed pr
 
 ---
 
+## Running server-startup and CLI cases in a scoped lane pass (e.g. `⚠️ local-filesystem` infra cases)
+
+Some cases test how the server *starts*, not what a tool does: auth waterfall and degraded start, stdio vs SSE behavior, CLI subcommands like `mcp-gee-sweet auth`. Your own `mcp-gee-sweet-<name>` server can't exercise these, since its env and transport are fixed. They still run fine in a lane pass. Start a fresh server process from the worktree with the env the case needs, and drive it yourself. Confirmed on PR #807 (Kit) and PR #828 (Sky, TC-I35..I40, 2026-09-26).
+
+- **stdio:** use the `mcp` SDK's `stdio_client(StdioServerParameters(command="uv", args=["run", "--directory", <worktree>, "mcp-gee-sweet"], env=...))` + `ClientSession`. Then `initialize`, `call_tool`, and `read_resource("server://auth-status")`. Strip `AUTH_METHOD`/`TOKEN_PATH`/`SERVICE_ACCOUNT_PATH`/`CREDENTIALS_CONFIG`/`GOOGLE_APPLICATION_CREDENTIALS` from the inherited env before applying the case's overrides. Set `DEBUG_LEVEL=DEBUG` + `LOG_FILE=<tmp>` for the log-line checks. mcp v2's `CallToolResult` field is `is_error`, not `isError`.
+- **SSE:** start `uv run mcp-gee-sweet --transport sse` in **its own process group** (`subprocess.Popen(..., start_new_session=True)` from Python, or `set -m` then `cmd &` in a bash script; macOS has no `setsid`). Drive it with `mcp.client.sse.sse_client` + `ClientSession`. Stop it with SIGTERM to the server pid: it exits within a few seconds, even mid consent wait (#833), so a server still running after that is a finding. Only then SIGKILL the whole group (`os.killpg` / `kill -9 -- -$PID`). **Never** `pkill -f "transport sse"` or similar: other lanes' and Kai's servers match. The lifespan (and any consent wait) runs when the SSE stream opens, *before* `initialize`, so time the connect, not `initialize`. Uvicorn's access log goes to stdout, so check stdout for the absence of specific text (e.g. the consent prompt), not for an empty file.
+- **Race and hang repros:** a concurrency finding needs a repro that *forces* the overlap. Gate the operations with events (e.g. A's consent waits on an event set from inside B's token load) so the stale operation is still in flight when the other side's event fires. Starting B after A finishes only shows a sequential case, which may be correct behavior. Run the same script against the previous commit as a control: a race or hang that shows up there and not on the fix is the evidence. For an SSE-timing hang, use a raw client that POSTs the instant the `endpoint` event arrives, not the SDK client: PR #867's intermittent SIGTERM hang reproduced 3 of 39 runs through `sse_client` and 25 of 25 with the raw client (TC-I44 step 2 encodes it).
+- **CLI + OAuth consent:** run the command in the background, read the `Please visit this URL` line from its output, and complete (or Cancel) the consent via Playwright, after the signed-in check and under the mutex above. The account chooser lists more than one account, so pick the Workspace one that owns the fixtures.
+- **Worktree-isolation guard:** a session pinned to a role worktree rejects Bash commands it can't statically verify: `uv`/`git` with `$VAR`-expanded paths, heredocs, multi-step `cd … && …` chains. Write each probe as a script under `$CLAUDE_JOB_DIR/tmp` with the Write tool (literal absolute paths inside), then run it as a single `bash /abs/path/script.sh` or `uv run python /abs/path/probe.py KEY=VAL ...` call. It also refused these read-only or scratch-only forms on PR #866 (2026-10-01): `python3 -c ...` with a `$var` path operand, `cd <scratch> && git init && claude -p ...`, an inline `python3 -c` filter containing the word `system`, and `gh pr create --body "<free text>"`. These ran: a plain `cd <scratch> && claude -p ...` and `VAR=... claude -p ...`. Give `claude -p` a scratch project made of `.claude/settings.json` alone, since it needs no `git init`. Pull fields from stream-json with `grep -oE`, not an inline Python filter. Pass a PR body with `--body-file`.
+- **Fixture:** point `TOKEN_PATH` at a nonexistent file in a directory that *exists*. A missing parent directory now trips the pre-consent writability check (#811), which tests a different path.
+
+---
+
 ## Conductor prompt
 
 ```
 You are the QA conductor for mcp-gee-sweet. Your job is to execute the full test suite against the live MCP server, record outcomes, and save a results report.
 
-You have the mcp-gee-sweet MCP connected. Before starting, check whether Playwright MCP is also connected AND actually authenticated to Google — these are different things: a connected Playwright MCP still runs an unauthenticated browser by default, and navigating it to a Google URL just redirects to `accounts.google.com` sign-in. Do a real check: navigate to a known Google URL (e.g. the fixture doc) and confirm the page title/URL is the real resource, not a sign-in page. If Playwright isn't connected, or the navigation redirects to sign-in, tell me: "Playwright is not connected / not authenticated — tests marked **Playwright: required** will run without visual verification. Confirm to proceed, or connect/authenticate Playwright first (see `docs/qa/playwright_oauth.md`) and restart." Wait for my confirmation before continuing. If I tell you mid-run that Playwright is now authenticated, re-verify immediately and switch to using it for all subsequent **Playwright: required** cases — don't keep treating it as unusable for the rest of the run based on the earlier check.
+You have the mcp-gee-sweet MCP connected. Before starting, check whether Playwright MCP is also connected AND actually authenticated to Google — these are different things: a connected Playwright MCP still runs an unauthenticated browser by default, and navigating it to a Google URL just redirects to `accounts.google.com` sign-in. Do the real check described in "Verifying Playwright is signed into the right account" (above): the fixture doc's page title must match its actual name — a sign-in redirect *or* a "You need access" page (wrong account) both fail. If Playwright isn't connected, or the check fails, tell me: "Playwright is not connected / not authenticated — tests marked **Playwright: required** will run without visual verification. Confirm to proceed, or connect/authenticate Playwright first (see `docs/qa/playwright_oauth.md`) and restart." Wait for my confirmation before continuing. If I tell you mid-run that Playwright is now authenticated, re-verify immediately and switch to using it for all subsequent **Playwright: required** cases — don't keep treating it as unusable for the rest of the run based on the earlier check.
 
 ## Step 0 — Fixture setup
 
@@ -188,6 +240,7 @@ Work through the test files in this order:
 12. `docs/qa/tests/docs_style.md`
 13. `docs/qa/tests/docs_layout.md`
 14. `docs/qa/tests/calendar.md`
+15. `docs/qa/tests/gmail.md`
 
 For each test case:
 

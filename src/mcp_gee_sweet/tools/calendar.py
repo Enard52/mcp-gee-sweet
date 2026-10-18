@@ -1,14 +1,17 @@
 import asyncio
 import logging
+import os
+import weakref
 from datetime import datetime, timezone
 from typing import Any
 
-from googleapiclient.errors import HttpError
 from mcp.server.mcpserver import Context
 from mcp.types import ToolAnnotations
 
 from ..auth import execute_in_thread
-from .response_limits import enforce_response_size_cap
+from .http_errors import http_error_has_reason
+from .pagination import iter_pages
+from .response_limits import clamp_max_results, enforce_response_size_cap
 
 logger = logging.getLogger(__name__)
 
@@ -18,15 +21,86 @@ _CANNOT_UNSUBSCRIBE_OWNED_ERROR = (
     "permanently delete it."
 )
 
+# A calendar's ACL has two rules no one can change, both confirmed live on a
+# secondary calendar (2026-10-05, #459). Any acl().delete() or acl().insert()
+# touching them, even a no-op re-grant of 'owner', returns a 403:
+# - the primary owner's rule (user:<calendar_id>): cannotChangeOwnerAcl
+# - the authenticated account's own rule: cannotChangeOwnAcl
+# The two owner-rule messages differ by tool on purpose: pointing an insert at
+# delete_calendar would invite deleting the calendar to fix a sharing change.
+_CANNOT_REMOVE_OWNER_ACL_ERROR = (
+    "Google does not allow removing the access rule of a calendar's primary owner "
+    "(reason: cannotChangeOwnerAcl). Use delete_calendar instead to permanently "
+    "delete a calendar you own."
+)
+_CANNOT_CHANGE_OWNER_ACL_ERROR = (
+    "Google does not allow changing the access level of a calendar's primary owner "
+    "(reason: cannotChangeOwnerAcl); that rule always stays 'owner'."
+)
+_CANNOT_CHANGE_OWN_ACL_ERROR = (
+    "Google does not allow changing or removing your own access rule on a calendar "
+    "(reason: cannotChangeOwnAcl)."
+)
+
 _CALENDAR_ACL_ROLES = ("reader", "writer", "owner", "freeBusyReader")
 _CALENDAR_ACL_SCOPE_TYPES = ("default", "user", "group", "domain")
 
-# Caps how many events().list() calls list_all_events fans out at once. Otherwise
-# the fan-out width is implicitly however many calendars the account is subscribed
-# to, with no bound — a Workspace account subscribed to many room/resource/shared
-# calendars (tens to 100+) could trigger that many simultaneous calls in one
-# invocation, risking the Calendar API's per-user rate limit.
-_LIST_ALL_EVENTS_MAX_CONCURRENCY = 20
+# acl().list() page size (the API's max) and page bound: 100 pages of 250 is
+# 25,000 rules, far past any real calendar, so hitting it means the API kept
+# returning a nextPageToken rather than a genuinely huge ACL (#615).
+_ACL_PAGE_SIZE = 250
+_LIST_CALENDAR_ACL_MAX_PAGES = 100
+
+# Caps how many events().list() calls list_all_events runs at once, across every
+# concurrent invocation in this process, not just within one call (#626).
+# Otherwise the fan-out width is implicitly however many calendars the account is
+# subscribed to, with no bound — a Workspace account subscribed to many
+# room/resource/shared calendars (tens to 100+) could trigger that many
+# simultaneous calls, risking the Calendar API's per-user rate limit. Floored at
+# 1: a zero-width semaphore would hang every call.
+_LIST_ALL_EVENTS_MAX_CONCURRENCY = max(
+    1, int(os.environ.get("LIST_ALL_EVENTS_MAX_CONCURRENCY", "20"))
+)
+
+# One semaphore per event loop: an asyncio.Semaphore binds to the loop that first
+# waits on it, so a single module-level instance would break under a second loop
+# (e.g. one per test). The server itself runs one loop, so in practice this is
+# one process-wide semaphore shared by every list_all_events call.
+_fan_out_semaphores: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _list_all_events_semaphore() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    semaphore = _fan_out_semaphores.get(loop)
+    if semaphore is None:
+        semaphore = asyncio.Semaphore(_LIST_ALL_EVENTS_MAX_CONCURRENCY)
+        _fan_out_semaphores[loop] = semaphore
+    return semaphore
+
+
+def _acl_error(e: Exception, *, removing: bool) -> dict[str, str]:
+    """{"error": ...} for a failed add_calendar_acl (removing=False) or
+    remove_calendar_acl (removing=True) call, rewriting Google's two
+    unchangeable-rule 403s into messages naming the restriction (#459)."""
+    if http_error_has_reason(e, 403, "cannotChangeOwnAcl"):
+        return {"error": _CANNOT_CHANGE_OWN_ACL_ERROR}
+    if http_error_has_reason(e, 403, "cannotChangeOwnerAcl"):
+        return {
+            "error": _CANNOT_REMOVE_OWNER_ACL_ERROR if removing else _CANNOT_CHANGE_OWNER_ACL_ERROR
+        }
+    return {"error": str(e)}
+
+
+def _shape_acl_rule(r: dict[str, Any]) -> dict[str, Any]:
+    scope = r.get("scope") or {}
+    return {
+        "id": r.get("id"),
+        "role": r.get("role"),
+        "scope_type": scope.get("type"),
+        "scope_value": scope.get("value"),
+    }
 
 
 def _shape_calendar_list_entry(c: dict[str, Any]) -> dict[str, Any]:
@@ -60,28 +134,63 @@ async def _get_cached_calendar_list(lc) -> list[dict[str, Any]]:
     return calendars
 
 
+def _summary_by_id(calendars: list[dict[str, Any]]) -> dict[str, str]:
+    """Map calendar id to summary for a shaped calendar list (from
+    _get_cached_calendar_list). Shared by find_free_slots and list_all_events so
+    both report the same calendar_summary: a calendar whose summary is "" keeps
+    "", and only a calendar missing from the list falls back to its id, at the
+    caller's .get(cid, cid) (#726)."""
+    return {c["id"]: c.get("summary", "") for c in calendars}
+
+
+def _event_time(e: dict[str, Any], key: str) -> str | None:
+    """An event's start or end as dateTime (timed) or date (all-day). `or {}`
+    rather than a .get() default, so an explicit null doesn't crash (#627)."""
+    t = e.get(key) or {}
+    return t.get("dateTime") or t.get("date")
+
+
 def _shape_event(e: dict[str, Any], **extra: Any) -> dict[str, Any]:
-    """Shape a raw Calendar API event resource. Shared by list_events and
-    list_all_events; `extra` carries fields only one caller needs (e.g.
-    calendar_id/calendar_summary)."""
-    start = e.get("start", {})
-    end = e.get("end", {})
-    return {
+    """Shape a raw Calendar API event resource. Shared by list_events,
+    list_all_events, and get_event; `extra` carries fields only some callers
+    need (e.g. calendar_id/calendar_summary, created/updated). An `extra` key
+    that collides with a shaped field raises ValueError instead of silently
+    overwriting it (#627)."""
+    shaped = {
         "id": e["id"],
         "summary": e.get("summary", ""),
-        "start": start.get("dateTime") or start.get("date"),
-        "end": end.get("dateTime") or end.get("date"),
+        "start": _event_time(e, "start"),
+        "end": _event_time(e, "end"),
         "location": e.get("location"),
         "description": e.get("description"),
-        "organizer": e.get("organizer", {}).get("email"),
+        "organizer": (e.get("organizer") or {}).get("email"),
         "attendees": [
             {"email": a.get("email"), "response": a.get("responseStatus")}
-            for a in e.get("attendees", [])
+            for a in e.get("attendees") or []
         ],
         "recurrence": e.get("recurrence"),
         "html_link": e.get("htmlLink"),
         "status": e.get("status"),
-        **extra,
+    }
+    if collisions := shaped.keys() & extra.keys():
+        raise ValueError(
+            f"_shape_event: extra keys collide with shaped fields: {sorted(collisions)}"
+        )
+    shaped.update(extra)
+    return shaped
+
+
+def _shape_written_event(e: dict[str, Any]) -> dict[str, Any]:
+    """The shorter shape create_event and update_event return for the event the
+    API just wrote, shared so a shape fix lands in both (#890 QA round 1)."""
+    return {
+        "id": e["id"],
+        "summary": e.get("summary", ""),
+        "start": _event_time(e, "start"),
+        "end": _event_time(e, "end"),
+        "recurrence": e.get("recurrence"),
+        "html_link": e.get("htmlLink"),
+        "status": e.get("status"),
     }
 
 
@@ -350,11 +459,9 @@ def register(tool):
                 lc.calendar_service.calendarList().delete(calendarId=calendar_id).execute,
                 lc.calendar_service,
             )
-        except HttpError as e:
-            if e.resp.status == 403 and b"cannotUnsubscribeFromOwnedCalendar" in (e.content or b""):
-                return {"error": _CANNOT_UNSUBSCRIBE_OWNED_ERROR}
-            return {"error": str(e)}
         except Exception as e:
+            if http_error_has_reason(e, 403, "cannotUnsubscribeFromOwnedCalendar"):
+                return {"error": _CANNOT_UNSUBSCRIBE_OWNED_ERROR}
             return {"error": str(e)}
 
         lc.calendar_cache.mark_dirty(calendar_id)
@@ -364,40 +471,45 @@ def register(tool):
     @tool(annotations=ToolAnnotations(title="List Calendar ACL", readOnlyHint=True))
     async def list_calendar_acl(calendar_id: str, ctx: Context = None) -> list[dict[str, Any]]:
         """
-        List the access control rules (sharing entries) on a calendar.
+        List the access control rules (sharing entries) on a calendar. Every
+        page is fetched (250 rules each), up to a 100-page safety bound.
 
         Args:
             calendar_id: The calendar ID, or 'primary'.
 
         Returns:
             List of ACL rules, each with id, role, scope_type, and scope_value.
+            If the first page fails, returns [{"error": ...}]. If a later page
+            fails (or the page bound is hit), returns the rules already fetched
+            followed by one final {"error": ..., "partial": True} entry, so a
+            truncated list is never mistaken for a complete one.
+            Raises ValueError if the response exceeds the safety cap (see
+            MAX_TOOL_RESPONSE_CHARS in docs/configuration.md for the configured default).
         """
         lc = ctx.request_context.lifespan_context
-        rules = []
-        page_token = None
+        rules: list[dict[str, Any]] = []
+        pages_read = 0
         try:
-            while True:
-                result = await execute_in_thread(
-                    lc.calendar_service.acl()
-                    .list(calendarId=calendar_id, pageToken=page_token)
-                    .execute,
-                    lc.calendar_service,
-                )
-                for r in result.get("items", []):
-                    scope = r.get("scope", {})
-                    rules.append(
-                        {
-                            "id": r.get("id"),
-                            "role": r.get("role"),
-                            "scope_type": scope.get("type"),
-                            "scope_value": scope.get("value"),
-                        }
-                    )
-                page_token = result.get("nextPageToken")
-                if not page_token:
-                    break
+            async for page in iter_pages(
+                lambda token: lc.calendar_service.acl().list(
+                    calendarId=calendar_id, maxResults=_ACL_PAGE_SIZE, pageToken=token
+                ),
+                lc.calendar_service,
+                max_pages=_LIST_CALENDAR_ACL_MAX_PAGES,
+            ):
+                rules.extend(_shape_acl_rule(r) for r in page.get("items", []))
+                pages_read += 1
         except Exception as e:
-            return [{"error": str(e)}]
+            if not pages_read:
+                return [{"error": str(e)}]
+            rules.append(
+                {
+                    "error": f"Listing stopped after {pages_read} page(s), so the "
+                    f"{len(rules)} rule(s) above are incomplete: {e!s}",
+                    "partial": True,
+                }
+            )
+        enforce_response_size_cap(rules, tool_name="list_calendar_acl", local_path_available=False)
         return rules
 
     @tool(annotations=ToolAnnotations(title="Add Calendar ACL", destructiveHint=True))
@@ -425,7 +537,9 @@ def register(tool):
                                  Defaults to True.
 
         Returns:
-            Created ACL rule: id, role, scope_type, scope_value.
+            Created ACL rule: id, role, scope_type, scope_value. Google rejects any
+            change to the calendar's primary-owner rule or to the authenticated
+            account's own rule; that returns an {"error": ...} naming which one.
         """
         lc = ctx.request_context.lifespan_context
 
@@ -459,17 +573,11 @@ def register(tool):
                 lc.calendar_service,
             )
         except Exception as e:
-            return {"error": str(e)}
+            return _acl_error(e, removing=False)
 
         lc.calendar_cache.mark_dirty(calendar_id)
         logger.debug("Added ACL rule %s to calendar %s", r.get("id"), calendar_id)
-        result_scope = r.get("scope", {})
-        return {
-            "id": r.get("id"),
-            "role": r.get("role"),
-            "scope_type": result_scope.get("type"),
-            "scope_value": result_scope.get("value"),
-        }
+        return _shape_acl_rule(r)
 
     @tool(annotations=ToolAnnotations(title="Remove Calendar ACL", destructiveHint=True))
     async def remove_calendar_acl(
@@ -483,7 +591,9 @@ def register(tool):
             rule_id: The ACL rule ID to remove (from list_calendar_acl).
 
         Returns:
-            Confirmation with calendar_id, rule_id, and action 'removed'.
+            Confirmation with calendar_id, rule_id, and action 'removed'. The
+            calendar's primary-owner rule and the authenticated account's own
+            rule can't be removed; that returns an {"error": ...} naming which one.
         """
         lc = ctx.request_context.lifespan_context
         try:
@@ -492,7 +602,7 @@ def register(tool):
                 lc.calendar_service,
             )
         except Exception as e:
-            return {"error": str(e)}
+            return _acl_error(e, removing=True)
 
         lc.calendar_cache.mark_dirty(calendar_id)
         logger.debug("Removed ACL rule %s from calendar %s", rule_id, calendar_id)
@@ -529,7 +639,7 @@ def register(tool):
             organizer, attendees, recurrence, html_link, and status.
         """
         lc = ctx.request_context.lifespan_context
-        max_results = min(max(1, max_results), 2500)
+        max_results = clamp_max_results(max_results, 2500)
 
         kwargs: dict[str, Any] = {
             "calendarId": calendar_id,
@@ -576,26 +686,7 @@ def register(tool):
         except Exception as ex:
             return {"error": str(ex)}
 
-        start = e.get("start", {})
-        end = e.get("end", {})
-        return {
-            "id": e["id"],
-            "summary": e.get("summary", ""),
-            "start": start.get("dateTime") or start.get("date"),
-            "end": end.get("dateTime") or end.get("date"),
-            "location": e.get("location"),
-            "description": e.get("description"),
-            "organizer": e.get("organizer", {}).get("email"),
-            "attendees": [
-                {"email": a.get("email"), "response": a.get("responseStatus")}
-                for a in e.get("attendees", [])
-            ],
-            "recurrence": e.get("recurrence"),
-            "html_link": e.get("htmlLink"),
-            "status": e.get("status"),
-            "created": e.get("created"),
-            "updated": e.get("updated"),
-        }
+        return _shape_event(e, created=e.get("created"), updated=e.get("updated"))
 
     @tool(annotations=ToolAnnotations(title="Create Event", destructiveHint=True))
     async def create_event(
@@ -670,17 +761,7 @@ def register(tool):
 
         lc.calendar_cache.mark_dirty(calendar_id)
         logger.debug("Created event %s in calendar %s", e["id"], calendar_id)
-        ev_start = e.get("start", {})
-        ev_end = e.get("end", {})
-        return {
-            "id": e["id"],
-            "summary": e.get("summary", ""),
-            "start": ev_start.get("dateTime") or ev_start.get("date"),
-            "end": ev_end.get("dateTime") or ev_end.get("date"),
-            "recurrence": e.get("recurrence"),
-            "html_link": e.get("htmlLink"),
-            "status": e.get("status"),
-        }
+        return _shape_written_event(e)
 
     @tool(annotations=ToolAnnotations(title="Update Event", destructiveHint=True))
     async def update_event(
@@ -768,17 +849,7 @@ def register(tool):
 
         lc.calendar_cache.mark_dirty(calendar_id)
         logger.debug("Updated event %s in calendar %s", event_id, calendar_id)
-        ev_start = e.get("start", {})
-        ev_end = e.get("end", {})
-        return {
-            "id": e["id"],
-            "summary": e.get("summary", ""),
-            "start": ev_start.get("dateTime") or ev_start.get("date"),
-            "end": ev_end.get("dateTime") or ev_end.get("date"),
-            "recurrence": e.get("recurrence"),
-            "html_link": e.get("htmlLink"),
-            "status": e.get("status"),
-        }
+        return _shape_written_event(e)
 
     @tool(annotations=ToolAnnotations(title="Delete Event", destructiveHint=True))
     async def delete_event(calendar_id: str, event_id: str, ctx: Context = None) -> dict[str, Any]:
@@ -828,7 +899,12 @@ def register(tool):
 
         Returns:
             busy: dict mapping each calendar_id to its list of busy periods
-                  ({start, end} each in RFC 3339).
+                  ({start, end} each in RFC 3339). A calendar the freebusy API
+                  couldn't read (bad id, no access, etc.) maps instead to a
+                  single-element list holding {calendar_id, calendar_summary,
+                  error} — the same per-calendar error shape list_all_events uses,
+                  rather than aborting the whole query. calendar_summary falls
+                  back to the id when the calendar isn't in the user's list.
             free_slots: list of free periods ({start, end}) across all calendars,
                         computed as the complement of the union of all busy times.
         """
@@ -851,11 +927,35 @@ def register(tool):
 
         calendars_busy = result.get("calendars", {})
         busy: dict[str, list[dict[str, str]]] = {}
+
+        # Only pay for calendar summaries when at least one calendar errored — the
+        # common (all-readable) path stays a single freebusy API call. Best-effort:
+        # a failure here must never turn a working find_free_slots into a failing
+        # one, so it degrades to no summaries (calendar_summary falls back to the
+        # id, exactly as list_all_events does for a not-in-list calendar). #691.
+        summary_by_id: dict[str, str] = {}
+        if any(calendars_busy.get(cid, {}).get("errors") for cid in calendar_ids):
+            try:
+                summary_by_id = _summary_by_id(await _get_cached_calendar_list(lc))
+            except Exception:
+                summary_by_id = {}
+
         for cid in calendar_ids:
             cal_data = calendars_busy.get(cid, {})
             errors = cal_data.get("errors")
             if errors:
-                busy[cid] = [{"error": err.get("reason", "unknown")} for err in errors]
+                detail = "; ".join(
+                    err.get("reason", "unknown")
+                    + (f" ({err['domain']})" if err.get("domain") else "")
+                    for err in errors
+                )
+                busy[cid] = [
+                    {
+                        "calendar_id": cid,
+                        "calendar_summary": summary_by_id.get(cid, cid),
+                        "error": detail,
+                    }
+                ]
             else:
                 busy[cid] = [
                     {"start": p["start"], "end": p["end"]} for p in cal_data.get("busy", [])
@@ -901,6 +1001,8 @@ def register(tool):
         """
         List events across multiple calendars in one call, fanning out to each
         calendar in parallel instead of requiring one list_events call per calendar.
+        At most LIST_ALL_EVENTS_MAX_CONCURRENCY (default 20) calendars are queried at
+        once, shared across every concurrent list_all_events call on this server.
 
         Args:
             time_min: Lower bound (inclusive) for event start times, RFC 3339 format,
@@ -933,7 +1035,7 @@ def register(tool):
             narrow the time window, pass calendar_ids, or lower max_results_per_calendar.
         """
         lc = ctx.request_context.lifespan_context
-        max_results_per_calendar = min(max(1, max_results_per_calendar), 2500)
+        max_results_per_calendar = clamp_max_results(max_results_per_calendar, 2500)
         resolved_time_min = time_min or datetime.now(timezone.utc).isoformat()
 
         try:
@@ -946,7 +1048,7 @@ def register(tool):
                 return error_result if group_by_calendar else [error_result]
             all_calendars = []
 
-        summary_by_id = {c["id"]: c.get("summary", "") for c in all_calendars}
+        summary_by_id = _summary_by_id(all_calendars)
         target_ids = calendar_ids if calendar_ids is not None else [c["id"] for c in all_calendars]
 
         summary_counts: dict[str, int] = {}
@@ -960,7 +1062,7 @@ def register(tool):
                 return f"{summary} ({calendar_id})"
             return summary
 
-        semaphore = asyncio.Semaphore(_LIST_ALL_EVENTS_MAX_CONCURRENCY)
+        semaphore = _list_all_events_semaphore()
 
         async def _fetch_one(calendar_id: str) -> dict[str, Any]:
             kwargs: dict[str, Any] = {

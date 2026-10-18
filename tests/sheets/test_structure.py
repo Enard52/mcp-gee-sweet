@@ -1,6 +1,9 @@
 """Tests for tools/sheets/structure.py (add_chart, copy_sheet, and related)."""
 
+from itertools import groupby
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from mcp_gee_sweet.cache import SheetInfo
 from mcp_gee_sweet.tools.sheets import structure as sheets_structure_module
@@ -9,7 +12,7 @@ from mcp_gee_sweet.tools.sheets import structure as sheets_structure_module
 def _make_tool_registry():
     captured = {}
 
-    def tool(annotations=None):
+    def tool(annotations=None, local_only=False):
         def decorator(func):
             captured[func.__name__] = func
             return func
@@ -29,6 +32,84 @@ def _make_ctx(**services):
 
 _structure_tool, _structure_tools = _make_tool_registry()
 sheets_structure_module.register(_structure_tool)
+
+
+_MALFORMED_RANGES = [
+    "A1:",
+    "A:",
+    "5:",
+    ":5",
+    ":B",
+    ":B5",
+    "1:B",
+    "A:5",
+    "A:B5",
+    "ß1",
+    "ﬀ1",
+    "\u212a1",  # Kelvin sign, which Unicode case folding maps to "k"
+    "A\u0661",
+    "AAAA1",
+    "A99999999999",
+]
+
+# Every tool that builds a GridRange through _resolve_grid_range, with the
+# arguments it needs beyond spreadsheet_id/sheet/range to reach the range check.
+_GRID_RANGE_TOOLS = {
+    "sort_range": {},
+    "merge_cells": {},
+    "unmerge_cells": {},
+    "format_cells": {"bold": True},
+    "update_borders": {"top": {"style": "SOLID"}},
+    "add_data_validation": {"condition_type": "NUMBER_GREATER", "values": ["0"]},
+    "clear_data_validation": {},
+}
+
+
+class TestGridRangeToolsRejectMalformedRange:
+    """A malformed range is rejected before any API call: no write, and no
+    spreadsheets().get() for the sheet ID on a cold cache (#955)."""
+
+    @pytest.mark.parametrize("tool_name", sorted(_GRID_RANGE_TOOLS))
+    @pytest.mark.parametrize("range_str", _MALFORMED_RANGES)
+    async def test_malformed_range_makes_no_api_call(self, tool_name, range_str):
+        svc = MagicMock()
+        result = await _structure_tools[tool_name](
+            spreadsheet_id="ss1",
+            sheet="Sheet1",
+            range=range_str,
+            ctx=_make_ctx(sheets_service=svc, cache=None),
+            **_GRID_RANGE_TOOLS[tool_name],
+        )
+        assert "Invalid A1 notation" in result["error"]
+        svc.spreadsheets.return_value.get.assert_not_called()
+        svc.spreadsheets.return_value.batchUpdate.assert_not_called()
+
+    @pytest.mark.parametrize("tool_name", sorted(_GRID_RANGE_TOOLS))
+    async def test_valid_range_sends_grid_range_with_resolved_sheet_id(self, tool_name):
+        # The range is parsed before the sheet lookup, so sheetId is filled in
+        # afterward; this pins that every tool still sends it.
+        svc = MagicMock()
+        svc.spreadsheets.return_value.get.return_value.execute.return_value = {
+            "sheets": [{"properties": {"title": "Sheet1", "sheetId": 42}}]
+        }
+        svc.spreadsheets.return_value.batchUpdate.return_value.execute.return_value = {}
+        await _structure_tools[tool_name](
+            spreadsheet_id="ss1",
+            sheet="Sheet1",
+            range="B2:D5",
+            ctx=_make_ctx(sheets_service=svc, cache=None),
+            **_GRID_RANGE_TOOLS[tool_name],
+        )
+        body = svc.spreadsheets.return_value.batchUpdate.call_args.kwargs["body"]
+        (request,) = body["requests"]
+        (params,) = request.values()
+        assert params["range"] == {
+            "sheetId": 42,
+            "startRowIndex": 1,
+            "endRowIndex": 5,
+            "startColumnIndex": 1,
+            "endColumnIndex": 4,
+        }
 
 
 class TestAddChart:
@@ -101,11 +182,70 @@ class TestAddChart:
         ]
         assert col_starts == [1, 2]
 
-    async def test_single_column_range_succeeds(self):
-        """A single-column range (no separate series) must not error."""
+    @pytest.mark.parametrize("chart_type", ["COLUMN", "BAR", "LINE", "AREA", "SCATTER", "COMBO"])
+    async def test_single_column_range_returns_error(self, chart_type):
+        """PR #983 QA round 1: one column used to chart the column against itself."""
         svc = self._sheets_service()
-        result = await self._call(svc, "LINE", "B1:B10")
+        result = await self._call(svc, chart_type, "B1:B10")
+        assert "error" in result
+        assert "at least 2" in result["error"]
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+        assert not svc.spreadsheets.return_value.get.called
+
+    async def test_two_column_range_has_one_series(self):
+        svc = self._sheets_service()
+        result = await self._call(svc, "COMBO", "A1:B5")
         assert "error" not in result
+        series = self._chart_spec(svc)["basicChart"]["series"]
+        assert len(series) == 1
+        assert series[0]["series"]["sourceRange"]["sources"][0]["startColumnIndex"] == 1
+
+    async def test_histogram_single_column_succeeds(self):
+        svc = self._sheets_service()
+        result = await self._call(svc, "HISTOGRAM", "B2:B5")
+        assert "error" not in result
+
+    async def test_source_ranges_carry_only_their_own_column(self):
+        svc = self._sheets_service()
+        await self._call(svc, "COLUMN", "B2:D5")
+        spec = self._chart_spec(svc)
+        domain = spec["basicChart"]["domains"][0]["domain"]["sourceRange"]["sources"][0]
+        assert domain == {
+            "sheetId": 0,
+            "startRowIndex": 1,
+            "endRowIndex": 5,
+            "startColumnIndex": 1,
+            "endColumnIndex": 2,
+        }
+
+    # #954 — a range with no end column must error, not chart one column
+
+    @pytest.mark.parametrize("data_range", ["B2:5", "1:5", "2:2"])
+    async def test_range_without_end_column_returns_error_without_api_call(self, data_range):
+        svc = self._sheets_service()
+        result = await self._call(svc, "COLUMN", data_range)
+        assert "error" in result
+        assert data_range in result["error"]
+        assert "end column" in result["error"]
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+        # Cheap param check runs before the sheet-name lookup (#330 convention).
+        assert not svc.spreadsheets.return_value.get.called
+
+    async def test_column_only_range_succeeds(self):
+        """'A:C' names its end column, so it isn't caught by the #954 check."""
+        svc = self._sheets_service()
+        result = await self._call(svc, "COLUMN", "A:C")
+        assert "error" not in result
+        spec = self._chart_spec(svc)
+        assert len(spec["basicChart"]["series"]) == 2
+
+    async def test_open_ended_row_range_succeeds(self):
+        """'B2:D' has no end row but does name its end column."""
+        svc = self._sheets_service()
+        result = await self._call(svc, "LINE", "B2:D")
+        assert "error" not in result
+        spec = self._chart_spec(svc)
+        assert len(spec["basicChart"]["series"]) == 2
 
     # BUG-2 — HISTOGRAM spec
 
@@ -140,6 +280,16 @@ class TestAddChart:
         src = spec["pieChart"]["series"]["sourceRange"]["sources"][0]
         assert src["startColumnIndex"] == 1
         assert src["endColumnIndex"] == 2
+
+    @pytest.mark.parametrize("data_range,num_cols", [("A1:D5", 4), ("A1:C5", 3), ("B1:B5", 1)])
+    async def test_pie_without_exactly_two_columns_returns_error(self, data_range, num_cols):
+        """PR #983 QA round 1: PIE used to chart column B and drop the rest silently."""
+        svc = self._sheets_service()
+        result = await self._call(svc, "PIE", data_range)
+        assert "error" in result
+        assert f"spans {num_cols} column(s)" in result["error"]
+        assert "exactly 2" in result["error"]
+        assert not svc.spreadsheets.return_value.batchUpdate.called
 
     # BUG-3 — BAR targetAxis
 
@@ -176,19 +326,36 @@ class TestAddChart:
         assert series[-1]["type"] == "LINE"
         assert all(s["type"] == "COLUMN" for s in series[:-1])
 
+    # Enum validation (issue #330 — shared with update_borders via _enum_value_error)
+
+    async def test_invalid_chart_type_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        result = await self._call(svc, "DONUT", "A1:D5")
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_lowercase_chart_type_is_normalized(self):
+        svc = self._sheets_service()
+        result = await self._call(svc, "column", "A1:D5")
+        assert "error" not in result
+        spec = self._chart_spec(svc)
+        assert spec["basicChart"]["chartType"] == "COLUMN"
+
 
 class TestCopySheet:
     """Bug: rename was silently skipped when API response omitted the 'title' key."""
 
     def _mock_sheets(self, copy_result):
         mock = MagicMock()
-        mock.spreadsheets.return_value.get.return_value.execute.return_value = {
-            "sheets": [{"properties": {"title": "Sheet1", "sheetId": 0}}]
-        }
         (
             mock.spreadsheets.return_value.sheets.return_value.copyTo.return_value.execute.return_value
         ) = copy_result
         return mock
+
+    def _cache_with_sheet(self, title="Sheet1", sheet_id=0):
+        cache = MagicMock()
+        cache.get_sheets.return_value = [SheetInfo(title=title, sheet_id=sheet_id)]
+        return cache
 
     def _rename_titles(self, mock_sheets):
         body = mock_sheets.spreadsheets.return_value.batchUpdate.call_args.kwargs["body"]
@@ -201,7 +368,7 @@ class TestCopySheet:
     async def test_rename_triggered_when_title_absent_from_response(self):
         """The old guard `if 'title' in copy_result` would silently skip this case."""
         mock_sheets = self._mock_sheets({"sheetId": 42})  # no "title" key
-        ctx = _make_ctx(sheets_service=mock_sheets, cache=MagicMock())
+        ctx = _make_ctx(sheets_service=mock_sheets, cache=self._cache_with_sheet())
         await _structure_tools["copy_sheet"](
             src_spreadsheet="src",
             src_sheet="Sheet1",
@@ -214,7 +381,7 @@ class TestCopySheet:
 
     async def test_rename_triggered_when_title_differs(self):
         mock_sheets = self._mock_sheets({"sheetId": 42, "title": "Copy of Sheet1"})
-        ctx = _make_ctx(sheets_service=mock_sheets, cache=MagicMock())
+        ctx = _make_ctx(sheets_service=mock_sheets, cache=self._cache_with_sheet())
         await _structure_tools["copy_sheet"](
             src_spreadsheet="src",
             src_sheet="Sheet1",
@@ -226,7 +393,7 @@ class TestCopySheet:
 
     async def test_rename_skipped_when_title_already_matches(self):
         mock_sheets = self._mock_sheets({"sheetId": 42, "title": "Target Name"})
-        ctx = _make_ctx(sheets_service=mock_sheets, cache=MagicMock())
+        ctx = _make_ctx(sheets_service=mock_sheets, cache=self._cache_with_sheet())
         await _structure_tools["copy_sheet"](
             src_spreadsheet="src",
             src_sheet="Sheet1",
@@ -235,6 +402,80 @@ class TestCopySheet:
             ctx=ctx,
         )
         assert not mock_sheets.spreadsheets.return_value.batchUpdate.called
+
+    async def test_returns_error_when_source_sheet_not_found(self):
+        mock_sheets = self._mock_sheets({"sheetId": 42, "title": "Copy of Sheet1"})
+        ctx = _make_ctx(sheets_service=mock_sheets, cache=self._cache_with_sheet(title="Other"))
+        result = await _structure_tools["copy_sheet"](
+            src_spreadsheet="src",
+            src_sheet="Missing",
+            dst_spreadsheet="dst",
+            dst_sheet="My Sheet",
+            ctx=ctx,
+        )
+        assert result == {"error": "Source sheet 'Missing' not found"}
+        assert not mock_sheets.spreadsheets.return_value.batchUpdate.called
+
+
+class TestRenameSheet:
+    def _mock_sheets(self):
+        return MagicMock()
+
+    def _cache_with_sheet(self, title="Sheet1", sheet_id=0):
+        cache = MagicMock()
+        cache.get_sheets.return_value = [SheetInfo(title=title, sheet_id=sheet_id)]
+        return cache
+
+    def _request(self, svc):
+        body = svc.spreadsheets.return_value.batchUpdate.call_args.kwargs["body"]
+        return body["requests"][0]["updateSheetProperties"]
+
+    async def test_sends_rename_request_with_resolved_sheet_id(self):
+        svc = self._mock_sheets()
+        cache = self._cache_with_sheet(sheet_id=7)
+        ctx = _make_ctx(sheets_service=svc, cache=cache)
+        await _structure_tools["rename_sheet"](
+            spreadsheet="ss1", sheet="Sheet1", new_name="Renamed", ctx=ctx
+        )
+        req = self._request(svc)
+        assert req["properties"] == {"sheetId": 7, "title": "Renamed"}
+        assert req["fields"] == "title"
+
+    async def test_returns_error_when_sheet_not_found(self):
+        svc = self._mock_sheets()
+        cache = self._cache_with_sheet(title="Other")
+        ctx = _make_ctx(sheets_service=svc, cache=cache)
+        result = await _structure_tools["rename_sheet"](
+            spreadsheet="ss1", sheet="Missing", new_name="Renamed", ctx=ctx
+        )
+        assert result == {"error": "Sheet 'Missing' not found"}
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_marks_cache_dirty_on_success(self):
+        svc = self._mock_sheets()
+        cache = self._cache_with_sheet(sheet_id=7)
+        ctx = _make_ctx(sheets_service=svc, cache=cache)
+        await _structure_tools["rename_sheet"](
+            spreadsheet="ss1", sheet="Sheet1", new_name="Renamed", ctx=ctx
+        )
+        cache.mark_dirty.assert_called_with("ss1")
+
+    async def test_forwards_drive_service_to_get_sheet_id(self, monkeypatch):
+        """Regression: a call site omitting drive_service reintroduces the
+        cache-poisoning bug fixed in #284 (modified_time silently disabled for
+        all subsequent readers of the spreadsheet) — see the sibling test on
+        TestDuplicateSheet and TestGetSheetIdCallSitesForwardDriveService's
+        static guard below."""
+        svc = self._mock_sheets()
+        cache = self._cache_with_sheet(sheet_id=7)
+        drive_svc = MagicMock()
+        ctx = _make_ctx(sheets_service=svc, cache=cache, drive_service=drive_svc)
+        mock_get_sheet_id = AsyncMock(return_value=7)
+        monkeypatch.setattr(sheets_structure_module, "_get_sheet_id", mock_get_sheet_id)
+        await _structure_tools["rename_sheet"](
+            spreadsheet="ss1", sheet="Sheet1", new_name="Renamed", ctx=ctx
+        )
+        mock_get_sheet_id.assert_called_once_with(svc, "ss1", "Sheet1", cache, drive_svc)
 
 
 class TestDuplicateSheet:
@@ -393,6 +634,134 @@ class TestGetSheetIdCallSitesForwardDriveService:
             )
 
 
+class TestAddRows:
+    def _sheets_service(self, sheet_id=0):
+        mock = MagicMock()
+        mock.spreadsheets.return_value.get.return_value.execute.return_value = {
+            "sheets": [{"properties": {"title": "Sheet1", "sheetId": sheet_id}}]
+        }
+        mock.spreadsheets.return_value.batchUpdate.return_value.execute.return_value = {}
+        return mock
+
+    def _dimension_range(self, svc):
+        body = svc.spreadsheets.return_value.batchUpdate.call_args.kwargs["body"]
+        return body["requests"][0]["insertDimension"]["range"]
+
+    async def test_default_start_is_zero(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        await _structure_tools["add_rows"](spreadsheet_id="ss1", sheet="Sheet1", count=3, ctx=ctx)
+        r = self._dimension_range(svc)
+        assert r["startIndex"] == 0
+        assert r["endIndex"] == 3
+        assert r["dimension"] == "ROWS"
+
+    async def test_explicit_start_row_used(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        await _structure_tools["add_rows"](
+            spreadsheet_id="ss1", sheet="Sheet1", count=2, start_row=5, ctx=ctx
+        )
+        r = self._dimension_range(svc)
+        assert r["startIndex"] == 5
+        assert r["endIndex"] == 7
+
+    async def test_returns_error_when_sheet_not_found(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["add_rows"](
+            spreadsheet_id="ss1", sheet="Missing", count=1, ctx=ctx
+        )
+        assert "error" in result
+
+    async def test_zero_count_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["add_rows"](
+            spreadsheet_id="ss1", sheet="Sheet1", count=0, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_negative_count_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["add_rows"](
+            spreadsheet_id="ss1", sheet="Sheet1", count=-2, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_negative_start_row_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["add_rows"](
+            spreadsheet_id="ss1", sheet="Sheet1", count=1, start_row=-1, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+
+class TestAddColumns:
+    def _sheets_service(self, sheet_id=0):
+        mock = MagicMock()
+        mock.spreadsheets.return_value.get.return_value.execute.return_value = {
+            "sheets": [{"properties": {"title": "Sheet1", "sheetId": sheet_id}}]
+        }
+        mock.spreadsheets.return_value.batchUpdate.return_value.execute.return_value = {}
+        return mock
+
+    def _dimension_range(self, svc):
+        body = svc.spreadsheets.return_value.batchUpdate.call_args.kwargs["body"]
+        return body["requests"][0]["insertDimension"]["range"]
+
+    async def test_default_start_is_zero(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        await _structure_tools["add_columns"](
+            spreadsheet_id="ss1", sheet="Sheet1", count=3, ctx=ctx
+        )
+        r = self._dimension_range(svc)
+        assert r["startIndex"] == 0
+        assert r["endIndex"] == 3
+        assert r["dimension"] == "COLUMNS"
+
+    async def test_returns_error_when_sheet_not_found(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["add_columns"](
+            spreadsheet_id="ss1", sheet="Missing", count=1, ctx=ctx
+        )
+        assert "error" in result
+
+    async def test_zero_count_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["add_columns"](
+            spreadsheet_id="ss1", sheet="Sheet1", count=0, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_negative_count_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["add_columns"](
+            spreadsheet_id="ss1", sheet="Sheet1", count=-1, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_negative_start_column_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["add_columns"](
+            spreadsheet_id="ss1", sheet="Sheet1", count=1, start_column=-1, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+
 class TestDeleteSheet:
     def _sheets_service(self, sheet_id=7):
         mock = MagicMock()
@@ -473,6 +842,24 @@ class TestDeleteRows:
         )
         assert "error" in result
 
+    async def test_end_row_before_start_row_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["delete_rows"](
+            spreadsheet_id="ss1", sheet="Sheet1", start_row=5, end_row=2, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_negative_start_row_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["delete_rows"](
+            spreadsheet_id="ss1", sheet="Sheet1", start_row=-1, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
 
 class TestDeleteColumns:
     def _sheets_service(self, sheet_id=0):
@@ -515,6 +902,24 @@ class TestDeleteColumns:
             spreadsheet_id="ss1", sheet="Missing", start_column=0, ctx=ctx
         )
         assert "error" in result
+
+    async def test_end_column_before_start_column_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["delete_columns"](
+            spreadsheet_id="ss1", sheet="Sheet1", start_column=5, end_column=2, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_negative_start_column_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["delete_columns"](
+            spreadsheet_id="ss1", sheet="Sheet1", start_column=-1, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
 
 
 class TestHideRows:
@@ -561,6 +966,24 @@ class TestHideRows:
         )
         assert "error" in result
 
+    async def test_end_row_before_start_row_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["hide_rows"](
+            spreadsheet_id="ss1", sheet="Sheet1", start_row=5, end_row=2, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_negative_start_row_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["hide_rows"](
+            spreadsheet_id="ss1", sheet="Sheet1", start_row=-1, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
 
 class TestUnhideRows:
     def _sheets_service(self, sheet_id=0):
@@ -604,6 +1027,24 @@ class TestUnhideRows:
             spreadsheet_id="ss1", sheet="Missing", start_row=0, ctx=ctx
         )
         assert "error" in result
+
+    async def test_end_row_before_start_row_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["unhide_rows"](
+            spreadsheet_id="ss1", sheet="Sheet1", start_row=5, end_row=2, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_negative_start_row_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["unhide_rows"](
+            spreadsheet_id="ss1", sheet="Sheet1", start_row=-1, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
 
 
 class TestHideColumns:
@@ -649,6 +1090,24 @@ class TestHideColumns:
         )
         assert "error" in result
 
+    async def test_end_column_before_start_column_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["hide_columns"](
+            spreadsheet_id="ss1", sheet="Sheet1", start_column=5, end_column=2, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_negative_start_column_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["hide_columns"](
+            spreadsheet_id="ss1", sheet="Sheet1", start_column=-1, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
 
 class TestUnhideColumns:
     def _sheets_service(self, sheet_id=0):
@@ -692,6 +1151,24 @@ class TestUnhideColumns:
             spreadsheet_id="ss1", sheet="Missing", start_column=0, ctx=ctx
         )
         assert "error" in result
+
+    async def test_end_column_before_start_column_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["unhide_columns"](
+            spreadsheet_id="ss1", sheet="Sheet1", start_column=5, end_column=2, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_negative_start_column_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["unhide_columns"](
+            spreadsheet_id="ss1", sheet="Sheet1", start_column=-1, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
 
 
 class TestResizeRows:
@@ -769,6 +1246,44 @@ class TestResizeRows:
             spreadsheet_id="ss1", sheet="Missing", start_row=0, pixel_size=50, ctx=ctx
         )
         assert "error" in result
+
+    async def test_bad_sheet_name_reported_before_missing_params(self):
+        # Sheet lookup must be checked before the pixel_size/auto_resize mutual
+        # exclusivity check, matching format_cells' sheet-first ordering — a bad
+        # sheet name should surface its own error, not mask it behind a params error.
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["resize_rows"](
+            spreadsheet_id="ss1", sheet="Missing", start_row=0, ctx=ctx
+        )
+        assert "not found" in result["error"]
+
+    async def test_non_positive_pixel_size_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["resize_rows"](
+            spreadsheet_id="ss1", sheet="Sheet1", start_row=0, pixel_size=0, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_end_row_before_start_row_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["resize_rows"](
+            spreadsheet_id="ss1", sheet="Sheet1", start_row=5, end_row=2, pixel_size=50, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_negative_start_row_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["resize_rows"](
+            spreadsheet_id="ss1", sheet="Sheet1", start_row=-1, pixel_size=50, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
 
 
 class TestResizeColumns:
@@ -852,8 +1367,61 @@ class TestResizeColumns:
         )
         assert "error" in result
 
+    async def test_bad_sheet_name_reported_before_missing_params(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["resize_columns"](
+            spreadsheet_id="ss1", sheet="Missing", start_column=0, ctx=ctx
+        )
+        assert "not found" in result["error"]
+
+    async def test_non_positive_pixel_size_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["resize_columns"](
+            spreadsheet_id="ss1", sheet="Sheet1", start_column=0, pixel_size=-5, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_end_column_before_start_column_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["resize_columns"](
+            spreadsheet_id="ss1",
+            sheet="Sheet1",
+            start_column=5,
+            end_column=2,
+            pixel_size=80,
+            ctx=ctx,
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_negative_start_column_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["resize_columns"](
+            spreadsheet_id="ss1", sheet="Sheet1", start_column=-1, pixel_size=80, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
 
 class TestFormatCells:
+    @pytest.mark.parametrize("range_str", [":", "A1\n"])
+    async def test_malformed_range_does_not_format_any_cells(self, range_str):
+        svc = self._sheets_service()
+        result = await _structure_tools["format_cells"](
+            spreadsheet_id="ss1",
+            sheet="Sheet1",
+            range=range_str,
+            bold=True,
+            ctx=_make_ctx(sheets_service=svc, cache=None),
+        )
+        assert "error" in result
+        svc.spreadsheets.return_value.batchUpdate.assert_not_called()
+
     def _sheets_service(self, sheet_id=0):
         mock = MagicMock()
         mock.spreadsheets.return_value.get.return_value.execute.return_value = {
@@ -928,6 +1496,15 @@ class TestFormatCells:
             spreadsheet_id="ss1", sheet="Missing", range="A1", bold=True, ctx=ctx
         )
         assert "error" in result
+
+    async def test_invalid_range_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["format_cells"](
+            spreadsheet_id="ss1", sheet="Sheet1", range="Sheet1!A1", bold=True, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
 
     async def test_multiple_format_params_produce_multiple_fields(self):
         svc = self._sheets_service()
@@ -1079,6 +1656,29 @@ class TestUpdateBorders:
         )
         assert "error" in result
 
+    async def test_invalid_range_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["update_borders"](
+            spreadsheet_id="ss1", sheet="Sheet1", range="Sheet1!A1", top={"style": "SOLID"}, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_validation_runs_before_sheet_lookup(self):
+        # A bad style paired with a bad sheet name should surface the (cheap,
+        # local) validation error without ever paying for the sheet-name
+        # lookup — matching add_chart/resize_rows/resize_columns' own
+        # cheap-params-first ordering (issue #330).
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["update_borders"](
+            spreadsheet_id="ss1", sheet="Missing", range="A1", top={"style": "SQUIGGLY"}, ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.get.called
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
 
 class TestAddDataValidation:
     def _sheets_service(self, sheet_id=0):
@@ -1198,7 +1798,7 @@ class TestAddDataValidation:
             spreadsheet_id="ss1",
             sheet="Sheet1",
             range="A1",
-            condition_type="NOT_BLANK",
+            condition_type="DATE_IS_VALID",
             input_message="This field is required",
             ctx=ctx,
         )
@@ -1212,7 +1812,7 @@ class TestAddDataValidation:
             spreadsheet_id="ss1",
             sheet="Sheet1",
             range="B2:C5",
-            condition_type="NOT_BLANK",
+            condition_type="DATE_IS_VALID",
             ctx=ctx,
         )
         req = self._set_data_validation_request(svc)
@@ -1237,6 +1837,222 @@ class TestAddDataValidation:
         assert "error" in result
         assert not svc.spreadsheets.return_value.batchUpdate.called
 
+    @pytest.mark.parametrize(
+        "condition_type", ["BLANK", "NOT_BLANK", "TEXT_STARTS_WITH", "TEXT_ENDS_WITH"]
+    )
+    async def test_condition_type_unsupported_by_data_validation_rejected_locally(
+        self, condition_type
+    ):
+        """Conditional-formatting/filter-only BooleanCondition types: the API
+        rejects each with "not supported in data validation" (live-confirmed,
+        PR #986 QA round 2), so they never reach it."""
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["add_data_validation"](
+            spreadsheet_id="ss1",
+            sheet="Sheet1",
+            range="A1",
+            condition_type=condition_type,
+            values=["ab"] if condition_type.startswith("TEXT_") else None,
+            ctx=ctx,
+        )
+        assert result["error"].startswith(f"Invalid condition_type '{condition_type}'")
+        assert condition_type not in sheets_structure_module._CONDITION_SPECS
+        svc.spreadsheets.return_value.get.assert_not_called()
+        svc.spreadsheets.return_value.batchUpdate.assert_not_called()
+
+    async def test_value_count_mismatch_returns_error_without_api_call(self):
+        """Issue #366 — the exact case from the issue body: NUMBER_BETWEEN
+        with only 1 value used to reach the real Sheets API and get a 400
+        back; now caught locally before any API call."""
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["add_data_validation"](
+            spreadsheet_id="ss1",
+            sheet="Sheet1",
+            range="A1",
+            condition_type="NUMBER_BETWEEN",
+            values=["1"],
+            ctx=ctx,
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_boolean_accepts_two_custom_label_values(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["add_data_validation"](
+            spreadsheet_id="ss1",
+            sheet="Sheet1",
+            range="A1",
+            condition_type="BOOLEAN",
+            values=["Checked", "Unchecked"],
+            ctx=ctx,
+        )
+        assert "error" not in result
+        req = self._set_data_validation_request(svc)
+        assert len(req["rule"]["condition"]["values"]) == 2
+
+    async def test_boolean_rejects_exactly_one_value(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["add_data_validation"](
+            spreadsheet_id="ss1",
+            sheet="Sheet1",
+            range="A1",
+            condition_type="BOOLEAN",
+            values=["OnlyOne"],
+            ctx=ctx,
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_zero_value_condition_type_rejects_a_value(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["add_data_validation"](
+            spreadsheet_id="ss1",
+            sheet="Sheet1",
+            range="A1",
+            condition_type="DATE_IS_VALID",
+            values=["unexpected"],
+            ctx=ctx,
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_one_of_list_requires_at_least_one_value(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["add_data_validation"](
+            spreadsheet_id="ss1",
+            sheet="Sheet1",
+            range="A1",
+            condition_type="ONE_OF_LIST",
+            ctx=ctx,
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_exactly_one_value_types_reject_zero_or_two(self):
+        for condition_type in ("NUMBER_GREATER", "CUSTOM_FORMULA", "ONE_OF_RANGE"):
+            svc = self._sheets_service()
+            ctx = _make_ctx(sheets_service=svc, cache=None)
+            for bad_values in (None, ["a", "b"]):
+                result = await _structure_tools["add_data_validation"](
+                    spreadsheet_id="ss1",
+                    sheet="Sheet1",
+                    range="A1",
+                    condition_type=condition_type,
+                    values=bad_values,
+                    ctx=ctx,
+                )
+                assert "error" in result, f"{condition_type} with {bad_values} should error"
+            assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    async def test_exactly_two_value_types_reject_one_or_three(self):
+        for condition_type in ("NUMBER_BETWEEN", "DATE_BETWEEN"):
+            svc = self._sheets_service()
+            ctx = _make_ctx(sheets_service=svc, cache=None)
+            for bad_values in (["1"], ["1", "2", "3"]):
+                result = await _structure_tools["add_data_validation"](
+                    spreadsheet_id="ss1",
+                    sheet="Sheet1",
+                    range="A1",
+                    condition_type=condition_type,
+                    values=bad_values,
+                    ctx=ctx,
+                )
+                assert "error" in result, f"{condition_type} with {bad_values} should error"
+            assert not svc.spreadsheets.return_value.batchUpdate.called
+
+    def test_condition_specs_covers_every_valid_condition_type(self):
+        """Originally PR #750's guard on _CONDITION_VALUE_COUNTS (indexed by
+        _condition_value_count_error with no .get()/fallback); issue #751
+        made _CONDITION_SPECS the actual single source of truth and
+        _condition_value_count_error now reads it directly, so this test
+        moved to guard _CONDITION_SPECS's own key set instead — a future
+        condition_type added to _VALID_CONDITION_TYPES without a matching
+        _CONDITION_SPECS entry fails this test instead of silently skipping
+        the local check (or raising a KeyError) in prod."""
+        assert set(sheets_structure_module._CONDITION_SPECS) == set(
+            sheets_structure_module._VALID_CONDITION_TYPES
+        )
+
+    def test_add_data_validation_docstring_matches_condition_specs(self):
+        """Issue #751: add_data_validation's docstring is generated from
+        _CONDITION_SPECS rather than hand-written prose kept in sync by hand.
+        For every group of condition_types (grouped by their own explicit
+        `group` tag — the source of truth for what belongs together, already
+        covered separately by
+        test_condition_type_doc_block_never_merges_different_groups), checks
+        that group's canonical rendered text — names plus its own spec.doc,
+        the exact thing add_data_validation's docstring is supposed to say —
+        actually appears in the generated docstring, not just that each
+        type's name appears somewhere in it (PR #759 review: a
+        name-presence-only check passed even while a grouping bug silently
+        merged four semantically distinct condition_types onto one line).
+        Both sides are whitespace-normalized so word-wrapping inside a long
+        group's line(s) can't cause a false failure."""
+        normalized_doc = " ".join(sheets_structure_module._ADD_DATA_VALIDATION_DOCSTRING.split())
+        specs = sheets_structure_module._CONDITION_SPECS
+        for _, entries_iter in groupby(specs.items(), key=lambda kv: kv[1].group):
+            entries = list(entries_iter)
+            types = [condition_type for condition_type, _ in entries]
+            spec = entries[0][1]
+            expected = sheets_structure_module._render_condition_group(
+                types, spec, indent="", width=10_000
+            )
+            normalized_expected = " ".join(expected.split())
+            assert normalized_expected in normalized_doc, (
+                f"expected group text not found in generated docstring: {normalized_expected!r}"
+            )
+
+    def test_condition_type_doc_block_never_merges_different_groups(self):
+        """PR #759 review, live-confirmed regression: TEXT_IS_EMAIL,
+        TEXT_IS_URL, BLANK, and NOT_BLANK (the last two since removed as
+        unsupported by data validation, PR #986) all shared the identical
+        (counts=(0,), doc="no values") spec and sit adjacent in
+        _CONDITION_SPECS, so grouping on spec equality alone silently
+        collapsed two semantically unrelated condition_type families (text
+        format validity vs. blank-cell checks) onto a single generated line
+        — diverging from the original hand-written docstring's two separate
+        lines. _ConditionSpec's `group` field is the fix: grouping now keys
+        on that explicit tag instead of incidental (counts, doc) equality,
+        so two families can never merge just because their rendered text
+        happens to coincide. This asserts that invariant directly rather
+        than re-testing today's specific four type names."""
+        doc = sheets_structure_module._ADD_DATA_VALIDATION_DOCSTRING
+        for line in doc.splitlines():
+            types_on_line = [
+                condition_type
+                for condition_type in sheets_structure_module._CONDITION_SPECS
+                if f'"{condition_type}"' in line
+            ]
+            groups_on_line = {
+                sheets_structure_module._CONDITION_SPECS[condition_type].group
+                for condition_type in types_on_line
+            }
+            assert len(groups_on_line) <= 1, f"line merges multiple groups: {line!r}"
+
+    def test_add_data_validation_registered_docstring_survives_timed_wrapping(self):
+        """PR #759 review: add_data_validation sets __doc__ explicitly and
+        then applies tool() manually (rather than via @tool(...) sugar),
+        because the generated docstring can't be a literal — see
+        docs/decisions/decision-condition-type-docstring-generation.md. That
+        ordering has no direct test: if the two lines were ever swapped,
+        mcp.tool() would register the function with no docstring, silently,
+        since _timed's functools.wraps(func) copies __doc__ at wrap time.
+        The fake tool registry this test module uses (_make_tool_registry)
+        never wraps at all, so it can't catch that — this wraps the captured
+        function with the real _timed and confirms the docstring, already
+        set at capture time, survives the same wrapping the live server
+        applies."""
+        from mcp_gee_sweet.server import _timed
+
+        wrapped = _timed(_structure_tools["add_data_validation"])
+        assert wrapped.__doc__ == sheets_structure_module._ADD_DATA_VALIDATION_DOCSTRING
+
     async def test_returns_error_when_sheet_not_found(self):
         svc = self._sheets_service()
         ctx = _make_ctx(sheets_service=svc, cache=None)
@@ -1244,10 +2060,23 @@ class TestAddDataValidation:
             spreadsheet_id="ss1",
             sheet="Missing",
             range="A1",
-            condition_type="NOT_BLANK",
+            condition_type="DATE_IS_VALID",
             ctx=ctx,
         )
         assert "error" in result
+
+    async def test_invalid_range_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["add_data_validation"](
+            spreadsheet_id="ss1",
+            sheet="Sheet1",
+            range="Sheet1!A1",
+            condition_type="DATE_IS_VALID",
+            ctx=ctx,
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
 
 
 class TestGetDataValidation:
@@ -1296,7 +2125,7 @@ class TestGetDataValidation:
         ]
 
     async def test_offsets_use_start_row_and_start_column(self):
-        rule = {"condition": {"type": "NOT_BLANK"}, "strict": True, "showCustomUi": True}
+        rule = {"condition": {"type": "DATE_IS_VALID"}, "strict": True, "showCustomUi": True}
         grid_data = {
             "startRow": 4,
             "startColumn": 2,
@@ -1357,6 +2186,61 @@ class TestGetDataValidation:
         assert result == {"error": "Sheet 'Missing' not found"}
 
 
+class TestClearDataValidation:
+    def _sheets_service(self, sheet_id=0):
+        mock = MagicMock()
+        mock.spreadsheets.return_value.get.return_value.execute.return_value = {
+            "sheets": [{"properties": {"title": "Sheet1", "sheetId": sheet_id}}]
+        }
+        mock.spreadsheets.return_value.batchUpdate.return_value.execute.return_value = {}
+        return mock
+
+    def _set_data_validation_request(self, svc):
+        body = svc.spreadsheets.return_value.batchUpdate.call_args.kwargs["body"]
+        return body["requests"][0]["setDataValidation"]
+
+    async def test_sends_setDataValidation_with_no_rule(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        await _structure_tools["clear_data_validation"](
+            spreadsheet_id="ss1", sheet="Sheet1", range="A2:A100", ctx=ctx
+        )
+        req = self._set_data_validation_request(svc)
+        assert "rule" not in req
+
+    async def test_range_maps_to_grid_range_indices(self):
+        svc = self._sheets_service(sheet_id=42)
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        await _structure_tools["clear_data_validation"](
+            spreadsheet_id="ss1", sheet="Sheet1", range="B2:C5", ctx=ctx
+        )
+        req = self._set_data_validation_request(svc)
+        assert req["range"] == {
+            "sheetId": 42,
+            "startRowIndex": 1,
+            "startColumnIndex": 1,
+            "endRowIndex": 5,
+            "endColumnIndex": 3,
+        }
+
+    async def test_returns_error_when_sheet_not_found(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["clear_data_validation"](
+            spreadsheet_id="ss1", sheet="Missing", range="A1", ctx=ctx
+        )
+        assert result == {"error": "Sheet 'Missing' not found"}
+
+    async def test_invalid_range_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["clear_data_validation"](
+            spreadsheet_id="ss1", sheet="Sheet1", range="Sheet1!A1", ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
+
 class TestMergeCells:
     def _sheets_service(self, sheet_id=0):
         mock = MagicMock()
@@ -1405,6 +2289,15 @@ class TestMergeCells:
         )
         assert "error" in result
 
+    async def test_invalid_range_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["merge_cells"](
+            spreadsheet_id="ss1", sheet="Sheet1", range="Sheet1!A1", ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
+
 
 class TestUnmergeCells:
     def _sheets_service(self):
@@ -1431,6 +2324,15 @@ class TestUnmergeCells:
             spreadsheet_id="ss1", sheet="Missing", range="A1:B2", ctx=ctx
         )
         assert "error" in result
+
+    async def test_invalid_range_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["unmerge_cells"](
+            spreadsheet_id="ss1", sheet="Sheet1", range="Sheet1!A1", ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
 
 
 class TestFreeze:
@@ -1681,6 +2583,15 @@ class TestSortRange:
             spreadsheet_id="ss1", sheet="Missing", range="A1:D10", ctx=ctx
         )
         assert "error" in result
+
+    async def test_invalid_range_returns_error_without_api_call(self):
+        svc = self._sheets_service()
+        ctx = _make_ctx(sheets_service=svc, cache=None)
+        result = await _structure_tools["sort_range"](
+            spreadsheet_id="ss1", sheet="Sheet1", range="Sheet1!A1", ctx=ctx
+        )
+        assert "error" in result
+        assert not svc.spreadsheets.return_value.batchUpdate.called
 
     async def test_returns_error_for_non_string_order_instead_of_crashing(self):
         svc = self._sheets_service()

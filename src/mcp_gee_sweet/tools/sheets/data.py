@@ -1,22 +1,39 @@
-import asyncio
 import logging
 from typing import Any
 
+from googleapiclient.errors import HttpError
 from mcp.server.mcpserver import Context
 from mcp.types import ToolAnnotations
 
 from ...auth import execute_in_thread
 from ...cache import CACHE_VALIDATE_MODIFIED_TIME, SheetInfo, fetch_sheets, get_modified_time
+from ...local_files import check_write
+from ..concurrency import gather_with_fallback, report_progress_safe
 from ..response_limits import enforce_response_size_cap, write_capped_result_to_disk
 from .helpers import (
     _column_index_to_letter,
     _get_sheet_id,
-    _parse_a1_notation,
+    _parse_a1_notation_or_error,
     _quote_sheet_name,
     _utf16_len,
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _execute_or_error(func, service) -> tuple[dict[str, Any] | None, Any]:
+    """Runs execute_in_thread(func, service) and returns (error, result): a clean
+    {"error": ...} dict on HttpError instead of letting it propagate uncaught, or
+    (None, result) on success — matching this codebase's established error-or-None
+    convention (_parse_a1_notation_or_error, _resolve_grid_range) instead of
+    duplicating try/except HttpError at every call site in this file that hands a
+    raw caller-supplied range/request straight to the Sheets API with no local
+    validation (issue #757)."""
+    try:
+        return None, await execute_in_thread(func, service)
+    except HttpError as e:
+        return {"error": str(e)}, None
+
 
 # Cell count turned out not to predict response size at all: a live test found a
 # 26,000-cell *blank* range (a fresh sheet's default 1000x26 padding) returns almost
@@ -100,6 +117,9 @@ def register(tool):
                 bypass the cap entirely.
             local_path: Optional local filesystem path (file or directory) to write the result
                 to instead of returning it inline. Bypasses the include_grid_data response-size cap.
+                A path ending in '/' is a directory, created if missing. A file in place
+                of a parent directory, or at a path ending in '/', raises ValueError; an
+                existing file at a plain file path is replaced.
                 Same caveat as download_file/download_folder: this path is resolved on the
                 *server's* filesystem, not the caller's — over SSE that's only useful if the
                 path is on a volume the caller can also reach; for stdio it's the same machine.
@@ -109,20 +129,33 @@ def register(tool):
             depending on include_grid_data parameter. If local_path is set, returns
             {local_path, spreadsheet_id, sheet, range, bytes_written} instead.
         """
+        if local_path:
+            # Before any fetch, so a refused destination costs no API call (#796).
+            check_write(local_path)
         sheets_service = ctx.request_context.lifespan_context.sheets_service
 
         quoted = _quote_sheet_name(sheet)
 
+        # `range`/`quoted` below are raw caller-supplied strings (A1/R1C1/named-range —
+        # unlike the tools that call _parse_a1_notation_or_error, pre-validating here
+        # would incorrectly reject a named range, which this parameter also legitimately
+        # accepts) handed straight to the API with no local validation, so every call
+        # below goes through _execute_or_error rather than execute_in_thread directly —
+        # a malformed value (or a nonexistent `sheet`) otherwise reaches the caller as a
+        # raw HttpError instead of the {"error": ...} shape every other validation
+        # failure in these tools returns (issue #757).
         if include_grid_data and not range:
             # Auto-detect the used range so we don't fetch formatting for the sheet's full
             # padded grid (often 1000x26 by default, regardless of actual content) — issue #235.
-            values_result = await execute_in_thread(
+            error, values_result = await _execute_or_error(
                 sheets_service.spreadsheets()
                 .values()
                 .get(spreadsheetId=spreadsheet_id, range=quoted)
                 .execute,
                 sheets_service,
             )
+            if error:
+                return error
             values = values_result.get("values", [])
             if values:
                 last_col_index = max(len(row) for row in values) - 1
@@ -133,12 +166,14 @@ def register(tool):
         full_range = f"{quoted}!{range}" if range else quoted
 
         if include_grid_data:
-            result = await execute_in_thread(
+            error, result = await _execute_or_error(
                 sheets_service.spreadsheets()
                 .get(spreadsheetId=spreadsheet_id, ranges=[full_range], includeGridData=True)
                 .execute,
                 sheets_service,
             )
+            if error:
+                return error
             # Cell count doesn't predict response size — a blank padded range costs almost
             # nothing, a densely formatted one can blow past a client's size limit even at a
             # modest cell count (issue #235). Check the real serialized size, not an estimate.
@@ -151,13 +186,15 @@ def register(tool):
                     "connection. Narrow the range, or ",
                 )
         else:
-            values_result = await execute_in_thread(
+            error, values_result = await _execute_or_error(
                 sheets_service.spreadsheets()
                 .values()
                 .get(spreadsheetId=spreadsheet_id, range=full_range)
                 .execute,
                 sheets_service,
             )
+            if error:
+                return error
             result = {
                 "spreadsheetId": spreadsheet_id,
                 "valueRanges": [{"range": full_range, "values": values_result.get("values", [])}],
@@ -180,7 +217,7 @@ def register(tool):
     @tool(annotations=ToolAnnotations(title="Get Sheet Formulas", readOnlyHint=True))
     async def get_sheet_formulas(
         spreadsheet_id: str, sheet: str, range: str | None = None, ctx: Context = None
-    ) -> list[list[Any]]:
+    ) -> list[list[Any]] | dict[str, Any]:
         """
         Get formulas from a specific sheet in a Google Spreadsheet.
 
@@ -190,20 +227,23 @@ def register(tool):
             range: Optional cell range in A1 notation (e.g., 'A1:C10'). If not provided, gets all formulas from the sheet.
 
         Returns:
-            A 2D array of the sheet formulas.
+            A 2D array of the sheet formulas, or {"error": ...} if the range is
+            rejected by the Sheets API (issue #757).
         """
         sheets_service = ctx.request_context.lifespan_context.sheets_service
 
         quoted = _quote_sheet_name(sheet)
         full_range = f"{quoted}!{range}" if range else quoted
 
-        result = await execute_in_thread(
+        error, result = await _execute_or_error(
             sheets_service.spreadsheets()
             .values()
             .get(spreadsheetId=spreadsheet_id, range=full_range, valueRenderOption="FORMULA")
             .execute,
             sheets_service,
         )
+        if error:
+            return error
 
         return result.get("values", [])
 
@@ -214,6 +254,10 @@ def register(tool):
         """
         Get data from multiple specific ranges in Google Spreadsheets.
 
+        Queries fetch concurrently rather than one at a time. If the caller supplied
+        a progressToken, a `notifications/progress` update is sent as each query
+        finishes (#355).
+
         Args:
             queries: A list of dictionaries, each specifying a query.
                      Each dictionary must have 'spreadsheet_id' and 'sheet' keys.
@@ -222,6 +266,9 @@ def register(tool):
                                {'spreadsheet_id': 'xyz', 'sheet': 'Data'}]
             local_path: Optional local filesystem path (file or directory) to write the
                 result to instead of returning it inline. Bypasses the response-size cap.
+                A path ending in '/' is a directory, created if missing. A file in place
+                of a parent directory, or at a path ending in '/', raises ValueError; an
+                existing file at a plain file path is replaced.
                 Same caveat as download_file/download_folder: this path is resolved on the
                 *server's* filesystem, not the caller's.
 
@@ -233,38 +280,80 @@ def register(tool):
             or pass local_path. If local_path is set, returns
             {local_path, query_count, bytes_written} instead.
         """
+        if local_path:
+            # Before any fetch, so a refused destination costs no API call (#796).
+            check_write(local_path)
         sheets_service = ctx.request_context.lifespan_context.sheets_service
 
+        total = len(queries)
+        completed = [0]
+
         async def _fetch_one(query: dict[str, str]) -> dict[str, Any]:
-            spreadsheet_id = query.get("spreadsheet_id")
-            sheet = query.get("sheet")
-            range_str = query.get("range")
-
-            if not all([spreadsheet_id, sheet]):
-                return {**query, "error": "Missing required keys (spreadsheet_id, sheet)"}
-
+            # The whole body (including the query.get() calls) runs inside this
+            # try/except — a malformed entry (e.g. not a dict) raises from those very
+            # first attribute accesses, before reaching the validation-failure branch
+            # below (QA review, PR #758, finding #1).
+            spreadsheet_id = None
+            sheet = None
+            had_error = False
             try:
-                quoted = _quote_sheet_name(str(sheet))
-                full_range = f"{quoted}!{range_str}" if range_str else quoted
-                result = await execute_in_thread(
-                    sheets_service.spreadsheets()
-                    .values()
-                    .get(spreadsheetId=spreadsheet_id, range=full_range)
-                    .execute,
-                    sheets_service,
-                )
-                return {**query, "data": result.get("values", [])}
-            except Exception as e:
-                return {**query, "error": str(e)}
+                spreadsheet_id = query.get("spreadsheet_id")
+                sheet = query.get("sheet")
+                range_str = query.get("range")
 
-        # return_exceptions=True: each _fetch_one already catches its own errors and
-        # returns a tagged dict, but this also lets any genuinely unexpected exception
-        # finish alongside the rest of the batch instead of orphaning in-flight tasks.
-        raw = await asyncio.gather(*(_fetch_one(q) for q in queries), return_exceptions=True)
-        results = [
-            r if not isinstance(r, BaseException) else {**q, "error": str(r)}
-            for q, r in zip(queries, raw, strict=True)
-        ]
+                if not all([spreadsheet_id, sheet]):
+                    had_error = True
+                    item_result = {
+                        **query,
+                        "error": "Missing required keys (spreadsheet_id, sheet)",
+                    }
+                else:
+                    quoted = _quote_sheet_name(str(sheet))
+                    full_range = f"{quoted}!{range_str}" if range_str else quoted
+                    api_result = await execute_in_thread(
+                        sheets_service.spreadsheets()
+                        .values()
+                        .get(spreadsheetId=spreadsheet_id, range=full_range)
+                        .execute,
+                        sheets_service,
+                    )
+                    item_result = {**query, "data": api_result.get("values", [])}
+            except Exception as e:
+                had_error = True
+                # `query` may not even be a dict (e.g. a malformed entry raised from
+                # the .get() calls above) — spreading it into the result would itself
+                # raise, so echo it as `entry` instead of trying to preserve its
+                # original key shape (QA review, PR #758, finding #1).
+                item_result = (
+                    {**query, "error": str(e)}
+                    if isinstance(query, dict)
+                    else {"entry": query, "error": str(e)}
+                )
+
+            # Reported here, inside the per-item coroutine, so updates stream in as
+            # each concurrent fetch finishes rather than arriving in one burst after
+            # asyncio.gather resolves — see #316/#319's original rationale, extended
+            # to this tool by #355. `had_error` (not `"error" in item_result`) drives
+            # the outcome label — a genuinely successful query whose own input dict
+            # happened to carry a stray "error" key (e.g. a resubmitted prior-failure
+            # entry) must not be misreported (QA review, PR #758, finding #4).
+            completed[0] += 1
+            outcome = "error" if had_error else "ok"
+            await report_progress_safe(
+                ctx,
+                completed[0],
+                total,
+                f"{spreadsheet_id}/{sheet}: {outcome}",
+                f"{spreadsheet_id}/{sheet}",
+            )
+            return item_result
+
+        def _fetch_fallback(q: dict[str, str], exc: BaseException) -> dict[str, Any]:
+            return (
+                {**q, "error": str(exc)} if isinstance(q, dict) else {"entry": q, "error": str(exc)}
+            )
+
+        results = await gather_with_fallback(queries, _fetch_one, _fetch_fallback)
 
         if local_path:
             return await write_capped_result_to_disk(
@@ -288,11 +377,18 @@ def register(tool):
         Get a summary of multiple Google Spreadsheets, including sheet names,
         headers, and the first few rows of data for each sheet.
 
+        Spreadsheets summarize concurrently rather than one at a time. If the caller
+        supplied a progressToken, a `notifications/progress` update is sent as each
+        summary finishes (#355).
+
         Args:
             spreadsheet_ids: A list of spreadsheet IDs to summarize.
             rows_to_fetch: The number of rows (including header) to fetch for the summary (default: 5).
             local_path: Optional local filesystem path (file or directory) to write the
                 result to instead of returning it inline. Bypasses the response-size cap.
+                A path ending in '/' is a directory, created if missing. A file in place
+                of a parent directory, or at a path ending in '/', raises ValueError; an
+                existing file at a plain file path is replaced.
                 Same caveat as download_file/download_folder: this path is resolved on the
                 *server's* filesystem, not the caller's.
 
@@ -306,11 +402,17 @@ def register(tool):
             call, lower rows_to_fetch, or pass local_path. If local_path is set, returns
             {local_path, spreadsheet_count, bytes_written} instead.
         """
+        if local_path:
+            # Before any fetch, so a refused destination costs no API call (#796).
+            check_write(local_path)
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
         drive_service = lc.drive_service
         data_cache = lc.sheet_data_cache
         structure_cache = lc.cache
+
+        total = len(spreadsheet_ids)
+        completed = [0]
 
         async def _summarize_one(spreadsheet_id: str) -> dict[str, Any]:
             summary_data = {
@@ -436,25 +538,31 @@ def register(tool):
             except Exception as e:
                 summary_data["error"] = f"Error fetching spreadsheet {spreadsheet_id}: {e}"
 
+            # Reported here, inside the per-item coroutine, so updates stream in as
+            # each concurrent summary finishes rather than arriving in one burst
+            # after asyncio.gather resolves — see #316/#319's original rationale,
+            # extended to this tool by #355. Checks every per-sheet error too, not
+            # just the whole-spreadsheet fetch error — a spreadsheet whose title/
+            # sheet-list fetch succeeds but where one sheet's data fetch fails must
+            # still report outcome="error" (QA review, PR #758, finding #2).
+            completed[0] += 1
+            had_sheet_error = any(s["error"] for s in summary_data["sheets"])
+            outcome = "error" if (summary_data["error"] or had_sheet_error) else "ok"
+            await report_progress_safe(
+                ctx, completed[0], total, f"{spreadsheet_id}: {outcome}", spreadsheet_id
+            )
+
             return summary_data
 
-        # return_exceptions=True: _summarize_one already catches its own errors, but this
-        # also lets any genuinely unexpected exception finish alongside the rest of the
-        # batch instead of orphaning in-flight tasks. gather() preserves input order.
-        raw = await asyncio.gather(
-            *(_summarize_one(sid) for sid in spreadsheet_ids), return_exceptions=True
-        )
-        summaries = [
-            r
-            if not isinstance(r, BaseException)
-            else {
+        def _summary_fallback(sid: str, exc: BaseException) -> dict[str, Any]:
+            return {
                 "spreadsheet_id": sid,
                 "title": None,
                 "sheets": [],
-                "error": f"Error fetching spreadsheet {sid}: {r}",
+                "error": f"Error fetching spreadsheet {sid}: {exc}",
             }
-            for sid, r in zip(spreadsheet_ids, raw, strict=True)
-        ]
+
+        summaries = await gather_with_fallback(spreadsheet_ids, _summarize_one, _summary_fallback)
 
         if local_path:
             return await write_capped_result_to_disk(
@@ -488,6 +596,9 @@ def register(tool):
             max_results: Maximum number of results to return (default 50)
             local_path: Optional local filesystem path (file or directory) to write the
                 result to instead of returning it inline. Bypasses the response-size cap.
+                A path ending in '/' is a directory, created if missing. A file in place
+                of a parent directory, or at a path ending in '/', raises ValueError; an
+                existing file at a plain file path is replaced.
                 Same caveat as download_file/download_folder: this path is resolved on the
                 *server's* filesystem, not the caller's.
 
@@ -500,6 +611,9 @@ def register(tool):
             is set, returns {local_path, spreadsheet_id, query, match_count, bytes_written}
             instead.
         """
+        if local_path:
+            # Before any fetch, so a refused destination costs no API call (#796).
+            check_write(local_path)
         lc = ctx.request_context.lifespan_context
         sheets_service = lc.sheets_service
         results = []
@@ -585,13 +699,16 @@ def register(tool):
         quoted = _quote_sheet_name(sheet)
         full_range = f"{quoted}!{range}" if range else quoted
 
-        return await execute_in_thread(
+        error, result = await _execute_or_error(
             lc.sheets_service.spreadsheets()
             .values()
             .clear(spreadsheetId=spreadsheet_id, range=full_range, body={})
             .execute,
             lc.sheets_service,
         )
+        if error:
+            return error
+        return result
 
     @tool(annotations=ToolAnnotations(title="Update Cells", destructiveHint=True))
     async def update_cells(
@@ -647,10 +764,28 @@ def register(tool):
 
         result: dict[str, Any] = {}
 
+        # Parsed once up front and reused by both branches below, rather than
+        # separately by each — the mixed-cells branch and the rich-text branch
+        # both key off the same `range` string, and rich_text_cells being
+        # truthy is exactly the condition under which either branch needs it
+        # (the plain-only fast path below never parses range locally at all,
+        # relying on the Sheets API's own range validation instead, caught by
+        # _execute_or_error around that branch's own call — issue #757). Note
+        # _parse_a1_notation_or_error only checks A1 *syntax* — it can't validate
+        # against the sheet's real grid bounds, so the two batchUpdate calls below
+        # (mixed-cells and rich-text) can still hit an out-of-bounds HttpError from
+        # the API itself and also go through _execute_or_error, same as every other
+        # raw Sheets API call in this file.
+        indices: dict[str, int] | None = None
+        if rich_text_cells:
+            error, indices = _parse_a1_notation_or_error(range)
+            if error:
+                return error
+
         if plain_cells and not rich_text_cells:
             # Plain-only: write the whole rectangle in one call, same as before
             # rich-text cells existed.
-            result["values_update"] = await execute_in_thread(
+            error, values_update = await _execute_or_error(
                 sheets_service.spreadsheets()
                 .values()
                 .update(
@@ -662,6 +797,9 @@ def register(tool):
                 .execute,
                 sheets_service,
             )
+            if error:
+                return error
+            result["values_update"] = values_update
             lc.sheet_data_cache.mark_dirty(spreadsheet_id)
         elif plain_cells:
             # Mixed call: write only the actual plain-cell positions, addressed
@@ -672,7 +810,13 @@ def register(tool):
             # restored and the rich-text cells' prior content was lost for good.
             # Per-cell targeting means the two calls never touch each other's
             # cells, so either one failing can't corrupt the other's data.
-            indices = _parse_a1_notation(range)
+            #
+            # A failure here is stored under "values_update" (as an {"error": ...}
+            # dict) rather than returned immediately, and the rich-text branch below
+            # still runs — the two calls are independent per the same rationale, so
+            # one failing shouldn't silently drop the chance for the other to still
+            # succeed, and neither result should be silently dropped either way
+            # (this tool's own documented return-shape contract).
             start_row = indices.get("startRowIndex", 0)
             start_col = indices.get("startColumnIndex", 0)
             plain_data = [
@@ -683,7 +827,7 @@ def register(tool):
                 }
                 for row_idx, col_idx, cell in plain_cells
             ]
-            result["values_update"] = await execute_in_thread(
+            error, values_update = await _execute_or_error(
                 sheets_service.spreadsheets()
                 .values()
                 .batchUpdate(
@@ -693,7 +837,11 @@ def register(tool):
                 .execute,
                 sheets_service,
             )
-            lc.sheet_data_cache.mark_dirty(spreadsheet_id)
+            if error:
+                result["values_update"] = error
+            else:
+                result["values_update"] = values_update
+                lc.sheet_data_cache.mark_dirty(spreadsheet_id)
 
         if rich_text_cells:
             sheet_id = await _get_sheet_id(
@@ -702,7 +850,6 @@ def register(tool):
             if sheet_id is None:
                 return {"error": f"Sheet '{sheet}' not found"}
 
-            indices = _parse_a1_notation(range)
             start_row = indices.get("startRowIndex", 0)
             start_col = indices.get("startColumnIndex", 0)
 
@@ -724,13 +871,17 @@ def register(tool):
                 for row_idx, col_idx, runs in rich_text_cells
             ]
 
-            result["rich_text_update"] = await execute_in_thread(
+            error, rich_text_update = await _execute_or_error(
                 sheets_service.spreadsheets()
                 .batchUpdate(spreadsheetId=spreadsheet_id, body={"requests": requests})
                 .execute,
                 sheets_service,
             )
-            lc.sheet_data_cache.mark_dirty(spreadsheet_id)
+            if error:
+                result["rich_text_update"] = error
+            else:
+                result["rich_text_update"] = rich_text_update
+                lc.sheet_data_cache.mark_dirty(spreadsheet_id)
 
         if len(result) == 1:
             return next(iter(result.values()))
@@ -768,7 +919,10 @@ def register(tool):
             for range_str, values in ranges.items()
         ]
 
-        result = await execute_in_thread(
+        # `ranges`' keys are raw caller-supplied range strings handed straight to the
+        # API with no local validation — see the module-level _execute_or_error
+        # docstring (issue #757).
+        error, result = await _execute_or_error(
             sheets_service.spreadsheets()
             .values()
             .batchUpdate(
@@ -778,6 +932,8 @@ def register(tool):
             .execute,
             sheets_service,
         )
+        if error:
+            return error
 
         lc.sheet_data_cache.mark_dirty(spreadsheet_id)
 

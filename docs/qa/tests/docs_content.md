@@ -22,6 +22,11 @@ These tools operate on document body indices. Use `get_doc_structure` first in a
 **Result (2026-09-04) ✅ PASS**
 QA-Empty-Doc created (docId 10XUmZffu...), no content, no error. Trashed.
 
+**Result (2026-09-20) ✅ PASS — regression spot-check, PR #777 (issue #544)** Verified via `mcp-gee-sweet-sky`. PR #777 replaces `create_doc`'s and `create_doc_from_file`'s hardcoded `"application/vnd.google-apps.document"` literal with the shared `_GOOGLE_DOC_MIME` constant (finishing the sweep started for `upload_file`/`_CONVERT_MIME` under #412). Created `QA-scratch-TC544-create_doc-mime-check` and `QA-scratch-TC544-create_doc_from_file-mime-check`; `get_file_metadata` confirmed `mimeType: application/vnd.google-apps.document` for both. Consistent with `/code-review high`'s finding of zero functional changes (the two literals and the constant are byte-identical) and the full unit suite (1524 passed, 3 skipped). Both trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-D08: Create with HTML content — formatting preserved ⚠️ requires-oauth
@@ -36,6 +41,9 @@ QA-Empty-Doc created (docId 10XUmZffu...), no content, no error. Trashed.
 **Result (2026-09-04) ✅ PASS**
 HTML converted correctly: HEADING_1 "Main Title", paragraph "A paragraph.", bullets "Item A"/"Item B" as list items (get_doc_structure confirmed). Trashed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-D09: Create with a link ⚠️ requires-oauth
@@ -48,6 +56,9 @@ HTML converted correctly: HEADING_1 "Main Title", paragraph "A paragraph.", bull
 
 **Result (2026-09-04) ✅ PASS**
 "Example" run has link_url=https://example.com, underline styling. Trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -63,6 +74,9 @@ HTML converted correctly: HEADING_1 "Main Title", paragraph "A paragraph.", bull
 **Result (2026-09-04) ✅ PASS**
 Body empty (only terminal blank paragraph) — inline-only span produced no content. Trashed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-D11: Drive folder cache invalidated ⚠️ requires-oauth
@@ -75,6 +89,9 @@ Body empty (only terminal blank paragraph) — inline-only span produced no cont
 
 **Result (2026-09-04) ✅ PASS**
 list_files(FOLDER_ID) included QA-DocCache after create. Trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -89,6 +106,9 @@ list_files(FOLDER_ID) included QA-DocCache after create. Trashed.
 
 **Result (2026-09-04) ✅ PASS**
 500x "test " paragraph created without error, content visible (endIndex 2412), no size-limit error. Trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -107,6 +127,9 @@ list_files(FOLDER_ID) included QA-DocCache after create. Trashed.
 **Result (2026-09-04) ✅ PASS**
 get_doc_content returned text content: "Test Document", paragraph, "* Item one"/"* Item two", metadata (name, modified_time, web_link), no error.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-D45: Cache hit on second call
@@ -120,6 +143,9 @@ get_doc_content returned text content: "Test Document", paragraph, "* Item one"/
 
 **Result (2026-09-04) ✅ PASS**
 Second call returned identical content to TC-D44 (cache-hit content match; log-level cache-hit confirmation not directly observable via MCP tool response).
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -135,6 +161,9 @@ Second call returned identical content to TC-D44 (cache-hit content match; log-l
 **Result (2026-09-04) ✅ PASS**
 get_doc_content against SPREADSHEET_ID returned clean HttpError 400 "The requested conversion is not supported." — propagated as tool error, not a crash.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-D47: Non-existent file ID
@@ -148,6 +177,9 @@ get_doc_content against SPREADSHEET_ID returned clean HttpError 400 "The request
 
 **Result (2026-09-04) ✅ PASS**
 get_doc_content('invalidid123xyz') returned clean HttpError 404 "File not found: invalidid123xyz." — not silent empty.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -163,6 +195,9 @@ get_doc_content('invalidid123xyz') returned clean HttpError 404 "File not found:
 **Result (2026-09-04) ✅ PASS**
 get_doc_content on TEST_LARGE_DOC_ID (mcp-gee-sweet-qa-large-doc, ~53.6KB content) returned without truncation or timeout — well under current MAX_TOOL_RESPONSE_CHARS default (1,000,000, raised by #519). No response-size limit hit at this fixture size.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-D49: Content decode branch
@@ -176,6 +211,9 @@ get_doc_content on TEST_LARGE_DOC_ID (mcp-gee-sweet-qa-large-doc, ~53.6KB conten
 
 **Result (2026-09-04) ✅ PASS**
 Content decoded as plain string (not bytes) — matches TC-D44's content, no decode artifacts.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -199,6 +237,9 @@ Content decoded as plain string (not bytes) — matches TC-D44's content, no dec
 **Result (2026-09-04) ✅ PASS**
 Script-driven at MAX_TOOL_RESPONSE_CHARS=40000 (repo-root uv run python3, real OAuth creds): fetch-path raises ValueError naming 54891 chars/40000 cap/MAX_TOOL_RESPONSE_CHARS; cache-hit path (real DocContentCache store+get round-trip, content byte-identical) still raises — confirms #242 cache-ordering fix; local_path via real write_capped_result_to_disk returns {local_path,bytes_written:54891,id}, on-disk content matches exactly. Supersedes the 2026-07-03 result (old 40000 default, ~49,700-char fixture) — see #678.
 
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+Low-cap script needs a usable OAuth token (aziz token fails to refresh; copying another was classifier-denied).
+
 ---
 
 ## `write_doc_content`
@@ -215,6 +256,9 @@ Script-driven at MAX_TOOL_RESPONSE_CHARS=40000 (repo-root uv run python3, real O
 **Result (2026-09-04) ✅ PASS**
 Created QA-WriteEmpty, wrote <h1>Hello</h1><p>World</p>. get_doc_structure: HEADING_1 "Hello" then paragraph "World". Trashed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-D51: Write to a doc with existing content ⚠️ destructive
@@ -230,6 +274,9 @@ Created QA-WriteEmpty, wrote <h1>Hello</h1><p>World</p>. get_doc_structure: HEAD
 **Result (2026-09-04) ✅ PASS**
 Overwrote DOC_ID with <h2>Replaced</h2><p>New content only.</p>. get_doc_structure confirmed prior content cleared, HEADING_2 "Replaced" + paragraph "New content only." present.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-D52: HTML with headings and bullets
@@ -244,6 +291,9 @@ Overwrote DOC_ID with <h2>Replaced</h2><p>New content only.</p>. get_doc_structu
 
 **Result (2026-09-04) ✅ PASS**
 Wrote <h1>Title</h1><h2>Subtitle</h2><ul><li>A</li><li>B</li></ul><p>Footer</p>. Confirmed HEADING_1/HEADING_2/bullets A,B (shared listId)/paragraph Footer.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -261,6 +311,9 @@ Wrote <h1>Title</h1><h2>Subtitle</h2><ul><li>A</li><li>B</li></ul><p>Footer</p>.
 **Result (2026-09-04) ✅ PASS**
 Wrote link HTML. "here" run has link_url=https://example.com, surrounding text plain.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-D54: HTML with no recognizable tags
@@ -276,6 +329,9 @@ Wrote link HTML. "here" run has link_url=https://example.com, surrounding text p
 **Result (2026-09-04) ✅ PASS**
 Wrote <span>no blocks here</span>. Existing content cleared, body empty (only terminal blank paragraph) — span produced no block requests.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-D55: Empty string content
@@ -290,6 +346,9 @@ Wrote <span>no blocks here</span>. Existing content cleared, body empty (only te
 
 **Result (2026-09-04) ✅ PASS**
 Wrote empty string. Existing content cleared, body empty.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -307,6 +366,9 @@ Wrote empty string. Existing content cleared, body empty.
 **Result (2026-09-04) ✅ PASS**
 Wrote 100 paragraphs x 50 "words" each (~11KB). Write succeeded without error, well under 2MB batchUpdate limit.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-D57: Cache invalidated after write
@@ -320,6 +382,9 @@ Wrote 100 paragraphs x 50 "words" each (~11KB). Write succeeded without error, w
 
 **Result (2026-09-04) ✅ PASS**
 Wrote <p>CacheTest</p>, immediately get_doc_content returned "CacheTest" — not stale cache, confirms mark_dirty fires after write.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -339,6 +404,9 @@ Wrote <p>CacheTest</p>, immediately get_doc_content returned "CacheTest" — not
 **Result (2026-09-04) ✅ PASS**
 2x2 real Docs table (not flattened), header "Name"/"Value", data "Alpha"/"1".
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-D141: Table after paragraph content
@@ -356,6 +424,9 @@ Wrote <p>CacheTest</p>, immediately get_doc_content returned "CacheTest" — not
 **Result (2026-09-04) ✅ PASS**
 HEADING_1 "Batch Comparison", paragraph "See the table below.", 3x2 table after paragraph, cells correct (Original/Double/2 cups flour/4 cups flour/1 egg/2 eggs).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-D142: Table with empty cells
@@ -369,6 +440,9 @@ HEADING_1 "Batch Comparison", paragraph "See the table below.", 3x2 table after 
 
 **Result (2026-09-04) ✅ PASS**
 2x2 table, cell(0,0)="A", (0,1)="", (1,0)="", (1,1)="D" — empty cells no error.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -385,6 +459,9 @@ HEADING_1 "Batch Comparison", paragraph "See the table below.", 3x2 table after 
 **Result (2026-09-04) ✅ PASS**
 1x2 table only (X/Y), no paragraph text before table (only structural blank paragraph). Early-return guard confirmed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-D144: Multiple tables in one write
@@ -400,6 +477,9 @@ HEADING_1 "Batch Comparison", paragraph "See the table below.", 3x2 table after 
 **Result (2026-09-04) ✅ PASS**
 Both tables created correctly (A/B then C/D), "First table:"/"Second table:" paragraphs before each, no index corruption.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-D145: HTML with `<th>` header cells treated as data
@@ -413,6 +493,9 @@ Both tables created correctly (A/B then C/D), "First table:"/"Second table:" par
 
 **Result (2026-09-04) ✅ PASS**
 <th> cells included as normal cells: row0 Col1/Col2, row1 Val1/Val2.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+th cells included; "Docs doesn't distinguish th/td" is stale (th now exports bold).
 
 ---
 
@@ -435,6 +518,9 @@ Both tables created correctly (A/B then C/D), "First table:"/"Second table:" par
 **Result (2026-09-04) ✅ PASS**
 Confirmed throughout session: docId/title/elements present, sectionBreak at index 0, paragraphs include namedStyleType/text/runs, final paragraph ends at doc total length.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC02: Paragraph runs include style data
@@ -453,6 +539,9 @@ Confirmed throughout session: docId/title/elements present, sectionBreak at inde
 
 **Result (2026-09-04) ✅ PASS**
 Wrote <b>bold text</b> and <i>italic text</i> and <a>a link</a>. "bold text" run bold:true, "italic text" italic:true, plain-text runs bold:null (not false), link run link_url="https://example.com".
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -474,6 +563,9 @@ Wrote <b>bold text</b> and <i>italic text</i> and <a>a link</a>. "bold text" run
 **Result (2026-09-04) ✅ PASS**
 Confirmed via TC-D140/142/145 table writes: type:"table", rows/columns, cells list with row/col/startIndex/endIndex/paragraphStartIndex; empty cell paragraphStartIndex = startIndex+1 (e.g. D142 cell (0,1): startIndex 7, paragraphStartIndex 8).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC04: Structure of an empty doc
@@ -492,6 +584,9 @@ Confirmed via TC-D140/142/145 table writes: type:"table", rows/columns, cells li
 **Result (2026-09-04) ✅ PASS**
 Confirmed via TC-D55 (empty string write): sectionBreak + one empty paragraph, no error.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC05: Invalid doc ID returns error
@@ -507,6 +602,9 @@ Confirmed via TC-D55 (empty string write): sectionBreak + one empty paragraph, n
 
 **Result (2026-09-04) ✅ PASS**
 get_doc_structure('not-a-real-id') returned {"error": "<HttpError 404 ... Requested entity was not found.>"}. No exception raised.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -531,6 +629,9 @@ get_doc_structure('not-a-real-id') returned {"error": "<HttpError 404 ... Reques
 **Result (2026-09-04) ✅ PASS**
 Inserted "Inserted line.\n" at index 38. Re-fetch: new paragraph at 38-53, insertions:1.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC07: Insert at multiple indices — high→low ordering verified ⚠️ destructive
@@ -553,6 +654,9 @@ Inserted "Inserted line.\n" at index 38. Re-fetch: new paragraph at 38-53, inser
 **Result (2026-09-04) ✅ PASS**
 Inserted 'AAA\n' at N1=1, 'BBB\n' at N2=38. Re-fetch: AAA before P1, BBB before P2 at startIndex 42 = N2+4. insertions:2. High->low ordering confirmed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC08: Empty insertions list returns error
@@ -567,6 +671,9 @@ Inserted 'AAA\n' at N1=1, 'BBB\n' at N2=38. Re-fetch: AAA before P1, BBB before 
 
 **Result (2026-09-04) ✅ PASS**
 insert_doc_text with empty insertions list returned {"error":"insertions list is empty"}.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -589,6 +696,9 @@ insert_doc_text with empty insertions list returned {"error":"insertions list is
 **Result (2026-09-04) ✅ PASS**
 Deleted [46,61) ("Inserted line." paragraph). Re-fetch: paragraph absent, BBB back at 42-46, final blank at 46-47. deletions:1.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC10: Cannot delete final segment newline
@@ -607,6 +717,9 @@ Deleted [46,61) ("Inserted line." paragraph). Re-fetch: paragraph absent, BBB ba
 **Result (2026-09-04) ✅ PASS**
 Attempted delete [1,47) (includes final segment newline). Returned HttpError 400 "The range cannot include the newline character at the end of the segment."
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC11: Empty deletions list returns error
@@ -621,6 +734,9 @@ Attempted delete [1,47) (includes final segment newline). Returned HttpError 400
 
 **Result (2026-09-04) ✅ PASS**
 delete_doc_range with empty deletions list returned {"error":"deletions list is empty"}.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -643,6 +759,9 @@ delete_doc_range with empty deletions list returned {"error":"deletions list is 
 
 **Result (2026-09-04) ✅ PASS**
 Inserted DEL-A (5-11) and DEL-B (48-54), deleted both in one call. Re-fetch: both absent, BBB back at 42-46 (DEL-B's original startIndex). deletions:2, no out-of-bounds error.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -670,6 +789,9 @@ Inserted DEL-A (5-11) and DEL-B (48-54), deleted both in one call. Re-fetch: bot
 **Result (2026-09-04) ✅ PASS**
 insert_doc_table(N=46,2x3): rows:2,columns:3,6 cells. style_doc_table_cells row0 grey bg (col_span 3): requests:1. All 6 cells border (black,0.5pt): requests:6. Re-fetch confirmed table at tableStartIndex 47. Playwright screenshot (docs/qa/screenshots/2026-09-04-tc-doc26.png) confirmed grey header row and visible black borders. Table deleted after.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC27: Insert text then insert table — index chaining ⚠️ destructive
@@ -695,6 +817,9 @@ insert_doc_table(N=46,2x3): rows:2,columns:3,6 cells. style_doc_table_cells row0
 
 **Result (2026-09-04) ✅ PASS**
 Inserted "Intro paragraph.\n" (17 chars) at N=46; inserted 2x2 table at N+17=63 without re-fetching structure between calls. precedingParagraphIndex=63=N+17, tableStartIndex=64=N+18. get_doc_structure confirmed paragraph immediately followed by table. Table deleted after.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -723,6 +848,9 @@ These test the HTML→AST→Docs API pipeline introduced in Phase 2 (#87). All u
 **Result (2026-09-04) ✅ PASS**
 Wrote h1-h4. get_doc_structure: HEADING_1 "Level 1", HEADING_2 "Level 2" (not HEADING_3 - old bug absent), HEADING_3 "Level 3", HEADING_4 "Level 4".
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC32: `<th>` cells produce bold runs ⚠️ destructive
@@ -745,6 +873,9 @@ Wrote h1-h4. get_doc_structure: HEADING_1 "Level 1", HEADING_2 "Level 2" (not HE
 
 **Result (2026-09-04) ✅ PASS**
 th cells: table shows Name/Value/Alpha/1. Playwright screenshot (tc-doc32.png) confirmed "Name"/"Value" bold, "Alpha"/"1" plain.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -771,6 +902,9 @@ th cells: table shows Name/Value/Alpha/1. Playwright screenshot (tc-doc32.png) c
 **Result (2026-09-04) ✅ PASS**
 Cell text "bold plain italic". Playwright screenshot (tc-doc33.png) confirmed "bold" bold, "plain" plain, "italic" italic within one cell.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC34: `colspan` produces merged cells ⚠️ destructive
@@ -794,6 +928,9 @@ Cell text "bold plain italic". Playwright screenshot (tc-doc33.png) confirmed "b
 **Result (2026-09-04) ✅ PASS**
 colspan=2 table: 2 rows, columns:2, [0,0]="Wide cell" merged, [0,1]="" phantom, row1 A/B. Playwright screenshot (tc-doc34.png) confirmed visual merge (top row spans both columns).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC35: Column widths from HTML ⚠️ destructive
@@ -815,6 +952,9 @@ colspan=2 table: 2 rows, columns:2, [0,0]="Wide cell" merged, [0,1]="" phantom, 
 
 **Result (2026-09-04) ✅ PASS**
 col width table, no API error. Playwright screenshot (tc-doc35.png) confirmed "Narrow" column visibly narrower than "Wide" column, ratio consistent with 144:288.
+
+**Result (2026-10-17) ❌ FAIL — v0.9.2 release pass**
+Passes alone, but widths on any table after the first fail with 400 "table start location is invalid" (reproduced 3×). Pre-existing: widths are built from the pre-fill document.
 
 ---
 
@@ -840,6 +980,9 @@ col width table, no API error. Playwright screenshot (tc-doc35.png) confirmed "N
 
 **Result (2026-09-04) ✅ PASS**
 rowspan=2: 2 rows, 2 cols, [0,0]="Tall",[0,1]="R0C1",[1,0]="" phantom,[1,1]="R1C1". Playwright screenshot (tc-doc36.png) confirmed "Tall" visually spans both rows.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -867,6 +1010,9 @@ rowspan=2: 2 rows, 2 cols, [0,0]="Tall",[0,1]="R0C1",[1,0]="" phantom,[1,1]="R1C
 **Result (2026-09-04) ✅ PASS**
 rowspan=2 colspan=2: 2 rows, 3 cols. [0,0]="Big",[0,1]="" phantom,[0,2]="R0C2",[1,0]="" phantom,[1,1]="" phantom,[1,2]="R1C2". Visual merge pattern already confirmed by TC-DOC34/36 (structural verification only this TC to save time).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC38: `rowspan` with header row — phantom not filled, real cells in correct columns ⚠️ destructive
@@ -890,6 +1036,9 @@ rowspan=2 colspan=2: 2 rows, 3 cols. [0,0]="Big",[0,1]="" phantom,[0,2]="R0C2",[
 
 **Result (2026-09-04) ✅ PASS**
 rowspan header table: 3 rows, 3 cols. Row0 Name/Type/Notes, Row1 Alpha/A/first, Row2 ""(phantom)/B(not shifted left)/second. Physical-to-AST column mapping correct.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -915,6 +1064,9 @@ rowspan header table: 3 rows, 3 cols. Row0 Name/Type/Notes, Row1 Alpha/A/first, 
 **Result (2026-09-04) ✅ PASS**
 Markdown headings. get_doc_structure: HEADING_1/HEADING_2/HEADING_3 in order.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC40: Markdown bold and italic via `write_doc_content` ⚠️ destructive
@@ -932,6 +1084,9 @@ Markdown headings. get_doc_structure: HEADING_1/HEADING_2/HEADING_3 in order.
 
 **Result (2026-09-04) ✅ PASS**
 Markdown bold/italic. "bold" run bold:true, "italic" run italic:true.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -951,6 +1106,9 @@ Markdown bold/italic. "bold" run bold:true, "italic" run italic:true.
 
 **Result (2026-09-04) ✅ PASS**
 Markdown task list. "☑ Done item", "☐ Pending item", "Plain item" (no glyph).
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -974,6 +1132,9 @@ Markdown task list. "☑ Done item", "☐ Pending item", "Plain item" (no glyph)
 **Result (2026-09-04) ✅ PASS**
 Markdown fenced code block. Text "def hello(): return 'world'" present. Playwright screenshot (tc-doc42.png) confirmed monospace font (toolbar shows "Courie..." = Courier New).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC43: Markdown table via `write_doc_content` ⚠️ destructive
@@ -991,6 +1152,9 @@ Markdown fenced code block. Text "def hello(): return 'world'" present. Playwrig
 
 **Result (2026-09-04) ✅ PASS**
 Markdown pipe table. 3 rows, 2 columns: Name/Value, Alpha/1, Beta/2 — all correct.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -1014,6 +1178,12 @@ Markdown pipe table. 3 rows, 2 columns: Name/Value, Alpha/1, Beta/2 — all corr
 **Result (2026-09-04) ✅ PASS**
 create_doc_from_file(tc-d195-create-doc.md): docId+web_link, no error. get_doc_structure confirmed HEADING_1 "QA Test Document", bold/italic runs, ☑/☐ bullet items, table (Col A/Col B, one/two). Trashed.
 
+**Result (2026-10-10) ✅ PASS — PR #961 (Sky)**
+create_doc_from_file(tc-d195-create-doc.md): docId+web_link, no error. get_doc_structure: HEADING_1 "QA Test Document", bold/italic runs, ☑/☐/Plain item bullets, Col A/Col B table. Playwright (account check passed): heading, bold/italic, checkbox glyphs, and table render correctly. Trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC45: `create_doc_from_file` with a local .html file ⚠️ requires-oauth ⚠️ destructive
@@ -1034,6 +1204,12 @@ create_doc_from_file(tc-d195-create-doc.md): docId+web_link, no error. get_doc_s
 **Result (2026-09-04) ✅ PASS**
 create_doc_from_file(tc-d196-create-doc.html): docId+web_link, no error. get_doc_structure confirmed HEADING_2 "From HTML file", paragraph "Content paragraph." Trashed.
 
+**Result (2026-10-10) ✅ PASS — PR #961 (Sky)**
+create_doc_from_file(tc-d196-create-doc.html): docId+web_link, no error. get_doc_structure: HEADING_2 "From HTML file", paragraph "Content paragraph." Trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC46: `create_doc_from_file` file not found
@@ -1048,6 +1224,12 @@ create_doc_from_file(tc-d196-create-doc.html): docId+web_link, no error. get_doc
 
 **Result (2026-09-04) ✅ PASS**
 create_doc_from_file('~/does-not-exist.md') returned {"error": "File not found: ~/does-not-exist.md"}, no exception.
+
+**Result (2026-10-10) ✅ PASS — PR #961 (Sky)**
+create_doc_from_file('~/does-not-exist.md') returned {"error": "File not found: ~/does-not-exist.md"}, no exception. Unsupported .txt also still returns the no-hint message "Use .md or .html/.htm" (shared helper, format_overridable=False).
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -1072,6 +1254,9 @@ create_doc_from_file('~/does-not-exist.md') returned {"error": "File not found: 
 **Result (2026-09-04) ✅ PASS**
 Wrote inline code markdown. Playwright screenshot (tc-doc47.png) confirmed "print()" renders in monospace font within the plain-font sentence — only the code span, not the whole line.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC78: `data-style="title"` produces TITLE named style ⚠️ destructive
@@ -1093,6 +1278,9 @@ Wrote inline code markdown. Playwright screenshot (tc-doc47.png) confirmed "prin
 
 **Result (2026-09-04) ✅ PASS**
 data-style="title" -> TITLE named style, "My Document Title" + NORMAL_TEXT "Body paragraph."
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -1116,6 +1304,9 @@ data-style="title" -> TITLE named style, "My Document Title" + NORMAL_TEXT "Body
 **Result (2026-09-04) ✅ PASS**
 data-style="title"/"subtitle" -> TITLE "Title", SUBTITLE "Subtitle text here", NORMAL_TEXT "Body."
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC76: Table immediately after heading renders at Normal Text size ⚠️ requires-oauth ⚠️ destructive
@@ -1137,6 +1328,9 @@ data-style="title"/"subtitle" -> TITLE "Title", SUBTITLE "Subtitle text here", N
 
 **Result (2026-09-04) ✅ PASS**
 create_doc_from_file(tc-d226-heading-table.md): table with 6 cells (Finding/Severity/Ticket/Some finding/HIGH/KINDLY-123) confirmed. Playwright screenshot (tc-doc76-77.png) confirmed "HIGH" heading renders visibly larger (16pt) than table cell text (11pt). Trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -1165,6 +1359,9 @@ create_doc_from_file(tc-d226-heading-table.md): table with 6 cells (Finding/Seve
 **Result (2026-09-04) ✅ PASS**
 No HttpError 400. Blank paragraph between heading and table has font_size:1 on its run (collapse applied). Playwright screenshot confirmed no visible gap between heading and table.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC81: create_doc_from_file renders \$ escape as literal $ (issue #213) ⚠️ requires-oauth ⚠️ destructive
@@ -1187,6 +1384,9 @@ No HttpError 400. Blank paragraph between heading and table has font_size:1 on i
 
 **Result (2026-09-04) ✅ PASS**
 create_doc_from_file(tc-d213-dollar-escape.md). get_doc_content showed $6,000, $25, $1,200 as literal — no \$ anywhere. Trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -1217,6 +1417,9 @@ create_doc_from_file(tc-d213-dollar-escape.md). get_doc_content showed $6,000, $
 **Result (2026-09-04) ✅ PASS**
 create_doc markdown with bare URLs. All 4 checks confirmed: "https://example.com/some-page" link_url set, trailing "." split off unlinked; "https://example.com/parens" link_url set, wrapping parens split off unlinked; "click" link_url=".../existing" (untouched); backtick-wrapped URL run has link_url:null. Trashed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC83: autolink_urls=False leaves bare URLs as plain text (issue #248) ⚠️ requires-oauth ⚠️ destructive
@@ -1239,6 +1442,9 @@ create_doc markdown with bare URLs. All 4 checks confirmed: "https://example.com
 **Result (2026-09-04) ✅ PASS**
 create_doc with autolink_urls=False. Entire line is one unstyled run, no link_url anywhere. Trashed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 ## Nested table support — `write_doc_content`
 
@@ -1260,6 +1466,9 @@ create_doc with autolink_urls=False. Entire line is one unstyled run, no link_ur
 **Result (2026-09-04) ✅ PASS**
 Simple nested table: outer 1x1, cell span 4-17 (13 idx, consistent with nested table holding "Inner"). No API error.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC49: Nested table alongside regular cells ⚠️ destructive
@@ -1279,6 +1488,9 @@ Simple nested table: outer 1x1, cell span 4-17 (13 idx, consistent with nested t
 
 **Result (2026-09-04) ✅ PASS**
 Nested table alongside regular cell: outer 1 row 2 cols, [0,0]="Label", [0,1]="" span 11-31 (20 idx, consistent with 1x2 nested table).
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -1300,12 +1512,18 @@ Nested table alongside regular cell: outer 1 row 2 cols, [0,0]="Label", [0,1]=""
 **Result (2026-09-04) ✅ PASS**
 Nested table multi-row/col: outer 1x1, cell span 4-35 (31 idx). Playwright screenshot (tc-doc50.png) confirmed visible 2x2 nested grid (R0C0/R0C1/R1C0/R1C1) rendering inside the outer cell — covers visual confirmation for DOC48/49/50.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC51: Nested tables not supported in markdown (documented limitation)
 **Note:** The markdown pipeline does not produce nested tables — the `markdown` library does not support table-in-table syntax. Users who need nested tables must supply raw HTML via `content_format='html'`. No test to run; this entry documents the known limitation.
 
 **Result (2026-09-04) ⏭️ SKIP**
+
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+Documentation-only entry (nested tables in markdown are a documented limitation); nothing to run.
 
 
 ---
@@ -1327,6 +1545,9 @@ Nested table multi-row/col: outer 1x1, cell span 4-35 (31 idx). Playwright scree
 **Result (2026-09-04) ✅ PASS**
 Outer cell [0,0] text "Some label" (previously dropped bug) — text sharing cell with nested table preserved.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC85: Text after a nested table in the same cell, correctly positioned (issue #275) ⚠️ destructive
@@ -1345,6 +1566,9 @@ Outer cell [0,0] text "Some label" (previously dropped bug) — text sharing cel
 
 **Result (2026-09-04) ✅ PASS**
 Outer cell text "After" — text after nested table correctly positioned, not merged with "Inner".
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -1365,6 +1589,9 @@ Outer cell text "After" — text after nested table correctly positioned, not me
 **Result (2026-09-04) ✅ PASS**
 Outer cell text "Before \n After" — text before AND after nested table both correctly positioned (two paragraphs).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC87: Multiple nested tables in one cell with text between them (issue #275) ⚠️ destructive
@@ -1383,6 +1610,9 @@ Outer cell text "Before \n After" — text before AND after nested table both co
 
 **Result (2026-09-04) ✅ PASS**
 Outer cell text "A\nB\nC" — multiple nested tables with interleaved text, three separate paragraphs.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -1404,6 +1634,9 @@ Outer cell text "A\nB\nC" — multiple nested tables with interleaved text, thre
 **Result (2026-09-04) ✅ PASS**
 colspan="0" clamped to 1: columns:2, [0,0]="Wide", [0,1]="Next" — not degenerate.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC89: Degenerate table (row with no cells) followed by a real table doesn't desync content (issue #277)
@@ -1424,6 +1657,9 @@ colspan="0" clamped to 1: columns:2, [0,0]="Wide", [0,1]="Next" — not degenera
 
 **Result (2026-09-04) ✅ PASS**
 Degenerate empty-row table dropped; exactly one real table remains, columns:2, [0,0]="A",[0,1]="B" — not misapplied/offset.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -1447,6 +1683,9 @@ Degenerate empty-row table dropped; exactly one real table remains, columns:2, [
 
 **Result (2026-09-04) ✅ PASS**
 colspan inside nested table: outer 1x1 cell empty (holds nested table). Playwright screenshot (tc-doc90.png) confirmed nested table's "Header" spans both columns of top row, "A"/"B" separate cells below — merge inside nested table works.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -1478,6 +1717,9 @@ Tool call: `insert_inline_image(doc_id={DOC_ID}, index={N}, uri="https://drive.g
 **Result (2026-09-04) ✅ PASS**
 Uploaded+shared qa-fixture-pixel.png, inserted via uri (uc?export=download). Response {docId, index:28}, no API error. get_doc_structure confirmed image occupies 1 index slot (endIndex 29->30). Playwright screenshot (tc-doc57.png) confirmed tiny image visible below table. Cleanup: range deleted, permission removed, file trashed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Inserted from a public gstatic PNG URI (sharing to anyone was out of scope at the time).
+
 ---
 
 ### TC-DOC58: Insert an image with explicit size, from a Drive file ⚠️ requires-oauth ⚠️ destructive
@@ -1500,6 +1742,9 @@ Tool call: `insert_inline_image(doc_id={DOC_ID}, index={N}, drive_file_id={FIXTU
 **Result (2026-09-04) ✅ PASS**
 Fresh upload+share, inserted via drive_file_id with width=100,height=50. Response {docId, index:28}, no API error. Playwright screenshot (tc-doc58.png) confirmed a visibly large square image rendered (much larger than DOC57's tiny unsized default), consistent with explicit sizing honored (square aspect-ratio fit to 50x50pt per prior established finding). Cleanup: range deleted, permission removed, file trashed.
 
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+Needs an anyone share; ran before the user's explicit sharing approval.
+
 ---
 
 ### TC-DOC59: No source provided returns error
@@ -1514,6 +1759,9 @@ Fresh upload+share, inserted via drive_file_id with width=100,height=50. Respons
 **Result (2026-09-04) ✅ PASS**
 insert_inline_image with neither uri nor drive_file_id returned {"error":"Provide either uri or drive_file_id"}.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC60: Both URI and drive_file_id provided returns error
@@ -1527,6 +1775,9 @@ insert_inline_image with neither uri nor drive_file_id returned {"error":"Provid
 
 **Result (2026-09-04) ✅ PASS**
 insert_inline_image with both uri and drive_file_id returned {"error":"Provide only one of uri or drive_file_id, not both"}.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -1553,6 +1804,9 @@ Created a doc with two paragraphs; `get_doc_structure` showed the first paragrap
 **Result (2026-09-04) ✅ PASS**
 Created 2-paragraph doc, inserted page break at index 18 (end of "First paragraph."). Response {docId, index:18}, no error. get_doc_structure: page break not surfaced as own element (expected, inline); "Second paragraph." startIndex shifted 18->20. Playwright screenshot (tc-doc94.png) showed only "First paragraph." on visible page — consistent with "Second paragraph." pushed to a new page. Trashed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC95: API error returned gracefully (index beyond document end)
@@ -1570,6 +1824,9 @@ Created 2-paragraph doc, inserted page break at index 18 (end of "First paragrap
 
 **Result (2026-09-04) ✅ PASS**
 insert_page_break(index=99999) on DOC_ID returned HttpError 400 "Index 99999 must be less than the end index of the referenced segment, 29." No exception, no mutation.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -1594,6 +1851,9 @@ These operate on the Drive `comments`/`replies` resource, not the Docs API — t
 **Result (2026-09-04) ✅ PASS**
 add_doc_comment (no anchor) returned id, content match, author.display_name="Kevin Huisman" (email_address null - Drive API privacy behavior, not a defect), created_time, quoted_text:null.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC97: Add a comment anchored to quoted text ⚠️ destructive
@@ -1613,6 +1873,9 @@ Doc lacked the literal text "QA anchor target", so it was inserted via `insert_d
 
 **Result (2026-09-04) ✅ PASS**
 Inserted "QA anchor target" text via insert_doc_text, then add_doc_comment with quoted_text="QA anchor target" returned quoted_text round-tripped correctly.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -1636,6 +1899,9 @@ Inserted "QA anchor target" text via insert_doc_text, then add_doc_comment with 
 **Result (2026-09-04) ✅ PASS**
 list_doc_comments showed both TC-DOC96/97 comments, both resolved:false and replies:[], correct quoted_text values, doc_id matches.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC99: Resolve a comment ⚠️ destructive
@@ -1656,6 +1922,9 @@ list_doc_comments showed both TC-DOC96/97 comments, both resolved:false and repl
 **Result (2026-09-04) ✅ PASS**
 resolve_doc_comment(TC-DOC96's id) returned doc_id/comment_id/reply_id/action:"resolve". Re-list confirmed resolved:true with reply content "Handled.", action:"resolve", modified_time present.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC100: Resolve a non-existent comment ID
@@ -1673,6 +1942,9 @@ resolve_doc_comment(TC-DOC96's id) returned doc_id/comment_id/reply_id/action:"r
 **Result (2026-09-04) ✅ PASS**
 resolve_doc_comment('not-a-real-comment-id') raised HttpError 404 "Comment not found" — propagated cleanly, no silent success.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC101: List comments on a non-existent doc
@@ -1686,6 +1958,9 @@ resolve_doc_comment('not-a-real-comment-id') raised HttpError 404 "Comment not f
 
 **Result (2026-07-16) ✅ PASS**
 `list_doc_comments(doc_id="not-a-real-doc-id")` raised `HttpError 404 ... "File not found: not-a-real-doc-id."` — propagated cleanly, no silent empty list, no server crash.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ## HTML/Markdown → Doc image conversion (#332, #333)
 
@@ -1732,6 +2007,9 @@ list_doc_comments('not-a-real-doc-id') raised HttpError 404 "File not found" —
 **Result (2026-09-04) ✅ PASS**
 create_doc_from_file(tc-doc102-image-conversion.html): docId+web_link, no top-level error. images list: 6 successes (cases 1-5, one of 3's two) + 1 per-image error (case 8, unreachable URL) = 7 entries; cases 6/7 (table-cell images) silently dropped with no entry, matching documented gap. get_doc_structure confirmed all 8 headings + surrounding paragraph text intact, table cells empty for dropped images, final paragraph present (not truncated). Playwright screenshot (tc-doc102.png) confirmed Google-logo images visibly rendering for Cases 1-5. Trashed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC103: Markdown image conversion shares the same drop as the HTML path ⚠️ requires-oauth ⚠️ destructive
@@ -1754,6 +2032,9 @@ create_doc_from_file(tc-doc102-image-conversion.html): docId+web_link, no top-le
 **Result (2026-09-04) ✅ PASS**
 create_doc_from_file(tc-doc103-image-conversion.md): 7 successes + 1 per-image error (case 8), case 6 (table cell) silently dropped (8 of 9 source images reach the images list). get_doc_structure confirmed all headings/text, and index-math on Case 7's paragraph (546-527=19 vs 18 expected for text-only) confirms an image occupies the extra slot. Playwright screenshot (tc-doc103.png) confirmed: Case 6 table cell empty, Case 7 reference-style image renders correctly (Google logo), Case 8 degrades gracefully with no truncation. Trashed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ## HTML/Markdown → Doc nested list conversion (#334)
@@ -1764,7 +2045,7 @@ create_doc_from_file(tc-doc103-image-conversion.md): 7 successes + 1 per-image e
 2. **Emitter ignores depth (`emitter.py`):** even where the parser *does* correctly track nesting (`BulletItem.depth`, verified correct in all cases below, including the ones unaffected by bug 1), `ast_to_requests` never reads `.depth` or `.paragraph_style` — `createParagraphBullets` is emitted with only `range` and `bulletPreset`, no indentation. Google Docs infers a bullet's nesting level from paragraph indentation, not an explicit field on the create request, so **every bullet renders at nesting level 0 in the live document regardless of source depth.** This is a real gap even for a list with zero parent-text collisions.
 3. **Markdown-specific, on top of 1+2:** python-markdown's `sane_lists` extension (used by `_md_to_html`) only recognizes a sub-list as nested when indented by exactly 4 spaces or a tab. The CommonMark/GFM-standard indentation that most people and tools (including Claude) write by default — 2 spaces under a `-`/`*` marker, 3 spaces under a `1.` marker — is silently flattened to the parent list **before it even reaches the HTML parser**, with no warning. Verified empirically this session (`uv run python3 -c "import markdown; ..."`) across four indentation widths.
 
-**Fixtures:** `docs/qa/fixtures/tc-doc104-nested-lists.html` (direct HTML, isolates bugs 1+2 with no markdown-library involvement), `docs/qa/fixtures/tc-doc105-nested-lists-gfm.md` (GFM-standard 2/3-space indentation, adds bug 3 on top), `docs/qa/fixtures/tc-doc106-nested-lists-4space.md` (4-space indentation — the documented python-markdown workaround — reproduces bugs 1+2 only, proving they're independent of bug 3). Each fixture has 3 cases: parent item with its own text + a nested sub-list (bug 1 trigger), a bare parent item with no text of its own (isolates bug 2 alone, since there's no parent text to lose), and ordered-in-ordered nesting.
+**Fixtures:** `docs/qa/fixtures/tc-doc104-nested-lists.html` (direct HTML, isolates bugs 1+2 with no markdown-library involvement), `docs/qa/fixtures/tc-doc105-nested-lists-gfm.md` (GFM-standard 2/3-space indentation, adds bug 3 on top), `docs/qa/fixtures/tc-doc106-nested-lists-4space.md` (4-space indentation — the documented python-markdown workaround — reproduces bugs 1+2 only, proving they're independent of bug 3). Each fixture has 3 cases: parent item with its own text + a nested sub-list (bug 1 trigger), a bare parent item with no text of its own (isolates bug 2 alone, since there's no parent text to lose), and ordered-in-ordered nesting. `tc-doc104-nested-lists.html` alone has a 4th case (added for #714, TC-DOC190) with two levels of bare parent `<li>`s, isolating a `min_depth == 2` run rather than Case 2's `min_depth == 1`.
 
 ### TC-DOC104: Direct HTML nested lists — parent item text must survive when a sub-list follows it ⚠️ requires-oauth ⚠️ destructive
 
@@ -1803,6 +2084,9 @@ create_doc_from_file(tc-doc103-image-conversion.md): 7 successes + 1 per-image e
 **Result (2026-09-04) ✅ PASS**
 create_doc_from_file(tc-doc104-nested-lists.html): "Parent A has text"/"Parent B has text"/"Top ordered 1" all survive as own bullet items (bug 1 fixed), correct nestingLevel 0/1/2 (bug 2 fixed). Playwright screenshot (tc-doc104.png) confirmed 3 visible indentation levels for Case 1, correct alpha-nesting for Case 3. Known pre-existing artifacts reproduced as documented (non-blocking): stray whitespace-only bullet paragraphs from raw-HTML fixture indentation (html_parser.py's own whitespace handling, unrelated to PR #432), which consume list numbers and shift "Top ordered 2" to render as "3." instead of "2." — matches historical finding, not a new regression. Case 2's bare-nested children render with disc (not circle) glyph — known #439, non-blocking. Trashed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC105: Markdown nested lists at GFM-standard (2/3-space) indentation ⚠️ requires-oauth ⚠️ destructive
@@ -1825,6 +2109,9 @@ create_doc_from_file(tc-doc104-nested-lists.html): "Parent A has text"/"Parent B
 
 **Result (2026-09-04) ✅ PASS**
 Wrote GFM 2/3-space-indented markdown to DOC_ID. Confirmed the documented bug-3 gap behaves exactly as expected: Case 1 "Child A1"/"Child A2" flattened to siblings of "Parent A" (2-space doesn't clear sane_lists' 4-space threshold), "Parent B has text" followed by literal raw "  1. Ordered child B1\n  2. Ordered child B2" text (garbled, not list items) — matches documented failure mode. Case 2's bare `-` marker degrades to plain paragraphs (not merged into one blob this time, likely improved by unrelated #401/#402 paragraph-boundary fixes). Case 3's nested ordered items flatten to siblings of "Top ordered 1"/"2", same listId, all nestingLevel 0 — mis-numbering as documented. This is a known, tracked, not-yet-fixed limitation (bug 3) — behavior unchanged from the 2026-07-16 baseline, not a new regression.
+
+**Result (2026-10-17) ❌ FAIL — v0.9.2 release pass**
+Known gap: 2/3-space indented ordered children flatten (documented bug-3 behavior, unchanged since 2026-09-04).
 
 ---
 
@@ -1850,6 +2137,11 @@ Wrote GFM 2/3-space-indented markdown to DOC_ID. Confirmed the documented bug-3 
 
 **Result (2026-09-04) ✅ PASS**
 Wrote 4-space-indented markdown to DOC_ID. Confirmed clean reproduction of TC-DOC104's fixed bugs 1+2 with NO stray-whitespace artifacts (this fixture has none): Case 1 "Child A1"/"Child A2" (level1)/"Grandchild A2a" (level2) correctly nested; "Ordered child B1"/"B2" visually indented+numbered under "Parent B has text" despite reporting nestingLevel:0 (expected Docs API quirk — a list with no depth-0 member pre-populates level-0 glyph/indent with level-1's values, per emitter.py's documented behavior). Case 3 correctly alpha-nested (1./a./b./2.) with correct top-level numbering. Playwright screenshot (tc-doc106.png) confirmed all of this visually. New observation (not blocking, not previously called out for this fixture): Case 2's bare `-` marker with nothing else on its line isn't recognized as a list item by python-markdown regardless of indentation width (a markdown-syntax-level limitation, not the sane_lists indentation-threshold bug this fixture targets) — renders as plain literal "-"/"  - Bare-nested child C1" text, same failure shape as TC-DOC105's Case 2. Fixture restored to seed content after.
+
+**Resolution (#692):** Filed and triaged as a documented limitation rather than a code fix — see `docs/known-limitations.md`'s "A bare `-` line is never recognized as an empty list item" entry for the two manifestations (this fixture's Case 2 hits the first-line/paragraph-collapse one) and the recommended non-breaking-space workaround. Pinned with unit tests in `tests/test_docs_content.py::TestMdToHtml`.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -1879,6 +2171,9 @@ The Docs API has no dedicated bookmark-creation endpoint — `create_bookmark` i
 **Result (2026-09-04) ✅ PASS**
 create_named_range(name="section-a", start_index=1, end_index=73) returned correct namedRangeId/name/startIndex/endIndex.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC108: `create_named_range` — API error returned gracefully (end_index beyond document end)
@@ -1896,6 +2191,9 @@ Returned `{"error": "<HttpError 400 ... Index 99998 must be less than the end in
 
 **Result (2026-09-04) ✅ PASS**
 create_named_range(end_index=99999) returned clean HttpError 400 referencing index out of bounds.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -1919,6 +2217,9 @@ create_named_range(end_index=99999) returned clean HttpError 400 referencing ind
 **Result (2026-09-04) ✅ PASS**
 create_bookmark(name="intro", index=1) returned namedRangeId/name/index correctly. UI-dialog "intro not listed in bookmarks" check not re-performed this round (structural/architectural fact — named ranges are categorically invisible to Docs UI bookmark dialogs, previously confirmed live 2026-07-17; not something product code could regress). Doc loaded fine in Playwright.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC110: `create_bookmark` — API error returned gracefully (index beyond document end)
@@ -1936,6 +2237,9 @@ Returned `{"error": "<HttpError 400 ... Index 99999 must be less than the end in
 
 **Result (2026-09-04) ✅ PASS**
 create_bookmark(index=99999) returned clean HttpError 400 referencing index out of bounds.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -1959,6 +2263,9 @@ create_bookmark(index=99999) returned clean HttpError 400 referencing index out 
 **Result (2026-09-04) ✅ PASS**
 find_in_doc('hello') on "Hello World"/"another hello here" doc: 2 matches, "Hello"[1,6], "hello"[21,26], contexts correct. Trashed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC112: `find_in_doc` regex search feeds directly into `style_doc_range` to hyperlink matches ⚠️ destructive
@@ -1980,6 +2287,9 @@ find_in_doc('hello') on "Hello World"/"another hello here" doc: 2 matches, "Hell
 **Result (2026-09-04) ✅ PASS**
 find_in_doc regex email search: 2 matches with correct offsets. style_doc_range applied mailto: links at those offsets; get_doc_structure confirmed both runs split exactly at email boundaries with correct link_url. Trashed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC113: `find_in_doc` case_sensitive=True excludes different-case matches
@@ -1998,6 +2308,9 @@ Exactly 1 match returned (`"hello"`); capitalized "Hello" correctly excluded.
 
 **Result (2026-09-04) ✅ PASS**
 find_in_doc case_sensitive=True('hello'): exactly 1 match ("hello"), capitalized "Hello" excluded. Trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -2018,6 +2331,9 @@ Returned `{"error": "Invalid regex: missing ), unterminated subpattern at positi
 **Result (2026-09-04) ✅ PASS**
 find_in_doc('(unclosed', regex=True) returned {"error":"Invalid regex: missing ), unterminated subpattern at position 0"}. Trashed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC115: `find_in_doc` searches table cell text
@@ -2036,6 +2352,9 @@ find_in_doc('(unclosed', regex=True) returned {"error":"Invalid regex: missing )
 
 **Result (2026-09-04) ✅ PASS**
 Inserted 1x1 table + "needle" text at cell's paragraphStartIndex. find_in_doc('needle'): 1 match, start_index(5) = cell paragraphStartIndex. Trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -2064,6 +2383,9 @@ Structural checks confirmed (single paragraph, HEADING_2, correct line_ranges). 
 **Result (2026-09-04) ✅ PASS**
 insert_softbreak_paragraph with 2 lines, HEADING_2. Response: start/end_index, line_ranges matching each line's text length exactly. get_doc_structure: ONE paragraph (not two), namedStyleType HEADING_2, only first line's run bold. Playwright screenshot (tc-doc116.png) confirmed one tight paragraph with visible soft line break, only "Document ID: KH-OPS-001" bold. Trashed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+One paragraph with \v and correct line_ranges; setup inserts at the placeholder's start, which merges it (stale).
+
 ---
 
 ### TC-DOC117: Invalid named_style_type rejected without mutating the doc
@@ -2083,6 +2405,9 @@ Returned `{"error": "invalid named_style_type 'NOT_A_STYLE'; must be one of: ...
 
 **Result (2026-09-04) ✅ PASS**
 insert_softbreak_paragraph with named_style_type='NOT_A_STYLE' returned {"error":"invalid named_style_type 'NOT_A_STYLE'; must be one of: ..."}. get_doc_structure confirmed doc unchanged ("placeholder\n" intact, no insertion). Trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -2113,6 +2438,11 @@ Tagged `⚠️ requires-oauth` on every case that reaches the upload step — th
 **Result (2026-09-04) ✅ PASS**
 insert_local_images single marker: results[0] fileId present, index=8 = marker's startIndex, shared:false. get_doc_structure: marker gone, before/after unaffected, middle paragraph span=2 (image+\n). list_permissions confirmed no anyone permission. Uploaded file + doc trashed.
 
+**Result (2026-09-24) ✅ PASS — Kit, PR #801 round 2 (fix `4d5f842`, issue #560).** Run in a scratch doc (not the shared fixture), batched with TC-DOC164's oversized image and the TC-DOC197/198 cases in one `insert_local_images` call. The pixel entry succeeded: `fileId` present, `shared: false`, `index` 8 matching the marker paragraph's `startIndex`. `get_doc_structure`: the marker was gone, its paragraph spanned exactly 2 (8–10), and "before"/"after" and the other markers were untouched. The permission check follows the post-#332 default (share revoked, no `anyone` grant), same as the 2026-09-04 result. Playwright: the pixel rendered as a dot under "before" (account check passed on the fixture doc's title). Doc and upload trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Marker replaced; the image is no longer left shared (revoke is the default since DOC152), so the TC expectation is stale.
+
 ---
 
 ### TC-DOC119: Two markers are placed in one call, higher index first
@@ -2135,6 +2465,9 @@ Both entries succeeded with distinct fileIds, returned in input order (MARKERONE
 **Result (2026-09-04) ✅ PASS**
 Two markers, MARKERTWO at higher doc index than MARKERONE. Both results succeeded with distinct fileIds, returned in INPUT order (MARKERONE first) despite MARKERTWO's higher index — confirms results-ordering fix. Both paragraphs reduced to image-only spans. Uploaded files + doc trashed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC120: Marker not found / not unique / local file missing all fail per-image without mutating the doc
@@ -2154,6 +2487,9 @@ All three error messages matched exactly (not found / occurs 2 times / no file f
 
 **Result (2026-09-04) ✅ PASS**
 Three per-image failures: "not found" (NOPE), "occurs 2 times; must be unique" (DUPMARKER), "No file found at '/nonexistent/missing.png'" (ANY) — no fileId on any. get_doc_structure confirmed doc completely unchanged (both DUPMARKER paragraphs intact). Trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -2175,6 +2511,9 @@ Returned `{"error": "marker 'IMG1' not found in document"}}` — confirms the su
 
 **Result (2026-09-04) ✅ PASS**
 marker 'IMG1' returned {"error":"marker 'IMG1' not found in document"} — confirms substring-collision fix (didn't falsely match inside "IMG10"). get_doc_structure confirmed doc unchanged, no upload. Trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -2198,6 +2537,9 @@ marker 'IMG1' returned {"error":"marker 'IMG1' not found in document"} — confi
 **Result (2026-09-04) ✅ PASS**
 Parent li with own text + nested sublist: 3 bulleted paragraphs "Item text"/"sub a"/"sub b" in order — parent text preserved.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC123: Three-level nested list preserves every parent's own text, in document order ⚠️ destructive
@@ -2217,6 +2559,9 @@ Parent li with own text + nested sublist: 3 bulleted paragraphs "Item text"/"sub
 **Result (2026-09-04) ✅ PASS**
 3-level nested list: "Parent A has text"/"Child A1 has text"/"Grandchild A2a" all present in document order at correct depths.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC124: Nested list via Markdown also preserves the parent line's text ⚠️ destructive
@@ -2235,6 +2580,9 @@ Parent li with own text + nested sublist: 3 bulleted paragraphs "Item text"/"sub
 
 **Result (2026-09-04) ✅ PASS**
 Markdown 4-space nested list: "Item text:"/"sub a"/"sub b" in order — confirms fix applies through markdown pipeline too.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -2256,6 +2604,9 @@ Markdown 4-space nested list: "Item text:"/"sub a"/"sub b" in order — confirms
 **Result (2026-09-04) ✅ PASS**
 <pre> inside open <li>: bulleted "Note:" followed by non-bulleted "code" paragraph — parent text not dropped.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC126: A `<table>` opening inside an open `<li>` doesn't drop the `<li>`'s own text ⚠️ destructive
@@ -2274,6 +2625,9 @@ Markdown 4-space nested list: "Item text:"/"sub a"/"sub b" in order — confirms
 **Result (2026-09-04) ✅ PASS**
 <table> inside open <li>: bulleted "Before" followed by 1x1 table, cell "cell".
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC127: Trailing text after a nested list, before the real `</li>`, is not dropped ⚠️ destructive
@@ -2291,6 +2645,9 @@ Markdown 4-space nested list: "Item text:"/"sub a"/"sub b" in order — confirms
 
 **Result (2026-09-04) ✅ PASS**
 Trailing text after nested list, before real </li>: "Parent"(depth0)/"Child"(nested)/"trailing text"(depth0) all present in order — not dropped.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -2311,6 +2668,9 @@ Trailing text after nested list, before real </li>: "Parent"(depth0)/"Child"(nes
 **Result (2026-09-04) ✅ PASS**
 Unclosed <b> inside <li> interrupted by nested list: "Item " unbolded, "bold text" bolded (as authored); "sub" and "After the list" both unbolded — no bold leak.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC129: A heading's own text survives a nested table interrupting it ⚠️ destructive
@@ -2327,6 +2687,9 @@ Unclosed <b> inside <li> interrupted by nested list: "Item " unbolded, "bold tex
 
 **Result (2026-09-04) ✅ PASS**
 Heading interrupted by nested table: HEADING_2 "Heading text" exactly, table cell "cell" exactly — no text/cell splice.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -2345,6 +2708,9 @@ Heading interrupted by nested table: HEADING_2 "Heading text" exactly, table cel
 
 **Result (2026-09-04) ✅ PASS**
 Malformed HTML (unclosed <p> inside <li>): bulleted "text" preserved, "Later unrelated paragraph" plain non-bulleted, not merged with anything.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -2365,6 +2731,9 @@ Malformed HTML (unclosed <p> inside <li>): bulleted "text" preserved, "Later unr
 **Result (2026-09-04) ✅ PASS**
 Wrote raw bare text "hello world" (no wrapping tag). get_doc_structure shows a single plain paragraph reading exactly "hello world" — previously silently dropped.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC132: An inline tag with no block ancestor still produces no content (regression guard) ⚠️ destructive
@@ -2379,6 +2748,9 @@ Wrote raw bare text "hello world" (no wrapping tag). get_doc_structure shows a s
 
 **Result (2026-09-04) ✅ PASS**
 Wrote <span>no blocks</span>. Document body empty/unchanged — deliberate no-op behavior confirmed unaffected by #343 fix.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -2402,6 +2774,9 @@ Run against a live sandbox scoped to only `create_doc,create_doc_from_file,write
 **Result (2026-09-04) ✅ PASS**
 Wrote <p>😀 Hello</p><table>... get_doc_structure (now available, better than historical find_in_doc-only verification): paragraph "😀 Hello" exactly (1-10, 9 UTF-16 units), immediately followed by 1x1 table cell "Marker" exactly — no truncation/splice/overlap. Confirms utf16_len fix directly.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC134: `insert_softbreak_paragraph` — `line_ranges` correct across an astral-plane (emoji) character ⚠️ destructive
@@ -2422,10 +2797,16 @@ Wrote <p>😀 Hello</p><table>... get_doc_structure (now available, better than 
 **Result (2026-09-04) ✅ PASS**
 insert_softbreak_paragraph(lines=[{"😀X"},{"Y"}]) on fresh doc returned end_index=6, line_ranges=[{1,4},{5,6}] — exact match for UTF-16-correct values. get_doc_structure confirmed paragraph text "😀X\vY\n" exactly, no dropped/shifted chars. Trashed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-W36 regression spot-check — not run
 `sheets/helpers.py`'s `_utf16_len` now delegates to the same shared `utf16_len` helper (behavior-preserving, no logic change) rather than duplicating it. A regression spot-check of TC-W36 (`docs/qa/tests/sheets_write.md`) was skipped this round: the live sandbox's `ENABLED_TOOLS` included `update_cells` but not `get_sheet_data`, so a rich-text write couldn't be read back to confirm `textFormatRuns[1].startIndex`. Worth a real spot-check next time a sandbox with read-back access is available; low risk given the change is a pure delegation.
+
+**Result (2026-10-17) ⏳ pending — v0.9.2 release pass**
+not reported by the shard that owned this file
 
 ---
 
@@ -2454,6 +2835,9 @@ insert_softbreak_paragraph(lines=[{"😀X"},{"Y"}]) on fresh doc returned end_in
 **Result (2026-09-04) ✅ PASS**
 create_doc_from_file(tc-doc135-paragraph-boundary.md). Notable: the fixture's image now EMBEDS successfully (images:[{src:...}], no error) rather than being dropped, since #333 (native markdown image support, landed after this fixture/TC was authored) now handles public http(s) image URLs. get_doc_structure confirmed the core paragraph-boundary check still holds: HEADING_1 "Kindly Human", HEADING_1 "Auditing and Accountability Policy", empty paragraph (--- break), HEADING_2 "PURPOSE", body text, empty paragraph (___ break), HEADING_2 "SCOPE", body text — no fused headings, each boundary its own distinct element. The first paragraph is now a real embedded image (2 units) rather than an empty 1-unit placeholder — an improvement, not a defect. Trashed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Order correct; the first element is now an image paragraph, not an empty one (stale).
+
 ---
 
 **Background:** TC-DOC135's own review round found a same-bug-class gap: `_interrupt_open_block` (`html_parser.py`) flushed the currently-open block *before* descending into a nested construct with `preserve_if_empty=False` unconditionally, so a block whose only content was an unsupported construct (e.g. an `<img>`) vanished entirely — not just the image — whenever it was itself interrupted by a nested list/table/pre/block instead of closing directly. The fix replaces the old `not self._block_resumed` proxy (used at every `_emit_block_node` call site) with a new `self._block_had_unsupported_content` flag that tracks, per open-block segment, whether something was actually silently dropped (an unsupported void element or unrecognized tag) since the segment last began — set in `handle_starttag`'s generic inline-element fallthrough, reset on both fresh block open and on `_resume_interrupted_block`. This is a deliberately different signal than "is this the block's first segment," because the interrupt call site's old proxy is wrong exactly when a block is empty for a completely unrelated, common reason: an `<li>` that wraps *only* a nested list with no text of its own (ordinary nested-list markdown) is empty on its first flush too, and must NOT gain a spurious empty bullet — a regression the naive `not self._block_resumed` fix would have introduced, caught by the existing unit test `TestNestedLists::test_parent_with_no_own_text_unaffected`.
@@ -2478,6 +2862,9 @@ create_doc_from_file(tc-doc135-paragraph-boundary.md). Notable: the fixture's im
 **Result (2026-09-04) ✅ PASS**
 create_doc_from_file(tc-doc136-interrupted-block-boundary.md). Image ref "x.png" now resolves as a local-path reference (per #333) and fails per-image ("No file found at 'x.png'") rather than being silently unhandled-tag-dropped — same underlying "content lost, preserve boundary" case the test targets. get_doc_structure confirmed exact expected sequence: HEADING_1 "Bug case", ONE empty bulleted paragraph (preserved outer-bullet boundary), "nested one", HEADING_1 "Control case", "text", "control child a", "control child b" — exactly one empty node for the bug case (neither vanished nor duplicated), no spurious empty node under control case. Trashed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 **Background:** TC-DOC136's own review round (QA pass 2) found a second, unrelated gap in the *original* #401 fix (not introduced by TC-DOC136's own change): the bare-`<hr>`-with-no-open-block check (`html_parser.py`, added by #401) tested `self._block_tag is None and self._table_depth == 0` but omitted `self._tag_depth == 0` — the condition `handle_data`'s sibling bare-text check uses (#343) to distinguish genuinely bare top-level content from content that's merely wrapped in an inline tag with no block ancestor. An `<hr>` wrapped only in an inline tag (e.g. `<span><hr></span>`) was therefore treated as a bare top-level thematic break and injected a spurious empty-paragraph boundary — contradicting the existing, tested policy (`test_span_wrapped_text_still_dropped`, TC-DOC132) that inline-only content with no block ancestor is a deliberate no-op. Only reachable via hand-authored HTML through `create_doc_from_file`'s `.html` path — python-markdown never emits `<hr>` wrapped in an inline tag, only as a bare top-level sibling.
@@ -2499,6 +2886,9 @@ create_doc_from_file(tc-doc136-interrupted-block-boundary.md). Image ref "x.png"
 
 **Result (2026-09-04) ✅ PASS**
 create_doc_from_file(tc-doc137-inline-hr-no-block-ancestor.html): get_doc_structure showed exactly "Before" immediately followed by "After" — no spurious empty paragraph from the inline-wrapped <hr> with no block ancestor. Trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -2526,6 +2916,9 @@ create_doc_from_file(tc-doc137-inline-hr-no-block-ancestor.html): get_doc_struct
 **Result (2026-09-04) ✅ PASS**
 create_doc_from_file(tc-doc138-nbsp-spacer-paragraph.md). get_doc_structure confirmed 4 content paragraphs in order + terminal blank: acknowledgment(1-96), nbsp spacer(96-98, text=" \n", real width, not fused with acknowledgment's endIndex 96), <hr> empty paragraph(98-99), "Employee Signature ... Date" final paragraph (99-132) with the inline nbsp gap preserved as spacing. Trashed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ## A mismatched `<ol>`/`<ul>` close tag no longer permanently desyncs list depth (issue #382)
@@ -2552,6 +2945,9 @@ create_doc_from_file(tc-doc138-nbsp-spacer-paragraph.md). get_doc_structure conf
 **Result (2026-09-04) ✅ PASS**
 create_doc_from_file(tc-doc141-mismatched-list-tags.html) — malformed <ol>/<ul> tag pair. get_doc_structure text order: "Parent"/"Child"/"Unrelated paragraph between the two lists."/"Fresh ordered item". Playwright screenshot (tc-doc141.png) confirmed "Fresh ordered item" renders as a TOP-LEVEL "1." — not indented under the malformed list above, confirming the #382 fix. Trashed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ## GitHub/GitLab-style heading-anchor links resolve to working Docs jump links (issue #409)
@@ -2577,6 +2973,9 @@ Tool calls: `write_doc_content(doc_id={DOC_ID}, content="# A Heading\n\nSome tex
 
 **Result (2026-09-04) ✅ PASS**
 write_doc_content markdown heading to DOC_ID. get_doc_structure: first element HEADING_1/headingId non-null, second element ("Some text.") NORMAL_TEXT/headingId:null.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -2606,6 +3005,11 @@ Tool calls: `create_doc_from_file(local_path="<repo-root>/docs/qa/fixtures/tc-do
 **Result (2026-09-04) ✅ PASS**
 create_doc_from_file(tc-doc142-heading-anchors.md). All 4 checks confirmed: HEADING_1/HEADING_2 with own headingIds; "Appendix A" run link_url resolves to Appendix A's own headingId; "Appendix B itself" run link_url resolves to Appendix B's own headingId; "dead link" run link_url:null (stripped). Trashed.
 
+**Result (2026-09-21) ✅ PASS — re-run on PR #783 (issue #454), live via `mcp-gee-sweet-kit`.** PR #783 hoists `resolve_heading_anchor`'s per-anchor slugified-heading-list computation into a new `compute_scheme_slugs` helper (caching across anchors in one document) — this test case exercises the function this refactor changed. `create_doc_from_file(tc-doc142-heading-anchors.md)`: all 4 checks confirmed identical to prior runs — HEADING_1/HEADING_2 own `headingId`s; "Appendix A" and "Appendix B itself" runs' `link_url` resolve to their own headings; "dead link" run `link_url: null` (stripped). No regression from the caching change. Trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC144: A heading-anchor link inside a table cell is resolved (regression for the table-blind body walk) ⚠️ requires-oauth ⚠️ destructive
@@ -2629,6 +3033,9 @@ Tool calls: `create_doc_from_file(local_path="<repo-root>/docs/qa/fixtures/tc-do
 
 **Result (2026-09-04) ✅ PASS**
 create_doc_from_file(tc-doc144-anchor-in-table-cell.md). HEADING_1 "Reference Section" headingId confirmed; table cell text "See Reference Section for details." confirmed. Playwright screenshot (tc-doc144.png) confirmed "Reference Section" renders as a blue/underlined hyperlink inside the table cell. Trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -2654,6 +3061,9 @@ Tool calls: `create_doc_from_file(local_path="<repo-root>/docs/qa/fixtures/tc-do
 **Result (2026-09-04) ✅ PASS**
 create_doc_from_file(tc-doc145-anchor-on-first-element.md). First element is the "Jump to Overview" paragraph (Docs API startIndex-omission-on-first-element quirk handled); its run's link_url resolves exactly to the "Overview" HEADING_1's own headingId. Trashed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ## Stale block-interruption frame from a mismatched list-close no longer resumed by a later, unrelated list (issue #450)
@@ -2674,6 +3084,11 @@ create_doc_from_file(tc-doc145-anchor-on-first-element.md). First element is the
 **Result (2026-09-04) ✅ PASS**
 Wrote HTML with mismatched list close (<ol>...</ul>) followed by well-formed <ol>. get_doc_structure: HEADING_1 "Start", bullet "Item", bullet "Later item", plain (non-heading) paragraph "Trailing bare text" — NOT rendered as HEADING_1 (the pre-fix bug), confirming #450 fix.
 
+**Result (2026-09-21) ✅ PASS — re-run on PR #779 (issue #451), live via `mcp-gee-sweet-kit`.** PR #779 merges `handle_endtag`'s previously-identical `if tag == "ol": ...` / `if tag == "ul": ...` branches into one `if tag in ("ol", "ul"):` branch — this test case exercises exactly that code path. `write_doc_content` on the fixture doc completed with no error; `get_doc_structure` returned HEADING_1 "Start", bullet "Item", bullet "Later item", plain NORMAL_TEXT "Trailing bare text" — matches expected, no regression from the merge. Fixture content restored.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 **Background (PR #478 review round):** Code review on the fix above caught a second, related bug in the same function, live-reproduced against the branch. Bare top-level text directly inside a still-open `<ol>`/`<ul>` (not wrapped in its own `<li>`) opens an *implicit* paragraph via `handle_data`'s bare-text path (#343) without ever going through `_interrupt_open_block` — so it has no frame of its own on `_block_stack`. `_resume_interrupted_block`'s resume path unconditionally overwrote `self._block_tag` and cleared `self._run_buf`, silently destroying that implicit paragraph's text instead of flushing it first — reachable via a mismatched inner list close (the discard path TC-DOC148 above exercises) immediately followed by an exact-matching outer list close. Fixed by flushing whatever block is currently open, if any, before actually resuming.
@@ -2690,6 +3105,9 @@ Wrote HTML with mismatched list close (<ol>...</ul>) followed by well-formed <ol
 **Result (2026-08-02) ✅ PASS** — live `write_doc_content` + `get_doc_structure` against the fixture doc returned exactly HEADING_1 "Start", paragraph "B", paragraph "C", paragraph "D", HEADING_1 "E" — "D" is preserved (previously vanished entirely) and no other regression in the sequence.
 
 **Cleanup:** write fixture content back
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ## Image sharing lifecycle — `revoke_sharing` default and consistency (#333)
 
@@ -2721,6 +3139,11 @@ Tool call: `create_doc(title="TC-DOC150", content="# Report\n\n![Pixel](<repo-ro
 **Result (2026-09-04) ✅ PASS**
 create_doc markdown local-path image, folder_id set. Response: images=[{fileId, shared:false}], no revoke_error. list_permissions on uploaded file showed only owner+service-account, no anyone grant — confirms revoke actually happened. Doc+image trashed.
 
+**Result (2026-09-24) ✅ PASS — Kit, PR #801 round 2 (fix `4d5f842`, issue #560).** `create_doc` with the local-path markdown image and `folder_id` set gave no `error` and `images=[{fileId, shared: false}]`, with no `revoke_error`. `list_permissions` on the upload showed only the organizer and the service account, no `anyone` grant. Playwright: a pixel dot renders between "Report" and "After the image." Doc and upload trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC151: `create_doc` markdown image (`drive:` reference) with `revoke_sharing=False` leaves the image shared ⚠️ requires-oauth ⚠️ destructive
@@ -2742,6 +3165,9 @@ Tool call: `create_doc(title="TC-DOC151", content="![Pixel](drive:<UPLOADED_FILE
 
 **Result (2026-09-04) ✅ PASS**
 Pre-uploaded image via upload_local_file, then create_doc with drive: reference + revoke_sharing=False. Response images=[{"src":"drive:...", "fileId":..., "shared":true}] exact match. list_permissions confirmed anyone/reader still present. Doc+permission+image cleaned up.
+
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+Needs a persistent anyone share; ran before the user's explicit sharing approval.
 
 ---
 
@@ -2767,6 +3193,13 @@ Tool call: `insert_local_images(doc_id=DOC_ID, images=[{"marker": "IMGMARKERONE"
 **Result (2026-09-04) ✅ PASS**
 insert_local_images (default revoke_sharing) on scratch doc with "Marker: IMGMARKERONE": results[0] had fileId, index, shared:false, no revoke_error. list_permissions confirmed no anyone grant — new default-revoke behavior change from #332 confirmed. Doc+image trashed.
 
+**Result (2026-10-04) ✅ PASS — Kit, PR #903 round 1 (`8a634db`).** Regression check of the success path after the revoke moved into `_revoke_shares()`. Live `insert_local_images` with `folder_id` on a scratch doc holding `Marker: IMGMARKERONE` returned `results[0]` with `fileId`, `index: 9`, `shared: false`, and no `revoke_error`. `list_permissions` on the image showed no `anyone` grant. The visual check was done structurally, not with Playwright: `get_doc_as_markdown` showed `Marker: ![](…)`, an inline image where the marker was. The doc and image were trashed.
+
+**Result (2026-10-04) ✅ PASS — Kit, PR #903 round 2 (`4e392c3`).** Re-run after the round 2 restructure moved the success path into the new `try`, against the reconnected kit server. `results[0]` had `fileId`, `index: 9`, `shared: false`, and no `revoke_error`. `list_permissions` showed no `anyone` grant, and `get_doc_as_markdown` showed `Marker: ![](…)`. The doc and image were trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC153: Table-cell images remain a documented, non-crashing gap ⚠️ requires-oauth ⚠️ destructive
@@ -2787,6 +3220,12 @@ insert_local_images (default revoke_sharing) on scratch doc with "Marker: IMGMAR
 
 **Result (2026-09-04) ✅ PASS**
 create_doc HTML table with image in a cell: no error. get_doc_structure: cell 0 "Before", cell 2 "After", cell 1 (image) empty (""). No images key in response (image dropped at parse time, table-cell images still out of scope). No timeout/hang. Trashed.
+
+**Result (2026-10-10) ✅ PASS — PR #961 (Sky)**
+create_doc HTML table with an image in a cell: returned at once, no error, no `images` key. get_doc_structure: cell 0 "Before", cell 1 "", cell 2 "After". No hang. Trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -2810,6 +3249,9 @@ create_doc HTML table with image in a cell: no error. get_doc_structure: cell 0 
 
 **Result (2026-09-04) ✅ PASS**
 <pre>code<table>...</table>   </pre>: exactly "code" -> 1x1 table("cell") -> structural trailing paragraph, no spurious whitespace paragraph. Companion <pre>   </pre> (fresh, no interruption): keeps literal whitespace unconditionally. Round-2 refinement also verified: <pre>code<table>...</table> <hr></pre> produces a boundary paragraph " \n" after the table (space survives after dropped <hr>) — fix confirmed. All 3 scratch docs trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -2836,6 +3278,9 @@ Tool call: `write_doc_content(doc_id={DOC_ID}, content="<blockquote><p>A quoted 
 **Result (2026-09-04) ✅ PASS**
 Wrote HTML blockquote+plain paragraph. Text order "A quoted line"/"Not quoted" confirmed. Playwright screenshot (tc-doc158.png) confirmed "A quoted line" has visible gray left border+indent, "Not quoted" has neither. (Raw documents().get() indentStart/borderLeft numeric check attempted via scratch script but blocked — OAuth token refresh failed mid-session requiring an interactive consent flow this sandboxed environment can't complete; abandoned rather than hang. Visual confirmation used instead.)
 
+**Result (2026-10-17) 🟡 PARTIAL — v0.9.2 release pass**
+Export shows the blockquote markers, but the indent isn't visible on single-line quotes (indentFirstLine not set).
+
 ---
 
 ### TC-DOC159: Nested blockquote doubles the indent; both levels get the same border ⚠️ destructive
@@ -2857,6 +3302,9 @@ Tool call: `write_doc_content(doc_id={DOC_ID}, content="> outer\n> > nested\n", 
 **Result (2026-09-04) ✅ PASS**
 Live re-verification blocked by an OAuth token refresh failure (invalid_grant on a fresh script's _oauth_creds() call — infra/credential issue, not a QA finding; already-running MCP servers unaffected). Fallback: confirmed via git log that emitter.py's blockquote indentStart/borderLeft logic has not changed since the 2026-08-07 live PASS (commit ba78e61/39539dd) — the only intervening touch (f0ad989, Ruff lint adoption) diffs clean of any blockquote/indent/border lines and states "no functional behavior change". Result carried forward from 2026-08-07.
 
+**Result (2026-10-17) 🟡 PARTIAL — v0.9.2 release pass**
+Export shows the blockquote markers, but the indent isn't visible on single-line quotes (indentFirstLine not set).
+
 ---
 
 ### TC-DOC160: Blockquote wrapping a bulleted list still tags each item — text and list membership survive alongside the blockquote's own indent/border ⚠️ destructive
@@ -2877,6 +3325,9 @@ Tool call: `write_doc_content(doc_id={DOC_ID}, content="> - Quoted item one\n> -
 
 **Result (2026-09-04) ✅ PASS**
 Wrote blockquote-wrapped bulleted list markdown. get_doc_structure: both items list paragraphs sharing one listId, text exactly "Quoted item one"/"Quoted item two", no leaked markdown syntax. Playwright screenshot (tc-doc160.png) confirmed visible left border spans both bulleted items.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -2908,6 +3359,11 @@ Tool call: `insert_inline_image(doc_id={DOC_ID}, index=1, drive_file_id={OVERSIZ
 **Result (2026-09-04) ✅ PASS**
 insert_inline_image(drive_file_id=oversized 6000x6000). Error contained "36.0 megapixels", "25 megapixels", "auto_downscale=True". get_doc_structure before/after byte-identical — no insertInlineImage reached API.
 
+**Result (2026-09-24) ✅ PASS — Kit, PR #801 round 2 (fix `4d5f842`, issue #560).** Fresh upload `qa-oversized-pr801.png` (6000x6000) into a scratch doc. The error named "36.0 megapixels", "25 megapixels" and "auto_downscale=True". Nothing was inserted (the follow-up TC-DOC162 call landed at index 1 on the untouched single-paragraph doc).
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC162: `insert_inline_image` `auto_downscale=True` resizes and embeds a copy, leaving the original untouched ⚠️ requires-oauth ⚠️ destructive
@@ -2932,6 +3388,11 @@ Tool call: `insert_inline_image(doc_id={DOC_ID}, index=1, drive_file_id={OVERSIZ
 **Result (2026-09-04) ✅ PASS**
 insert_inline_image(auto_downscale=True) succeeded, resized_file_id distinct from original. get_file_metadata: resized name "qa-oversized.png (resized)"; original file untouched (same checksum/size as upload). Playwright screenshot (tc-doc162.png) confirmed large red image rendered at insertion point. Range deleted, both files trashed.
 
+**Result (2026-09-24) ✅ PASS — Kit, PR #801 round 2 (fix `4d5f842`, issue #560).** This exercises the parent-folder fallback PR #801 folded into `downscale_drive_file`. `resized_file_id` differed from the original, and `get_file_metadata` gave name `"qa-oversized-pr801.png (resized)"` in the same parent folder as the original. The original was unchanged (size 119593, same as the local file, untrashed). Playwright: the red image rendered at the insertion point. Both files and the doc trashed.
+
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+Needs a persistent anyone share; ran before the user's explicit sharing approval.
+
 ---
 
 ### TC-DOC163: `insert_inline_image` with a too-large public `uri` gets Google's error rewritten with the size-limit explanation, not pre-validated
@@ -2952,6 +3413,9 @@ Tool call: `insert_inline_image(doc_id={DOC_ID}, index=1, uri="{OVERSIZED_WEB_CO
 
 **Result (2026-09-04) ✅ PASS**
 insert_inline_image(uri=shared oversized file's direct-download link). Error: Google's raw "The provided image is too large." preserved, plus appended "25 megapixels or 50MB" explanation. No mention of auto_downscale. Permission removed, file trashed.
+
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+Needs a persistent anyone share; ran before the user's explicit sharing approval.
 
 ---
 
@@ -2974,6 +3438,11 @@ Tool call: `insert_local_images(doc_id={DOC_ID}, images=[{"marker": "IMGMARKERON
 
 **Result (2026-09-04) ✅ PASS**
 insert_local_images(oversized local path, no auto_downscale): results[0].error contained "36.0 megapixels"/"25 megapixels", no fileId. list_files(mime_type=image/png) returned empty — no upload. Marker text unchanged.
+
+**Result (2026-09-24) ✅ PASS — Kit, PR #801 round 2 (fix `4d5f842`, issue #560).** `results` entry: "Image is 6000x6000 (36.0 megapixels)… 25 megapixels… auto_downscale=True", no `fileId`. Only today's `qa-fixture-pixel.png` uploads were new in the folder; the `qa-oversized*` files there date from 2026-09-04 (older pollution). The marker text was unchanged.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -2998,6 +3467,11 @@ Tool call: `insert_local_images(doc_id={DOC_ID}, images=[{"marker": "IMGMARKERON
 **Result (2026-09-04) ✅ PASS**
 insert_local_images(auto_downscale=True): results[0] no error, fileId, downscaled:true, index=1=marker's startIndex. Uploaded file name unsuffixed "qa-oversized.png". Playwright screenshot (tc-doc165.png) confirmed image rendered where marker was. Uploaded file trashed.
 
+**Result (2026-09-24) ✅ PASS — Kit, PR #801 round 2 (fix `4d5f842`, issue #560).** Alone: `fileId`, `downscaled: true`, `shared: false`, `index` 10 = the marker's `startIndex`. Uploaded name unsuffixed `qa-oversized.png`. Playwright: the red image rendered where the marker was. **Transient seen, not a defect:** the first attempt batched this image with TC-DOC167's ~47MB resized copy in one call. Both uploads succeeded, but Docs rejected the atomic batch with "There was a problem retrieving the image". Each passed alone, and the identical two-image call passed on a fresh doc right after. PR #801 doesn't touch the embed batch (only pre-upload validation and where the downscale runs), so this is Google's fetch of a near-limit image flaking, not a regression. Uploads trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC166: An oversized local-path image in markdown content fails per-image without blocking the rest of the doc ⚠️ requires-oauth ⚠️ destructive
@@ -3017,6 +3491,9 @@ Tool call: `write_doc_content(doc_id={DOC_ID}, content="Before\n\n![Big](/tmp/qa
 
 **Result (2026-09-04) ✅ PASS**
 create_doc(folder_id, markdown with oversized local-path image) — write_doc_content itself lacks a folder override so create_doc used instead (same _apply_doc_content path). No top-level error; "Before"/"After" paragraphs both present. images[0].error contained "36.0 megapixels"/"25 megapixels", no fileId. No file uploaded to target folder. Trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -3056,6 +3533,11 @@ Tool call: `insert_local_images(doc_id={DOC_ID}, images=[{"marker": "IMGMARKERBI
 **Result (2026-09-04) ✅ PASS**
 Generated real ~76MB 4800x5000 (24.0MP, under 25MP pre-check) noise PNG. Main call (no auto_downscale): results[0] no fileId, error = "Image is 76.0MB, which exceeds ... 50MB limit ... auto_downscale=True" — pre-validation caught it before any upload; list_files confirmed nothing uploaded; marker unchanged. Follow-up call with auto_downscale=True: succeeded, fileId, downscaled:true; uploaded copy's size 47,361,943 bytes (~45.2MB), under 50MB — confirms the byte-size-driven shrink loop converges. Uploaded file trashed, fixture doc restored to seed state.
 
+**Result (2026-09-24) ✅ PASS — Kit, PR #801 round 2 (fix `4d5f842`, issue #560).** A 4800x5000 noise PNG (~76MB). Main call: "Image is 76.0MB, which exceeds… 50MB… auto_downscale=True", no `fileId`, nothing uploaded, marker unchanged. With `auto_downscale=True`: `fileId`, `downscaled: true`, uploaded copy 47,361,547 bytes (under 50MB). (See TC-DOC165's note: the first `auto_downscale` attempt batched with another image hit a transient Docs fetch error; alone and on retry it passed.) Uploads trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ## `update_doc_from_file` (#341)
@@ -3081,6 +3563,12 @@ Generated real ~76MB 4800x5000 (24.0MP, under 25MP pre-check) noise PNG. Main ca
 **Result (2026-09-04) ✅ PASS**
 update_doc_from_file(tc-d195-create-doc.md) on DOC_ID: returned docId matching DOC_ID, no error. get_doc_structure matches TC-DOC44's create_doc_from_file output exactly (HEADING_1, bold/italic runs, ☑/☐ items, Col A/Col B table). get_file_metadata before/after identical name/parents/webViewLink — doc identity/location preserved.
 
+**Result (2026-10-10) ✅ PASS — PR #961 (Sky)**
+update_doc_from_file(tc-d195-create-doc.md) on DOC_ID: docId matched, web_link present, no error. get_doc_structure matches TC-DOC44's output (HEADING_1, bold/italic, ☑/☐ items, Col A/Col B table). get_file_metadata before/after: same name/parents/webViewLink.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ### TC-DOC169: `update_doc_from_file` with a local .html file ⚠️ destructive
 **Prompt**
 > "Update Google Doc {DOC_ID} from the file <repo-root>/docs/qa/fixtures/tc-d196-create-doc.html"
@@ -3097,6 +3585,12 @@ update_doc_from_file(tc-d195-create-doc.md) on DOC_ID: returned docId matching D
 **Result (2026-09-04) ✅ PASS**
 update_doc_from_file(tc-d196-create-doc.html): docId matched, no error. get_doc_structure: HEADING_2 "From HTML file", paragraph "Content paragraph." — matches TC-DOC45.
 
+**Result (2026-10-10) ✅ PASS — PR #961 (Sky)**
+update_doc_from_file(tc-d196-create-doc.html): docId matched, no error. get_doc_structure: HEADING_2 "From HTML file", paragraph "Content paragraph."
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ### TC-DOC170: `update_doc_from_file` file not found
 **Prompt**
 > "Update Google Doc {DOC_ID} from the file ~/does-not-exist.md"
@@ -3110,6 +3604,12 @@ update_doc_from_file(tc-d196-create-doc.html): docId matched, no error. get_doc_
 
 **Result (2026-09-04) ✅ PASS**
 update_doc_from_file('~/does-not-exist.md') returned {"error":"File not found: ~/does-not-exist.md"}, no exception. get_doc_content confirmed doc unchanged (still HEADING_2/paragraph from DOC169).
+
+**Result (2026-10-10) ✅ PASS — PR #961 (Sky)**
+update_doc_from_file('~/does-not-exist.md') returned {"error": "File not found: ~/does-not-exist.md"}, no exception. get_doc_content unchanged.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ### TC-DOC171: `update_doc_from_file` unsupported extension with no override returns an error, doc untouched
 **Setup:** create a local file `qa-update.txt` with arbitrary plain text
@@ -3129,6 +3629,12 @@ update_doc_from_file('~/does-not-exist.md') returned {"error":"File not found: ~
 **Result (2026-09-04) ✅ PASS**
 update_doc_from_file(qa-update.txt, no override) returned {"error":"Unsupported file extension '.txt'. Use .md or .html/.htm, or pass content_format explicitly."}. get_doc_content confirmed doc untouched — no Docs API call made.
 
+**Result (2026-10-10) ✅ PASS — PR #961 (Sky)**
+update_doc_from_file(qa-update.txt) returned {"error": "Unsupported file extension '.txt'. Use .md or .html/.htm, or pass content_format explicitly."}. get_doc_content unchanged.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ### TC-DOC172: `update_doc_from_file` `content_format` explicitly overrides an unrecognized extension ⚠️ destructive
 **Setup:** create a local file `qa-update-override.txt` containing `# Overridden Heading\n\nParagraph text.\n`
 
@@ -3144,6 +3650,12 @@ update_doc_from_file(qa-update.txt, no override) returned {"error":"Unsupported 
 
 **Result (2026-09-04) ✅ PASS**
 update_doc_from_file(qa-update-override.txt, content_format='markdown') succeeded, no error. get_doc_structure: HEADING_1 "Overridden Heading", paragraph "Paragraph text." Fixture restored after.
+
+**Result (2026-10-10) ✅ PASS — PR #961 (Sky)**
+update_doc_from_file(qa-update-override.txt, content_format='markdown'): no error. get_doc_structure: HEADING_1 "Overridden Heading", paragraph "Paragraph text." Fixture restored to setup.md's seed HTML via write_doc_content afterward.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -3167,6 +3679,9 @@ update_doc_from_file(qa-update-override.txt, content_format='markdown') succeede
 **Result (2026-09-04) ✅ PASS**
 get_doc_as_markdown basic export: returned doc_id/title/markdown = "# Title\n\nSome **bold** and *italic* and ~~strike~~ text with a [link](https://example.com).\n\n" — exact match.
 
+**Result (2026-10-17) ❌ FAIL — v0.9.2 release pass**
+Stale TC: ~~strike~~ was never converted on write; the export correctly escapes the literal text as \~\~strike\~\~.
+
 ---
 
 ### TC-DOC174: Nested, ordered, and checked bullet lists
@@ -3188,6 +3703,9 @@ get_doc_as_markdown basic export: returned doc_id/title/markdown = "# Title\n\nS
 **Result (2026-09-04) ✅ PASS**
 Nested/ordered/checked lists export: markdown = "- top\n  - nested\n- [x] done\n- [ ] todo\n1. first\n1. second\n\n" — nested indented under top, checkboxes correct, ordered markers present (both "1." — valid CommonMark, numbering driven by first item), tight list (no blank line between items).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC175: Blockquote nesting
@@ -3207,6 +3725,9 @@ Nested/ordered/checked lists export: markdown = "- top\n  - nested\n- [x] done\n
 **Result (2026-09-04) ✅ PASS**
 Blockquote nesting export: markdown contains "> a quoted line" and "> > double quoted".
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC176: Inline code vs. fenced code block
@@ -3225,6 +3746,11 @@ Blockquote nesting export: markdown contains "> a quoted line" and "> > double q
 
 **Result (2026-09-04) ✅ PASS**
 Inline code vs fenced block: markdown = "See \`x\` inline.\n\n\`\`\`\nfull code block\n\`\`\`\n\n" — exact match.
+
+**Result (2026-10-07) ✅ PASS — regression check for PR #923 (`2b8da7a`).** Run against an isolated service-account sandbox on a Shared Drive, on a doc created with this case's setup content. `markdown` returned `"See \`x\` inline.\n\n\`\`\`\nfull code block\n\`\`\`\n\n"`, an exact match. Backtick-free inline code still gets a single-backtick fence.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -3247,6 +3773,9 @@ Inline code vs fenced block: markdown = "See \`x\` inline.\n\n\`\`\`\nfull code 
 **Result (2026-09-04) ✅ PASS**
 Colspan header table export: markdown = 2-column table "| Merged |  |\n| --- | --- |\n| a | b |" — correct, no phantom column (fix still holds).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC178: Nested table renders a placeholder, not silently dropped
@@ -3265,6 +3794,9 @@ Colspan header table export: markdown = 2-column table "| Merged |  |\n| --- | -
 
 **Result (2026-09-04) ✅ PASS**
 Nested table export: markdown contains "outer text" and placeholder "*(nested table omitted — Markdown tables can't contain a table; use get_doc_structure for full fidelity)*" in the same cell.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -3286,6 +3818,9 @@ Nested table export: markdown contains "outer text" and placeholder "*(nested ta
 **Result (2026-09-04) ✅ PASS**
 include_comments=True: markdown contains "## Comments", "please revise" + quoted "anchor text" present, "resolved note" absent (resolved excluded). Note: an unrelated stale open comment from this same shard's earlier TC-DOC97 run also appeared — pre-existing fixture-doc comment pollution, not a defect.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC180: `include_comments` omitted defaults to no Comments section
@@ -3299,6 +3834,9 @@ include_comments=True: markdown contains "## Comments", "please revise" + quoted
 
 **Result (2026-09-04) ✅ PASS**
 include_comments omitted: markdown has no "## Comments" section despite open comments existing on the doc.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -3314,22 +3852,36 @@ include_comments omitted: markdown has no "## Comments" section despite open com
 **Result (2026-09-04) ✅ PASS**
 get_doc_as_markdown('nonexistent-doc-id-xyz') returned clean {"error": "<HttpError 404 ...>"}, no traceback.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
-### TC-DOC182: `local_path` bypasses the response and writes to disk
+### TC-DOC182: `local_path` bypasses the response and writes the raw Markdown to disk
 **Prompt**
-> "Export doc {DOC_ID} as Markdown, writing the result to <path-to>/qa-md-export.json"
+> "Export doc {DOC_ID} as Markdown, writing the result to <path-to>/qa-md-export.md"
+
+Tool calls: `get_doc_as_markdown(doc_id={DOC_ID})`, then `get_doc_as_markdown(doc_id={DOC_ID}, local_path="<path-to>/qa-md-export.md")`.
 
 **Checks**
-- Returns `{local_path, doc_id, bytes_written}` (no inline `markdown` field in the response)
-- The file at `<path-to>/qa-md-export.json` exists and its `markdown` field round-trips the doc's actual content
+- The second call returns `{local_path, bytes_written, doc_id, title}` (no inline `markdown` field in the response)
+- The file at `<path-to>/qa-md-export.md` is plain Markdown, not a JSON object (#958): its bytes equal the first call's `markdown` field encoded as UTF-8 (e.g. `cmp` against that text saved to a scratch file), and `bytes_written` equals the file's size
 
-**Cleanup:** delete the local `qa-md-export.json` file
+**Cleanup:** delete the local `qa-md-export.md` file (and the scratch comparison file)
 
 **Result (2026-08-15) ✅ PASS — run live against PR #591 (issue #300).** Response was `{"local_path": ..., "bytes_written": 170, "doc_id": ...}` with no inline `markdown` field; the written file's `markdown` field matched the doc's actual content exactly.
 
 **Result (2026-09-04) ✅ PASS**
 local_path set: response {local_path, doc_id, bytes_written}, no inline markdown field. File content's markdown field matched doc's actual content exactly. Local file cleaned up.
+
+_Both results above predate #958, when the file held the JSON result envelope; re-run against the raw-Markdown checks._
+
+**Result (2026-10-11) ✅ PASS — Kit, PR #982 round 1 (`457c37b`).** Ran on a scratch doc (created with `create_doc`, trashed afterwards) instead of `{DOC_ID}`. It held non-ASCII text (`Café naïve — 日本語`, an emoji), quotes, bold, a bullet list, and one open comment, and every call used `include_comments=True`. The `local_path=".../qa-md-export.md"` call returned `{local_path, bytes_written: 184, doc_id, title}` with no `markdown` field. The file's bytes equaled the inline `markdown` field encoded as UTF-8, including the `## Comments` section, and `json.loads` on the file failed as expected. A directory `local_path` (without `include_comments`) wrote `<doc_id>.md` (111 bytes, no comments section). Regression check: `get_sheet_data(local_path=...)` still wrote a JSON file that parses. Local files deleted. Side observation, outside this case: the comment's quoted anchor `Café` came back as `Caf&#233;`, both in the export and in `add_doc_comment`'s echo.
+
+**Result (2026-10-11) ✅ PASS — Kit, PR #982 round 2 (`4f4fb99`).** Re-run after the write moved to `_write_atomically`, against the reconnected kit server, on a fresh scratch doc (trashed afterwards). `local_path` pointed at an existing `qa-md-export.md` holding `previous export`. The call returned `{local_path, bytes_written: 114, doc_id, title}`, and the file was replaced with bytes equal to the inline `markdown` (mode `0644`). A directory `local_path` wrote `<doc_id>.md` with the same bytes. A read-only (`0444`) existing target raised `Permission denied` and kept its old content. `get_sheet_data(local_path=)` still wrote parseable JSON. No `.gee-sweet-partial-*` temp file was left in the directory. Local files deleted.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -3350,6 +3902,9 @@ local_path set: response {local_path, doc_id, bytes_written}, no inline markdown
 **Result (2026-09-04) ✅ PASS**
 Rowspan export: markdown = "| Tall | b1 |\n| --- | --- |\n|  | b2 |\n\n" — b2 preserved in second column.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC184: Link URL containing unbalanced parentheses doesn't break the destination
@@ -3367,6 +3922,9 @@ Rowspan export: markdown = "| Tall | b1 |\n| --- | --- |\n|  | b2 |\n\n" — b2 
 
 **Result (2026-09-04) ✅ PASS**
 Link with unbalanced parens: markdown = "[link](<https://en.wikipedia.org/wiki/Foo_(bar)>)\n\n" — angle-bracket wrapped, exact match.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -3387,6 +3945,9 @@ Link with unbalanced parens: markdown = "[link](<https://en.wikipedia.org/wiki/F
 **Result (2026-09-04) ✅ PASS**
 Plain text resembling markers: markdown = "1\\. Not actually a list item\n\n\\# Not a heading either\n\n" — both escaped correctly.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC186: Image mixed into an all-Courier-New paragraph is not dropped (#594)
@@ -3406,6 +3967,9 @@ Plain text resembling markers: markdown = "1\\. Not actually a list item\n\n\\# 
 
 **Result (2026-09-04) ✅ PASS**
 Image + code in all-Courier-New paragraph: markdown contains an image reference followed by a fenced code block wrapping "x = 1", image before code block (source order) — not dropped.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
 
 ---
 
@@ -3430,6 +3994,9 @@ Fix (round 2): `_render_cell` now converts `\n` → `<br>` *before* calling `.st
 **Result (2026-09-04) ✅ PASS**
 Mid-cell blank spacer (double <br>): markdown = "| Line 1<br><br>Line 2 |\n| --- |\n\n" — double <br> preserved, spacer not collapsed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ### TC-DOC188: Blank spacer paragraph at a cell's leading/trailing edge is preserved (#594 round 2)
@@ -3449,6 +4016,351 @@ Mid-cell blank spacer (double <br>): markdown = "| Line 1<br><br>Line 2 |\n| ---
 **Result (2026-09-04) ✅ PASS**
 Edge spacers (single <br> each): markdown = "| Trailing test<br> |\n| --- |\n| <br>Leading test |\n\n" — both leading/trailing spacers survive exactly.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+---
+
+### TC-DOC204: Inline code containing backticks gets a longer fence and renders back to its original text (#936)
+**Setup:** raw HTML via `write_doc_content(doc_id={DOC_ID}, content_format='html', content="<p>see <code>call(`value`)</code></p><p>see <code>`leading</code></p><p>see <code>trailing`</code></p><p>see <code>``nested``</code></p><p>see <code>plain</code></p>")`
+
+**Prompt**
+> "Export doc {DOC_ID} as Markdown"
+
+**Checks**
+- `markdown` contains `` see ``call(`value`)`` ``, a two-backtick fence around content with a one-backtick run
+- `markdown` contains ``` see `` `leading `` ``` and ``` see `` trailing` `` ```. The content has a backtick at the edge, so it's padded with one space on each side
+- `markdown` contains ```` see ``` ``nested`` ``` ````, a three-backtick fence around a two-backtick run, padded
+- `markdown` contains `` see `plain` `` (regression: backtick-free code is unchanged)
+- Rendering each paragraph with a CommonMark renderer (e.g. Python `markdown`) gives a `<code>` element whose text is exactly the original: `` call(`value`) ``, `` `leading ``, `` trailing` ``, ``` ``nested`` ```, `plain`
+
+**Cleanup:** write fixture content back over `{DOC_ID}`
+
+**Result (2026-10-07) ✅ PASS — run live against PR #923 (`2b8da7a`).** Run against an isolated service-account sandbox on a Shared Drive, on a doc written with the setup HTML (combined in one write with TC-DOC205's paragraphs). The relevant paragraphs of `markdown` were `"see ``call(`value`)``\n\nsee `` `leading ``\n\nsee `` trailing` ``\n\nsee ``` ``nested`` ```\n\n…see `plain`\n\n"`, matching each check. Each paragraph rendered with Python `markdown` gave a `<code>` element with exactly the original text.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+---
+
+### TC-DOC205: A link on an inline code run containing backticks wraps the code span and keeps its destination (#936)
+**Setup:** raw HTML via `write_doc_content(doc_id={DOC_ID}, content_format='html', content=...)` with one paragraph per TC-DOC204 input, each code run wrapped in a link: `<p>see <a href="https://example.com/code"><code>call(`value`)</code></a></p>`, and likewise for `` `leading ``, `` trailing` ``, ``` ``nested`` ```
+
+**Prompt**
+> "Export doc {DOC_ID} as Markdown"
+
+**Checks**
+- Each paragraph renders as `see [<span>](https://example.com/code)`, where `<span>` is the same fenced code span TC-DOC204 expects for that input
+- Rendering each paragraph with a CommonMark renderer gives an `<a href="https://example.com/code">` containing a `<code>` element whose text is exactly the original
+
+**Cleanup:** write fixture content back over `{DOC_ID}`
+
+**Result (2026-10-07) ✅ PASS — run live against PR #923 (`2b8da7a`).** Same doc and environment as TC-DOC204. `markdown` returned `"see [``call(`value`)``](https://example.com/code)\n\nsee [`` `leading ``](https://example.com/code)\n\nsee [`` trailing` ``](https://example.com/code)\n\nsee [``` ``nested`` ```](https://example.com/code)"`. Rendered with Python `markdown`, each paragraph had an `<a>` with `href="https://example.com/code"` wrapping a `<code>` with exactly the original text.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+---
+
+### TC-DOC206: Inline code keeps a space at both ends, and adjacent code runs export as one span (#938)
+**Setup:** raw HTML via `write_doc_content(doc_id={DOC_ID}, content_format='html', content="<p>pad <code> both ends </code> end</p><p>adj <code>x`</code><b><code>`y</code></b> end</p>")`. The bold change splits the second paragraph's code into two Courier New runs.
+
+**Prompt**
+> "Export doc {DOC_ID} as Markdown"
+
+**Checks**
+- `markdown` contains ``pad `  both ends  ` end``: one extra space a side, since CommonMark strips one space from each end when both ends have one
+- `markdown` contains ```` adj ```x``y``` end ````: the two runs merge into one span, with a three-backtick delimiter around the two-backtick run
+- Rendering `markdown` with a strict CommonMark renderer (e.g. `markdown-it-py`'s `commonmark` preset, not Python `markdown`, which strips code-span whitespace) gives `<code> both ends </code>` and `<code>x``y</code>`
+
+**Cleanup:** write fixture content back over `{DOC_ID}`
+
+**Result (2026-10-10) ✅ PASS — Kit, PR #968 round 1 (`d2449f7`).** `get_doc_as_markdown` returned ``pad `  both ends  ` end\n\nadj ```x``y``` end``. markdown-it-py 4.2.0's `commonmark` preset rendered `<code> both ends </code>` and `<code>x``y</code>`. Fixture content was written back.
+
+**Result (2026-10-10) ✅ PASS — Kit, PR #968 round 2 (`759362a`).** Re-run because the fix changed `_render_run`. Output was identical to round 1. Fixture content was written back.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+---
+
+### TC-DOC207: Inline code in a table cell keeps a literal `|` and puts line breaks outside the code (#938)
+**Setup:** raw HTML via `write_doc_content(doc_id={DOC_ID}, content_format='html', content="<table><tr><td>Head</td></tr><tr><td>pipe <code>a|b</code> and a|b</td></tr><tr><td><code>x</code><br><code>y|z</code></td></tr></table>")`. The last cell has two code-styled paragraphs.
+
+**Prompt**
+> "Export doc {DOC_ID} as Markdown"
+
+**Checks**
+- `markdown` contains the row `| pipe <code>a&#124;b</code> and a\|b |`: the code's pipe is an HTML entity inside raw `<code>`, with no backslash, and the plain-text pipe is still escaped
+- `markdown` contains the row `` | `x`<br><code>y&#124;z</code> | ``: the cell's paragraph break is a `<br>` between two code elements, not inside one
+- Rendering `markdown` with a GFM-table renderer (e.g. `markdown-it-py`'s `commonmark` preset with `table` enabled) gives a one-column table whose cells contain `<code>a|b</code>` and `<code>x</code><br><code>y|z</code>`. No cell shows a backslash
+
+Not covered live: a soft break (Shift+Enter) inside an inline code run in a paragraph that also has plain text. No tool can build one (`style_doc_range` doesn't set a font), so unit tests cover it (`TestInlineCodeCommonMark::test_newline_in_inline_code_does_not_start_a_new_block`).
+
+**Cleanup:** write fixture content back over `{DOC_ID}`
+
+**Result (2026-10-10) ✅ PASS (checks as written); ❌ probe beyond the case — Kit, PR #968 round 1 (`d2449f7`).** `get_doc_as_markdown` returned both expected rows exactly: `| pipe <code>a&#124;b</code> and a\|b |` and `` | `x`<br><code>y&#124;z</code> | ``. markdown-it-py's `commonmark` preset with `table` enabled rendered a one-column table with `<code>a|b</code>` and `<code>x</code><br><code>y|z</code>`, and no backslash. Probe: a cell with code `a|*b* _c_` exported as `<code>a&#124;*b* _c_</code>`, which renders `<em>` inside the `<code>`. A cell with code `C:\|x` exported as `<code>C:\&#124;x</code>`, which renders as `C:&amp;#124;x`. Both are sent back on the PR. Fixture content was written back.
+
+**Result (2026-10-10) ✅ PASS — Kit, PR #968 round 2 (`759362a`).** Re-run because the fix changed the table-cell `<code>` path. Both expected rows came back exactly, and the render was the same as round 1. The round 1 probe is now TC-DOC208, which passes. Fixture content was written back.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+---
+
+### TC-DOC208: Markdown punctuation inside table-cell `<code>`, linked code after a cell break, and HTML-like plain text all export literally (#938)
+**Setup:** raw HTML via `write_doc_content(doc_id={DOC_ID}, content_format='html', content=...)` with this content. The `\` in `C:\|x` is one literal backslash character.
+
+```html
+<table><tr><td>Head</td></tr><tr><td><code>a|*b* _c_</code></td></tr><tr><td><code>C:\|x</code></td></tr><tr><td><code>x</code><br><a href="https://example.com/b"><code>b</code></a></td></tr></table><p>Use &lt;br&gt; or &amp;#124; and ~~old~~, AT&amp;T a &lt; b</p>
+```
+
+**Prompt**
+> "Export doc {DOC_ID} as Markdown"
+
+**Checks**
+- `markdown` contains the row `| <code>a&#124;&#42;b&#42; &#95;c&#95;</code> |`: every punctuation character inside raw `<code>` is a numeric entity
+- `markdown` contains the row `| <code>C&#58;&#92;&#124;x</code> |`: the backslash is an entity too, so it can't escape the pipe's `&`
+- `markdown` contains the row `` | `x`<br>[`b`](https://example.com/b) | ``: the `<br>` from the cell's paragraph break is outside the link
+- `markdown` contains the paragraph `Use \<br> or \&#124; and \~\~old\~\~, AT&T a < b`: `<` before a tag, `&` starting an entity, and `~` are escaped; `AT&T` and `a < b` are not
+- Rendering `markdown` with `markdown-it-py`'s `commonmark` preset with `table` enabled gives cells `<code>a|*b* _c_</code>`, `<code>C:\|x</code>`, and `<code>x</code><br><a href="https://example.com/b"><code>b</code></a>`, with no `<em>` inside any `<code>`, and the paragraph renders as literal text (no line break, no `|`, no strikethrough)
+
+**Cleanup:** write fixture content back over `{DOC_ID}`
+
+**Result (2026-10-10) ✅ PASS — Kit, PR #968 round 2 (`759362a`).** `get_doc_as_markdown` returned all four expected lines exactly. markdown-it-py 4.2.0 (`commonmark` + `table` + `strikethrough`) rendered the cells `<code>a|*b* _c_</code>`, `<code>C:\|x</code>`, and `<code>x</code><br><a href="https://example.com/b"><code>b</code></a>`, and the paragraph `Use &lt;br&gt; or &amp;#124; and ~~old~~, AT&amp;T a &lt; b`, with no `<em>`, `<del>`, or line break. Fixture content was written back.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+### TC-DOC209: A linked code-only paragraph and linked images keep their links on export (#951)
+**Background:** a fenced block's content is literal, so an all-code paragraph with a linked run used to export as a plain fence and drop the URL. Linked images lost their link everywhere, because the read side never read the image element's own `textStyle.link`. The write side can't create a linked image, so steps 2–3 link the images with `style_doc_range`.
+
+**Setup:**
+1. `write_doc_content(doc_id={DOC_ID}, content_format='html', content=...)` with:
+   ```html
+   <p><a href="https://pypi.org/project/pkg/"><code>pkg</code></a></p><p><code>x = 1</code><img src="https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png"></p><p><img src="https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png"></p>
+   ```
+2. `get_doc_structure(doc_id={DOC_ID})` and note each image's index: in the second paragraph, the position right after `x = 1` (`{IMG1}`); the third paragraph's `startIndex` (`{IMG2}`).
+3. `style_doc_range(doc_id={DOC_ID}, ranges=[{"start_index": {IMG1}, "end_index": {IMG1}+1, "link_url": "https://example.com/in-code"}, {"start_index": {IMG2}, "end_index": {IMG2}+1, "link_url": "https://example.com/plain"}])`
+
+**Prompt**
+> "Export doc {DOC_ID} as Markdown"
+
+**Checks**
+- `markdown` starts with `` [`pkg`](https://pypi.org/project/pkg/) ``, an inline code span inside a link, not a ```` ``` ```` fence
+- The second paragraph still exports as a fence: ```` ``` ````, `x = 1`, ```` ``` ````, followed by a separate line `[![](<contentUri>)](https://example.com/in-code)`
+- The third paragraph is `[![](<contentUri>)](https://example.com/plain)`
+- Rendering `markdown` with `markdown-it-py`'s `commonmark` preset gives `<a href="https://pypi.org/project/pkg/"><code>pkg</code></a>`, one `<pre><code>x = 1` block, and two `<a>` elements each wrapping an `<img>`, with the hrefs above
+
+**Cleanup:** write fixture content back over `{DOC_ID}`
+
+**Result (2026-10-10) ✅ PASS — Kit, PR #976 round 1 (`3dbd257`).** Ran on a scratch doc (created with `create_doc`, trashed afterwards) instead of `{DOC_ID}`, to stay off the shared fixture. Images landed at indices 10 and 12. `get_doc_as_markdown` returned `` [`pkg`](https://pypi.org/project/pkg/) ``, a ```` ``` ```` fence holding `x = 1`, then `[![](<contentUri>)](https://example.com/in-code)` and `[![](<contentUri>)](https://example.com/plain)` as separate paragraphs. markdown-it-py `commonmark` rendered `<a href="https://pypi.org/project/pkg/"><code>pkg</code></a>`, one `<pre><code>x = 1`, and two `<a>` elements each wrapping an `<img>` with the expected hrefs. Off-script probe on the same doc: a fenced two-line block (`a`, `b`) with only its soft break linked (`style_doc_range` over that one index) exported as `` `a`<br>`b` ``, with no fence and no link (sent back in round 1).
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+### TC-DOC210: A code block whose only link is on its soft break keeps its fence (PR #976 QA round 1)
+**Background:** a link covering only a code block's line break (selecting a whole line in the UI can do this) renders as no link at all. It used to cost the paragraph its fence anyway, so the block exported as `` `a`<br>`b` `` with no link.
+
+**Setup:**
+1. `write_doc_content(doc_id={DOC_ID}, content_format='html', content='<pre>a\nb</pre>')`, with a real newline between `a` and `b`
+2. `get_doc_structure(doc_id={DOC_ID})` and note the code paragraph's `startIndex` (`{P}`). The soft break sits at `{P}+1`.
+3. `style_doc_range(doc_id={DOC_ID}, ranges=[{"start_index": {P}+1, "end_index": {P}+2, "link_url": "https://example.com/br"}])`
+
+**Prompt**
+> "Export doc {DOC_ID} as Markdown"
+
+**Checks**
+- `markdown` starts with ```` ```\na\nb\n``` ````: one fence holding both lines, no `<br>`, no backtick span. Trailing newlines after the fence come from the doc's empty last paragraph and aren't part of the check.
+
+**Cleanup:** write fixture content back over `{DOC_ID}`
+
+**Result (2026-10-10) ✅ PASS — Kit, PR #976 round 2 (`fcf45d8`).** Ran on a scratch doc (created with `create_doc`, trashed afterwards). `{P}` was 1, so the link went on index 2. `get_doc_as_markdown` returned ```` ```\na\nb\n```\n\n ````: one fence, no `<br>`, no backtick span. The same setup exported `` `a`<br>`b` `` in round 1. The check said "exactly" and didn't allow the trailing `\n\n`, which every export has, so its wording was loosened.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+### TC-DOC211: Links to a heading in the same doc export as working URLs, on text and on an image (PR #976 QA round 1)
+**Background:** Docs reports a link made with the UI's "Headings" picker as `{"headingId": ...}`, with no `url`, on a text run and an image alike. These links used to export with no link. `style_doc_range`'s `link_url` always writes a plain `url`, so step 3 makes the links through the Docs UI.
+
+**Setup:**
+1. `write_doc_content(doc_id={DOC_ID}, content_format='html', content='<h1>Target</h1><p>jump <img src="https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png"></p>')`
+2. `get_doc_structure(doc_id={DOC_ID})` and note the heading's `headingId` (`{HID}`)
+3. With Playwright, open the doc, select the word `jump`, press Ctrl+K (Cmd+K on macOS), and pick the `Target` heading from the link dialog's "Headings" list. Then click the image and link it to `Target` the same way.
+
+**Prompt**
+> "Export doc {DOC_ID} as Markdown"
+
+**Checks**
+- `markdown` contains `[jump](https://docs.google.com/document/d/{DOC_ID}/edit?tab=t.0#heading={HID})`. The tab may differ from `t.0` if the UI recorded one, but the `#heading={HID}` fragment must match.
+- `markdown` contains `[![](<contentUri>)](https://docs.google.com/document/d/{DOC_ID}/edit?tab=t.0#heading={HID})`, with the same tab caveat
+- Opening the exported `jump` URL in Playwright lands on the `Target` heading
+
+**Cleanup:** write fixture content back over `{DOC_ID}`
+
+**Result (2026-10-10) ✅ PASS — Kit, PR #976 round 2 (`fcf45d8`).** Ran on the same scratch doc as TC-DOC210 (trashed afterwards). The Playwright profile was signed into the fixture-owning account: the page title matched the doc name. `{HID}` was `h.ys7n1h73fcgv`. Step 3 in practice: double-click `jump` to select it. Cmd+K opens a dialog whose list already shows the heading (`Tт Target`), with no need to go through "Headings, bookmarks, and tabs". Click that dialog option, `li[role=option]`, not the left sidebar's `Target` outline entry: the outline entry only navigates, and clicking it first linked nothing. Then click the image and repeat. `get_doc_as_markdown` returned `[jump](https://docs.google.com/document/d/{DOC_ID}/edit?tab=t.0#heading=h.ys7n1h73fcgv) [![](<contentUri>)](…same URL…)`. Navigating to that URL opened the doc with the cursor at the start of `Target` (toolbar showed Heading 1).
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+### TC-DOC212: Text ending in `!` right before a link exports as text plus a link, not as an image (#969)
+**Background:** each run is rendered on its own, so `wow!` followed by a linked `x` exported as `wow![x](https://example.com/a)`, which CommonMark reads as an image: the link becomes an `<img>` and the `!` disappears. Linked code (`` wow![`y`](...) ``) and table cells did the same.
+
+**Setup:**
+1. `write_doc_content(doc_id={DOC_ID}, content_format='html', content=...)` with:
+   ```html
+   <p>wow!<a href="https://example.com/a">x</a></p><p>hey!<a href="https://example.com/b"><code>y</code></a></p><p>fine! plain</p><table><tr><td>cell!<a href="https://example.com/c">z</a></td></tr><tr><td>b</td></tr></table>
+   ```
+
+**Prompt**
+> "Export doc {DOC_ID} as Markdown"
+
+**Checks**
+- `markdown` contains `wow\![x](https://example.com/a)` and `` hey\![`y`](https://example.com/b) ``
+- `markdown` contains `fine! plain`, with no backslash: a `!` that isn't right before a link is left alone
+- The table's first cell is `cell\![z](https://example.com/c)`
+- Rendering `markdown` with `markdown-it-py`'s `commonmark` preset (with `table` enabled) gives `wow!<a href="https://example.com/a">x</a>`, `hey!<a href="https://example.com/b"><code>y</code></a>`, and `cell!<a href="https://example.com/c">z</a>`, and no `<img>` anywhere
+
+**Cleanup:** write fixture content back over `{DOC_ID}`
+
+**Result (2026-10-10) ✅ PASS — Kit, PR #981 round 1 (`307e47c`).** Ran on a scratch doc (created with `create_doc` from the setup HTML, trashed afterwards) instead of `{DOC_ID}`. `get_doc_as_markdown` returned `wow\![x](https://example.com/a)`, `` hey\![`y`](https://example.com/b) ``, `fine! plain`, and the cell `cell\![z](https://example.com/c)`. markdown-it-py `commonmark` + `table` rendered `wow!<a href="https://example.com/a">x</a>`, `hey!<a href="https://example.com/b"><code>y</code></a>`, `fine! plain`, and `cell!<a href="https://example.com/c">z</a>`, with no `<img>`. Off-script probe on the same doc: `a <b> text` and `AT&amp;T` written as one run each, with `style_doc_range` setting `foreground_color` on `b> text` and `amp;T` to split each into two runs. Export was `a <b> text` (a raw HTML tag in CommonMark) and `AT&amp;T` (renders `AT&T`). As single runs, the same text exports escaped (`a \<b> text`, `AT\&amp;T`). Sent back in round 1.
+
+**Result (2026-10-10) ✅ PASS — Kit, PR #981 round 2 (`b2bfafe`).** Re-run after the fix rewrote `_join_inline`'s `!` check into the shared `_BOUNDARY_SYNTAX` table, on a scratch doc (trashed afterwards). The export was byte-identical to round 1's: `wow\![x](https://example.com/a)`, `` hey\![`y`](https://example.com/b) ``, `fine! plain`, and `cell\![z](https://example.com/c)`.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+### TC-DOC214: `<` and `&` split from the rest of a tag or entity by a color change still export literally (PR #981 QA round 1)
+**Background:** `<` is escaped only when a tag or autolink could follow it, and `&` only when an entity could. Each run was escaped on its own, so a run boundary right after the `<` or `&` hid what followed. A color change splits a run without changing anything Markdown renders, so `a <b> text` exported as a raw `<b>` tag and `AT&amp;T` as the entity for `&`.
+
+**Setup:**
+1. `write_doc_content(doc_id={DOC_ID}, content_format='html', content='<p>a &lt;b&gt; text</p><p>AT&amp;amp;T</p><p>see &lt;https://x.io&gt;</p><p>a &lt; b and AT&amp;T</p>')`
+2. `find_in_doc(doc_id={DOC_ID}, query="b> text")`, `find_in_doc(doc_id={DOC_ID}, query="amp;T")`, and `find_in_doc(doc_id={DOC_ID}, query="https://x.io>")`, noting each match's `start_index`/`end_index`
+3. `style_doc_range(doc_id={DOC_ID}, ranges=[...])` with one range per match from step 2, each with `"foreground_color": {"red": 1, "green": 0, "blue": 0}`
+
+**Prompt**
+> "Export doc {DOC_ID} as Markdown"
+
+**Checks**
+- `markdown` contains `a \<b> text`, `AT\&amp;T`, and `see \<https://x.io>`
+- `markdown` contains `a < b and AT&T` unchanged: a `<` or `&` that can't start syntax stays unescaped
+- Rendering `markdown` with `markdown-it-py`'s `commonmark` preset gives `a &lt;b&gt; text`, `AT&amp;amp;T`, and `see &lt;https://x.io&gt;` as paragraph text, with no `<b>` tag and no `<a>`
+
+**Cleanup:** write fixture content back over `{DOC_ID}`
+
+**Result (2026-10-10) ✅ PASS — Kit, PR #981 round 2 (`b2bfafe`).** Ran on a scratch doc (created with `create_doc` from the step 1 HTML, trashed afterwards) instead of `{DOC_ID}`. Step 2 used one `find_in_doc(regex=True)` call for all three queries: matches at 4–11, 15–20 and 26–39. After step 3, `get_doc_structure` showed each of the first three paragraphs as two runs split at the `<`/`&` (`a <` | `b> text`, `AT&` | `amp;T`, `see <` | `https://x.io>`). `get_doc_as_markdown` returned `a \<b> text`, `AT\&amp;T`, `see \<https://x.io>`, and `a < b and AT&T` unchanged. markdown-it-py `commonmark` rendered `a &lt;b&gt; text`, `AT&amp;amp;T`, `see &lt;https://x.io&gt;`, and `a &lt; b and AT&amp;T`, with no `<b>` and no `<a>`. Round 1 got `a <b> text` and `AT&amp;T` unescaped from the same kind of split, on pre-fix code (`307e47c`).
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+
+### TC-DOC216: A linked image written as Markdown or HTML keeps its link and round-trips (#977) ⚠️ requires-oauth
+**Background:** the write side built a linked image with no link, so `[![alt](src)](url)` and `<a href><img></a>` imported as a plain image and didn't round-trip with TC-DOC209's export. The image now gets its link through an `updateTextStyle` over its one-character range, right after its insert. That request has to stay paired with the image when an unreachable image is dropped and retried, and a `#slug` image link goes through the heading-anchor pass.
+
+**Setup:** none. Each step uses a scratch doc.
+
+**Prompt**
+**Playwright: required** (each linked image is clickable to its URL in the rendered doc; the unlinked one isn't)
+1. `create_doc(title="TC-DOC216 md", folder_id={FOLDER_ID}, content_format='markdown', content=...)` with:
+   ```markdown
+   # Overview
+
+   Before [![Logo](https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png)](https://example.com/one) and [linked text](https://example.com/t)![Plain](https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png)
+
+   Jump: [![A](https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png)](#overview) and [![B](https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png)](#missing)
+
+   | a | b |
+   |---|---|
+   | 1 | 2 |
+
+   [![C](https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png)](https://example.com/after-table)
+   ```
+2. `get_doc_as_markdown(doc_id=<step 1 docId>)`
+3. `create_doc(title="TC-DOC216 retry", folder_id={FOLDER_ID}, content_format='html', content=...)` with:
+   ```html
+   <p><a href="https://example.com/b1"><img src="https://example.invalid/nope.png?1"></a></p><p>x <a href="https://example.com/good"><img src="https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png"></a> y</p><p><a href="https://example.com/b2"><img src="https://example.invalid/nope.png?2"></a></p>
+   ```
+4. `get_doc_as_markdown(doc_id=<step 3 docId>)`
+5. `create_doc(title="TC-DOC216 adjacent", folder_id={FOLDER_ID}, content_format='html', content=...)` with (raw HTML, the first image wrapped in a top-level `<a>` with no `<p>`):
+   ```html
+   <a href="https://example.com/top"><img src="https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png" width="100"></a><p>x <a href="https://example.com/first"><img src="https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png" width="40"></a><a href="https://example.com/second"><img src="https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png" width="80"></a><img src="https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png" width="120"> y</p>
+   ```
+6. `get_doc_as_markdown(doc_id=<step 5 docId>)`
+7. `create_doc(title="TC-DOC216 nested anchor", folder_id={FOLDER_ID}, content_format='html', content=...)` with an href-less `<a name>` nested inside each linked anchor (#994):
+   ```html
+   <a href="https://example.com/bare"><a name="n1"></a><img src="https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png"></a><p><a href="https://example.com/block"><a name="n2"></a>tail<img src="https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png"></a> after</p>
+   ```
+8. `get_doc_as_markdown(doc_id=<step 7 docId>)`
+
+**Checks**
+- Step 2: `[![](<contentUri>)](https://example.com/one)`
+- Step 2: `[linked text](https://example.com/t)` is followed by an unlinked `![](<contentUri>)`, not one inside the link
+- Step 2: image `A` links to `https://docs.google.com/document/d/<docId>/edit?tab=t.0#heading=<headingId>`, the `Overview` heading. Image `B` is unlinked, its `#missing` link stripped
+- Step 2: the image after the table is `[![](<contentUri>)](https://example.com/after-table)`
+- Step 3: `images` reports an `error` for both `example.invalid` sources and none for the Google logo
+- Step 4: the only image is `[![](<contentUri>)](https://example.com/good)`, between `x` and `y`. No text character carries `b1`'s or `b2`'s link
+- Step 6: the first paragraph is the top-level image alone, as `[![](<contentUri>)](https://example.com/top)`
+- Step 6: the second paragraph is `x `, `[![](<contentUri>)](https://example.com/first)`, `[![](<contentUri>)](https://example.com/second)`, an unlinked `![](<contentUri>)`, then ` y`, in that order. Playwright: in the step 5 doc's editor the three inline images get wider left to right (40, 80, 120px source widths), which confirms the order independently of the links
+- Step 8: the first paragraph is `[![](<contentUri>)](https://example.com/bare)`. The second is `[tail](https://example.com/block)`, then `[![](<contentUri>)](https://example.com/block)`, then an unlinked ` after`: the nested `<a name>` doesn't end the outer link
+
+**Cleanup:** `delete_file` all four scratch docs
+
+**Result (2026-10-11) ✅ PASS — Sky, PR #992 round 1 (`6aa4dac`).** Step 2: `Logo` came back as `[![](<contentUri>)](https://example.com/one)`. `[linked text](https://example.com/t)` was followed by an unlinked `![](<contentUri>)`. `A` linked to `.../edit?tab=t.0#heading=h.…` (the `Overview` heading), and `B` was unlinked. The image after the table kept `https://example.com/after-table`. Step 3: `images` reported an `error` for both `example.invalid` sources and none for the logo. Step 4: the only image was `[![](<contentUri>)](https://example.com/good)` between `x` and `y`, and no text carried `b1`'s or `b2`'s link. Playwright, clicking each image in the step 1 doc's editor: `Logo` and the after-table image each showed a link chip for `https://example.com/…`, and `A`'s chip showed `Overview`. The unlinked image and `B` showed no link chip. The `/mobilebasic` HTML view isn't a substitute: it renders the text link but never wraps an image in `<a>`. A separate probe, `[![first](…)](https://example.com/first)[![second](…)](https://example.com/second)`, exported as `second` then `first`: adjacent images are written in reverse order. Each kept its own link.
+
+**Result (2026-10-11) ✅ PASS — Sky, PR #992 round 2 (`3a506f4`).** Re-ran step 3 (the retry, now pairing each image with its link by identity) and the new step 5. Step 4: the only image was `[![](<contentUri>)](https://example.com/good)` between `x` and `y`, and no text carried `b1`'s or `b2`'s link. Step 6: the first paragraph was the top-level image alone, as `[![](<contentUri>)](https://example.com/top)`. The second paragraph was `x `, `…(https://example.com/first)`, `…(https://example.com/second)`, an unlinked image, then ` y`. Playwright: in the step 5 doc's editor the three inline images got wider left to right, and the top image's link chip showed `https://example.com/…`. Steps 1–2 weren't re-run: the fix commit doesn't change that path beyond the sort, which step 5 covers.
+
+**Result (2026-10-11) ✅ PASS — Sky, PR #992 round 3 (`9271dfe`).** Ran the new step 7. Step 8: the first paragraph was `[![](<contentUri>)](https://example.com/bare)`, and the second was `[tail](https://example.com/block)`, then `[![](<contentUri>)](https://example.com/block)`, then an unlinked ` after`. The fix commit only touches `html_parser.py`'s anchor handling, so steps 1–6 weren't re-run.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+### TC-DOC220: A literal fence line inside a code block doesn't close its export fence (PR #940) ⚠️ requires-oauth
+**Background:** a code-block paragraph used to export inside a fixed three-backtick fence, so a content line of three or more backticks closed the block early and everything after it fell out as ordinary Markdown. The fence is now one longer than the longest backtick run in the content, with a minimum of three.
+
+**Setup:** none. Each step uses a scratch doc.
+
+**Prompt**
+1. `create_doc(title="TC-DOC220 three", folder_id={FOLDER_ID}, content='<pre>before\n```\nafter</pre>')`, with real newlines inside the `<pre>`
+2. `get_doc_as_markdown(doc_id=<step 1 docId>)`
+3. Repeat steps 1–2 with a middle line of four backticks, then of six
+4. Repeat steps 1–2 with `<pre>x = 1\ny = 2</pre>`, which has no backticks
+
+**Checks**
+- Step 2: `markdown` starts with ```````` ````\nbefore\n```\nafter\n```` ````````. A strict CommonMark renderer gives one `<pre><code>` holding exactly `before`, ```` ``` ````, `after`
+- Step 3: the fence is five backticks around the four-backtick line and seven around the six-backtick line. Each renders as one `<pre><code>` holding all three lines, with nothing after the literal line falling out of the block
+- Step 4: `markdown` starts with ```` ```\nx = 1\ny = 2\n``` ````, the plain three-backtick fence
+- Trailing newlines after the fence come from the doc's empty last paragraph and aren't part of any check
+
+**Cleanup:** `delete_file` all four scratch docs
+
+**Result (2026-10-13) ✅ PASS — post-merge live check, develop `6bf7961`.** Ran in an isolated service-account sandbox on a Shared Drive. The exports were ```````` ````\nbefore\n```\nafter\n````\n\n ````````, then the five- and seven-backtick equivalents, then ```` ```\nx = 1\ny = 2\n```\n\n ````. markdown-it-py 4.2.0's `commonmark` preset rendered each fenced block as one `<pre><code>` holding exactly the original lines. Control: the same renderer, given the pre-fix three-backtick fence around the step 1 content, ends the block after `before` and renders `after` as a paragraph. Scratch docs trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+### TC-DOC221: Code segments split by an inline image each get a fence sized to their own content (PR #940) ⚠️ requires-oauth
+**Background:** a code-block paragraph with an inline image exports as one fenced block per code segment, with the image between them. Since PR #940, each segment's fence is sized to its own backtick runs, so a literal fence line in one segment doesn't lengthen the other's.
+
+**Setup:**
+1. `create_doc(title="TC-DOC221", folder_id={FOLDER_ID}, content='<pre>before\n```\nmid\nafter</pre>')`, with real newlines inside the `<pre>`
+2. `get_doc_structure(doc_id=<docId>)` and note the code paragraph's `startIndex` (`{P}`). `mid` starts at `{P}+11`.
+3. `insert_inline_image(doc_id=<docId>, index={P}+11, uri="https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")`
+
+**Prompt**
+> "Export doc <docId> as Markdown"
+
+**Checks**
+- `markdown` is a four-backtick fence holding `before` and ```` ``` ````, then `![](<contentUri>)`, then a three-backtick fence holding `mid` and `after`, in that order
+- A strict CommonMark renderer gives `<pre><code>`, `<img>`, `<pre><code>`, with the literal ```` ``` ```` inside the first block and nothing outside a block except the image
+- The first block also ends with an empty line: the soft break before the image belongs to the first segment. That's how segments have always split (#594), not part of this case
+
+**Cleanup:** `delete_file` the scratch doc
+
+**Result (2026-10-13) ✅ PASS — post-merge live check, develop `6bf7961`.** Ran in an isolated service-account sandbox on a Shared Drive. `{P}` was 1, so the image went in at index 12. The export was ````````` ````\nbefore\n```\n\n````\n\n![](<contentUri>)\n\n```\nmid\nafter\n```\n\n `````````. markdown-it-py 4.2.0's `commonmark` preset rendered `<pre><code>before\n```\n\n</code></pre>`, the `<img>`, then `<pre><code>mid\nafter\n</code></pre>`. Scratch doc trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 ---
 
 ## Orphan fileId on inline-image sharing failure (#649)
@@ -3461,10 +4373,10 @@ Mirrors #420's fix in `drive/transfer.py` (see TC-D249/TC-D250 in `docs/qa/tests
 
 **Checks (unit test)**
 - `tests/test_docs_images.py::TestUploadAndShareImage::test_share_failure_after_create_returns_file_id` — `create()` succeeds, `permissions().create()` raises → result carries `file_id` alongside `error`
-- `tests/test_docs_images.py::TestUploadAndShareImage::test_metadata_fetch_failure_after_create_returns_file_id` — `create()` and `permissions().create()` succeed, `files().get()` raises → result still carries `file_id`
+- ~~`tests/test_docs_images.py::TestUploadAndShareImage::test_metadata_fetch_failure_after_create_returns_file_id`~~ — removed by #511: the post-share `files().get()` it exercised no longer exists (the link now comes back from `create()`); `test_does_not_refetch_web_content_link` guards that instead
 - `tests/test_docs_images.py::TestUploadAndShareImage::test_create_failure_returns_bare_error_no_file_id` — regression guard: when `create()` itself fails, no `file_id` key at all (nothing was created, so there's no orphan)
 - `tests/test_docs_images.py::TestInsertLocalImages::test_sharing_failure_reports_per_image_error_and_skips_doc_edit` (updated) and `test_downscaled_upload_share_failure_still_reports_file_id` (new) — both of `insert_local_images`'s upload paths (plain and auto_downscale) surface `fileId` in the per-image outcome entry on a sharing failure
-- `tests/test_docs_images.py::TestInsertLocalImages::test_missing_web_content_link_after_share_still_reports_orphan_file_id` (new, PR #652 QA round 1 finding 1) — `insert_local_images`'s plain path's *second* post-upload failure branch (`if not uri:` — upload and share both succeeded, webContentLink read-back empty) also surfaces `fileId` in the per-image outcome and still marks the folder cache dirty
+- `tests/test_docs_images.py::TestInsertLocalImages::test_missing_web_content_link_reports_orphan_file_id_without_sharing` (new, PR #652 QA round 1 finding 1) — `insert_local_images`'s plain path's *second* post-upload failure branch (`if not uri:` — the upload succeeded but Drive returned no webContentLink; since #511 this fails *before* sharing) also surfaces `fileId` in the per-image outcome and still marks the folder cache dirty
 - `tests/test_docs_images.py::TestInsertLocalImages::test_sharing_failure_orphan_still_marks_folder_cache_dirty` / `test_downscaled_upload_share_failure_still_reports_file_id` (cache assertion) — the folder-listing cache is still marked dirty for the orphan case, mirroring the cache-invalidation-gate fix PR #645's QA round found necessary for the identical shape in `transfer.py`
 - `tests/test_docs_content.py::TestResolveImageSource::test_local_upload_sharing_failure_returns_orphan_file_id` (new) — a local-path source's sharing failure (the true orphan case — the file was freshly created by this call) carries `file_id`
 - `tests/test_docs_content.py::TestResolveImageSource::test_local_upload_missing_web_content_link_returns_orphan_file_id` (new) — same local-path source, the missing-`webContentLink` branch, also carries `file_id`
@@ -3484,5 +4396,893 @@ Verification: fix diff is tightly scoped to the two named findings (no `/code-re
 
 **Result (2026-09-04) ➖ N/A**
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
 
 ---
+
+### TC-DOC190: Isolated depth>0 bullet run renders the correct nested glyph, not the disc (#439) ⚠️ destructive
+
+**Background:** `createParagraphBullets` assigns each covered paragraph `nestingLevel = (its leading-tab count) − (the minimum leading-tab count across the whole call's range)`. A contiguous same-preset `BulletItem` run whose every item sits at `depth > 0` with no `depth=0` sibling in that same call (e.g. TC-DOC104's Case 2 — a bare `<li>` with no text of its own, only a nested `<ul>` — where the empty parent `<li>` is dropped, leaving just the two `depth=1` children) therefore collapsed entirely to `nestingLevel 0`: the per-level indent was bumped so the items still *looked* nested, but the rendered bullet glyph was the depth-0 disc (●) instead of the depth-1 circle (○). PR #432's round-2 QA (TC-DOC104/106 results, 2026-07-27) flagged this and split it out as #439, non-blocking. Fixed in `emitter.py`'s deferred bullet pass: an isolated run is wrapped with a throwaway 0-tab anchor paragraph (insert `\n` at `run_start` → `createParagraphBullets` over the range extended by 1 → `deleteContentRange` the anchor), so the real items land at their true `nestingLevel` and its glyph. The anchor insert (+1) and delete (−1) cancel, leaving every position outside the run — later bullet runs, table/image inserts — exactly where an ordinary single call would.
+
+Because the anchor always contributes 0 tabs, this fix renders every isolated item at `nestingLevel == its own depth` exactly, with no clamp — a `min_depth == 2` run (Case 4 below: two levels of bare parent `<li>`s dropped, leaving only `depth=2` children) renders two indent tiers deep with no visible parent above it, not clamped to depth 1. This PR #711 QA round's own ad-hoc probe found that result but flagged it non-blocking/unverified-as-intended (see this test's original result below). Issue #714 settled the question: render at true depth is the intended, decided behavior — see the issue's decision comment. Case 4 below promotes that probe into a real, repeatable check.
+
+**Prompt**
+**Playwright: required**
+> "Write this HTML to doc {DOC_ID}: contents of docs/qa/fixtures/tc-doc104-nested-lists.html"
+
+**Checks**
+- Case 2's "Bare-nested child C1"/"C2" render with the **circle** (○) glyph — the same glyph as Case 1's "Child A1"/"Child A2" (also `depth=1`) elsewhere in the same doc — not the disc (●) glyph used at depth 0
+- Case 2's children stay visibly indented one level deeper than the (absent) parent (the TC-DOC104 checklist requirement — must not regress)
+- Case 1 / Case 3 nesting is unchanged from TC-DOC104's passing result: 3 distinct indentation levels in Case 1 (disc / circle / square), continuous numbering for "Ordered child B1"/"B2" and Case 3's "Top ordered 1"/"2"
+- Precise structural confirmation (complements the Playwright glyph check, since `get_doc_structure` still doesn't expose `nestingLevel` — see the tooling-gap note under TC-DOC106): a script-driven `documents().get()` shows "Bare-nested child C1"/"C2" with `bullet.nestingLevel == 1`, and that list's `listProperties.nestingLevels[1].glyphSymbol` is the circle — not `nestingLevel 0`
+- The isolated ordered sub-run is fixed the same way: Case 1's "Ordered child B1"/"B2" report `bullet.nestingLevel == 1` (glyph "a."/"b.", `NUMBERED_DECIMAL_ALPHA_ROMAN` level 1), not `nestingLevel 0` ("1."/"2." decimal)
+- Case 4 (`min_depth == 2`, #714): "Doubly-bare child D2a"/"D2b" report `bullet.nestingLevel == 2` — **not** `nestingLevel 0` or `1` — and that list's `listProperties.nestingLevels[2].glyphSymbol` is the square (■), the depth-2 glyph, matching Case 1's own Grandchild-A2a square at the same level. 🔍 Visual check: both items visibly render two indent tiers deep with no parent bullet above them.
+
+**Cleanup:** write fixture content back
+
+**Result (2026-09-08) ✅ PASS — run live against PR #711 (commit `a3d9baf`), script-driven `documents().get()` + Playwright visual check.** Wrote the fixture HTML to the fixtures doc via `write_doc_content` (batchUpdate accepted, no atomic-batch rejection). Live `documents().get()`:
+- Case 2 "Bare-nested child C1"/"C2" → `bullet.nestingLevel == 1`, `lists[listId].listProperties.nestingLevels[1].glyphSymbol == '○'` (circle) — the identical glyph symbol reported for Case 1's "Child A1"/"Child A2". **Not** `nestingLevel 0` / disc. Both items of the run correct (no first-item-merges-into-anchor regression).
+- Case 1 isolated ordered sub-run "Ordered child B1"/"B2" → `nestingLevel == 1`, `glyphType 'ALPHA'` / `glyphFormat '%1.'` ("a."/"b."). Not `nestingLevel 0` decimal.
+- Case 1 anchored nesting unchanged: Parent A/B `●` L0, Child A1/A2 `○` L1, Grandchild A2a `■` L2 — 3 distinct levels.
+- Case 3 unchanged: "Top ordered 1"/"Top ordered 2" both `nestingLevel 0` DECIMAL on one shared `listId` (continuous numbering), "Nested ordered 1.1"/"1.2" `nestingLevel 1` ALPHA.
+
+Playwright (fixtures doc temp-shared reader to the browser's Google identity for the screenshot, revoked immediately after — public `anyone` share is classifier-blocked; the browser profile authenticates as a different Google account than the QA MCP server, so it can't open server-owned fixture docs otherwise): "Bare-nested child C1"/"C2" visually render the hollow-circle glyph, indented one level, matching Case 1's A1/A2. B1/B2 render "a."/"b.". Three visible indent tiers in Case 1 (●/○/■). Case 3 numbers 1→(2)→3 with nested a./b.
+
+Pre-existing noise (not caused by this PR, already documented under TC-DOC104 round-1 result 2026-07-16 line ~1799 and TC-DOC106): the raw-HTML fixture's interstitial whitespace between `</li>` and `<ul>` produces standalone `nestingLevel 0` disc paragraphs containing only spaces ("    "). Reproduces identically on develop; TC-DOC106's markdown fixture has none. Out of scope for #439.
+
+Extra probes run live (fresh scratch docs, trashed after) to check the code-review's correctness hypotheses — all refuted:
+- Single-item isolated run `<ul><li><ul><li>only</li></ul></li></ul>` → `nestingLevel 1`, circle (not a no-op).
+- Isolated run as the *only* doc content → batchUpdate accepted; items `nestingLevel 1` circle; the terminal empty paragraph carries no bullet (no stray bullet on the segment-end newline).
+- Blockquote wrapping an isolated run → **both** items keep `borderLeft` + `indentStart` (blockquote style not stripped from the first item).
+- Isolated run immediately followed by a `<table>` → table lands at the same index it would with an ordinary depth-0-anchored run (anchor insert/delete are position-neutral).
+- `min_depth == 2` isolated run (`<ul><li><ul><li><ul><li>D2a</li>…`) → renders at absolute `nestingLevel 2` (square glyph, 108pt indent), i.e. two indent tiers with no visible parents. Issue #714 settled this as the intended, decided behavior (render at true depth, no clamp) rather than an open question — see Case 4 above and its own dated Result entry, which promotes this probe into a real, repeatable check against the checked-in fixture.
+
+**Result (2026-09-11) ✅ PASS — Case 4 (#714) run live against PR #731 (commit `a0c9b9d`), script-driven `documents().get()` + Playwright visual check.** Wrote the 4-case fixture HTML (including the new Case 4) to the fixtures doc via `write_doc_content`. `get_doc_structure` confirmed "Doubly-bare child D2a"/"D2b" both at `bullet.nestingLevel == 2` on their own `listId`. A follow-up script-driven `documents().get()` confirmed that list's `listProperties.nestingLevels[2].glyphSymbol == '■'` — the identical glyph symbol reported for Case 1's own Grandchild-A2a at the same level. Playwright (fixtures doc temp-shared reader for the screenshot, revoked immediately after): both items visibly render two indent tiers deep with no parent bullet above them, glyph is a filled square — screenshot at `docs/qa/screenshots/2026-09-11-tc-doc190-case4.png`. Cases 1–3 unaffected (spot-checked in the same `get_doc_structure` call: Case 1 still 3 distinct levels, Case 3 still continuous numbering). Fixture content written back to baseline afterward.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+---
+
+### TC-DOC191: A multi-line fenced code block stays one Docs paragraph, and round-trips as one fence (#719) ⚠️ requires-oauth
+
+**Background:** A markdown fenced code block with more than one line (`` ``` `` + N lines + `` ``` ``) converts to one `Paragraph` AST node whose `Run` text legitimately contains embedded `"\n"` characters — but the Docs API treats every `"\n"` in inserted text as a new paragraph boundary, so the block used to silently fragment into one `NORMAL_TEXT` paragraph per line. Creation itself still applied `Courier New` correctly to every fragment (confirmed live pre-fix via a raw `documents().get()`), but `get_doc_as_markdown`'s round-trip then re-rendered each fragment as its own separate one-line fence instead of one — reproducing identically for a plain (non-HTML) multi-line code block, not just the HTML-tag content the issue was originally filed against. Fixed by writing the block's internal line breaks as `"\v"` (the same soft-break convention `insert_softbreak_paragraph` already uses) instead of `"\n"`, with a matching reversal on the read side for any `Courier New`-styled run.
+
+**Setup:** `create_doc(title="TC-DOC191", content_format="markdown", content="Some text before.\n\n\`\`\`\n<ul>\n  <li>\n    <ul>\n      <li>Item D2a</li>\n    </ul>\n  </li>\n</ul>\n\`\`\`\n\nSome text after.")`
+
+**Checks**
+- `get_doc_structure({DOC_ID})` shows exactly **3** body paragraphs (plus the trailing empty one) — "Some text before.", one paragraph holding the entire multi-line `<ul>…</ul>` block, "Some text after." — not one paragraph per code line (8 separate `NORMAL_TEXT` paragraphs would mean the fragmentation bug is back)
+- `get_doc_as_markdown({DOC_ID})` returns the code content as **one** fenced block (`` ``` `` … `` ``` ``) containing all the original lines with their indentation intact — not multiple separate one-line fences
+- Repeat with a plain (non-HTML) multi-line code block — `content="\`\`\`\ndef foo():\n    return 1\n\`\`\`"` — same shape: 1 Docs paragraph, 1 fence back, confirming the fix isn't scoped to HTML-tag content specifically
+- A single-line fenced block (`` ``` ``\nx = 1\n`` ``` ``) is unaffected — still 1 paragraph, 1 fence back (no embedded `"\n"` to substitute)
+
+**Cleanup:** `delete_file({DOC_ID}, permanent=true)` — a scratch doc created solely for this test, not a shared fixture.
+
+**Result (2026-09-11) ❌ FAIL — first QA pass on PR #730, Kit.** The checks above (paragraph count, `get_doc_as_markdown` fencing) passed as written, but `/code-review high origin/develop...HEAD` surfaced a gap this test case's own checks don't exercise: neither check inspects the body paragraph's raw *text* for a leaked `"\v"` (U+000B). Live-confirmed on a scratch doc: `get_doc_structure` returned `"line oneline twoline three\n"` and `find_in_doc` returned the same literal `\v` in `matched_text`/`context` — the write-side `"\n"`→`"\v"` substitution's read-side reversal (`doc_to_ast.py`) only covers the `get_doc_as_markdown` path; `get_doc_structure` and `find_in_doc` build their text straight off the raw Docs API response with no equivalent reversal. Sent back to Jay; see PR comment for the full finding (a second, narrower finding on the same reversal mechanism was confirmed unreachable through any current tool and filed separately as #732, non-blocking).
+
+**Result (2026-09-11) ✅ PASS — re-verification round on PR #730, Kit, fix commit `d8fabdf`.** Fix extracts the substitution into a shared `decode_code_run_text()` helper (`indices.py`) and applies it at all three read sites (`get_doc_structure`'s body-paragraph runs and table cells, `find_in_doc`'s `_collect_doc_paragraphs`), plus `doc_to_ast.py`'s own reversal now delegates to the same helper. Live-reverified against a fresh scratch doc: `get_doc_structure` now returns `"line one\nline two\nline three\n"` (real newlines, no `\v`); `find_in_doc` with a literal multi-line query now matches the same real-newline text. Full `tests/test_docs_content.py` + `tests/test_docs_markdown_export.py` suites green (269 passed) locally. Diff was small and targeted directly at the two named findings with no unrelated commits in between, so this followed the re-verification fast path (`git show` + live-verify) rather than a second full `/code-review`.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+---
+
+### TC-DOC192: `handle_data`'s implicit top-level paragraph resets all block-open state on open (#417) (unit test)
+
+**Background:** `#343`'s implicit-paragraph-for-bare-top-level-text path (`html_parser.py`'s `handle_data`, `self._block_tag = "p"`) was the one block-open site in the file that didn't reset `self._block_had_unsupported_content` to `False`, unlike every other block-open path (`pre`, `_BLOCK_TAGS`, `_resume_interrupted_block`). Currently inert for any reachable tool call: this branch only fires when `data.strip()` is truthy, so the resulting node's `runs` are always non-empty at close time, making the stale flag's value moot for `_emit_block_node`'s `preserve_if_empty` check — there's no HTML input that makes this branch's stale flag produce different `get_doc_structure`/`get_doc_as_markdown` output than the fixed version does. Fixed for state-consistency (a future change extending this branch to open on some other empty-content trigger would otherwise silently inherit a stale value) by adding `self._block_had_unsupported_content = False` alongside the existing `self._block_tag = "p"` / `self._block_named_style = None` lines, matching every sibling block-open path.
+
+**Checks (unit test)**
+- `tests/test_docs_content.py::TestBareTopLevelText::test_implicit_paragraph_open_resets_unsupported_content_flag` — feeds `_AstParser` (imported directly, matching the `test_table_depth_resets_to_zero` precedent in `tests/test_docs_tables.py`) `<p>Real text<img></p>Bare text`: the dropped `<img>` (no `src`) inside the first `<p>` sets `_block_had_unsupported_content = True`; after the following bare text opens its own implicit paragraph, the flag must read `False`, not stay stale `True`.
+
+**Result: N/A — unit-test-verified only, per TC-DOC189/TC-D249/TC-D250 convention.** No HTML input reaches this flag's value through any live tool's observable output (see Background) — a live QA pass would confirm the same happy-path conversion the existing bare-top-level-text checks already cover, not this fix. `uv run python -m pytest tests/test_docs_content.py` → 203 passed locally.
+
+**Result (2026-09-19) ❌ FAIL — first QA pass on PR #766, Kit.** `/code-review high origin/develop...HEAD` surfaced 2 findings, sent back for a fix in the same round: (1) the same implicit-paragraph open branch also left `self._block_resumed` stale, the identical pattern one field over — a `<table>` interrupting an open `<p>` sets `self._block_resumed = True` when it closes and resumes the `<p>`, and the `</p>` close that follows doesn't touch the flag, so it's still `True` when bare top-level text opens its own implicit paragraph right after; (2) the actual root cause — block-open state (`_block_tag`, `_block_named_style`, `_block_had_unsupported_content`, `_block_resumed`, `_run_buf`, `_pending_runs`) is hand-duplicated across all 4 call sites instead of reset by one shared helper, which is why a field can be forgotten at one site without the others noticing. Recommended folding finding 1 into a fix and doing finding 2's small helper now while the file is open. Sent back to Jay.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+---
+
+### TC-DOC193: A literal leading tab in a bullet item's own source text does not nest it deeper than its sibling (#434 finding 1) ⚠️ requires-oauth
+
+**Background:** `emitter.py`'s nested-bullet mechanism (#336) prepends `"\t" * depth` synthetic tab characters to each `BulletItem` paragraph's text as the only way to signal nesting level to `createParagraphBullets`, which infers (and removes) nesting depth from however many leading tab characters it finds — it can't tell a synthesized depth marker apart from a literal tab that happens to already be the first character of the item's own source text (e.g. hand-formatted raw HTML). Left un-stripped, a depth-1 item whose own text starts with a literal tab reads as 2 leading tabs to the API — one level deeper than an identically-nested sibling with no such literal tab — even though both are AST `depth=1`. Fixed by stripping a literal leading tab from a `BulletItem`'s own joined run text before combining it with the synthesized depth tabs (`emitter.py`'s main loop, just above where `tabs`/`text` are combined into `appended_text`). Surfaced by `/code-review high` on PR #432, filed as issue #434.
+
+**Setup:** `create_doc(title="TC-DOC193", content_format="html", content="<ul><li>Parent<ul><li>\tChild with a literal leading tab</li><li>Child with no leading tab</li></ul></li></ul>")` — the `\t` inside the first `<li>` of the nested `<ul>` is a literal tab byte in the content string, not the two-character sequence `\` + `t`.
+
+**Checks**
+- `get_doc_structure({DOC_ID})` shows exactly 3 bullet items — "Parent" at `nestingLevel: 0`, "Child with a literal leading tab" at `nestingLevel: 1`, "Child with no leading tab" at `nestingLevel: 1` — both children at the **same** nesting level as each other (not the leading-tab child one level deeper, which is what the un-fixed code produces: `nestingLevel: 2` for it vs `1` for its sibling)
+- The rendered text of "Child with a literal leading tab" in `get_doc_structure` has no leading `\t` character of its own — the literal tab was stripped, not merely absorbed into the depth count
+
+**Cleanup:** `delete_file({DOC_ID}, permanent=true)` — a scratch doc created solely for this test, not a shared fixture.
+
+**Note:** the companion table-position-desync half of this same finding (a literal leading tab silently under-counting `cumulative_tabs`, shifting a later table's `insertTable` position), plus the round-2 style-range/image-position regression described below, are unit-test-covered directly (`tests/test_docs_core.py::TestBulletDepthEdgeCases`) rather than re-verified live here — they're the same code path as the nesting-level fix above, and the live check already exercises the fix at its primary, most-visible defect surface.
+
+**Result (2026-09-19) ❌ FAIL — first QA pass on PR #768, Kit.** `/code-review high origin/develop...HEAD` surfaced 6 distinct findings (7 raw; two shared one root cause). Two were confirmed-live real regressions introduced by this PR's own finding-1 fix, both sent back for a fix in the same round:
+1. **Style-range overrun** — the leading-tab strip only touched the *concatenated* `run_text` string used to build the inserted text, not the underlying `Run` objects the per-run style-request loop iterates over afterward. `run_len = utf16_len(item.text)` still counted the stripped tab character(s), so a styled run's `updateTextStyle` range overran by however many tab chars were stripped (live repro: `BulletItem(runs=[Run('\tHello', bold=True)], depth=0)` → `insertText: 'Hello\n'` but `updateTextStyle range {startIndex: 1, endIndex: 7}`, one past where "Hello" actually ends).
+2. **Same root cause, image position** — `insertInlineImage` position miscomputed the same way for an `Image` following a tab-stripped `Run`, landing one full segment past where the image actually belongs.
+
+Plus 4 non-blocking cleanup items (finding 3+4 folded, finding 5 folded, finding 6 — see TC-DOC194's own Result for the finding-3/4 disposition; findings 5/6 landed here). Sent back to Jay.
+
+**Fix pushed, awaiting re-verification (2026-09-19, Jay).** Root cause of findings 1+2 fixed together: the strip now runs on the actual `Run`/`Image` sequence (`_strip_bullet_leading_tabs`, a pure non-mutating helper — the caller's AST objects are never modified) rather than only the joined string, and that stripped sequence (`offset_runs`, carried through the newly-introduced typed `_SegmentMeta.runs` field — finding 6) is what the per-run style/position offset loop walks, not `node.runs`. New unit tests `test_literal_leading_tab_stripped_run_does_not_overrun_its_own_style_range` and `test_literal_leading_tab_stripped_run_does_not_shift_following_image` reproduce both live-repro'd findings and pass against the fix. Finding 5 (the strip's own content-loss tradeoff at depth 0, previously undocumented/untested) got an explicit comment callout in `emitter.py` plus `test_literal_leading_tab_still_strips_at_depth_zero`. `uv run python -m pytest` → 1516 passed, 3 skipped locally. Live re-verification is Kit's own next pass, not this entry.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+---
+
+### TC-DOC194: An orphan `<li>` outside any `<ul>`/`<ol>` does not take the isolated-bullet-run wrap path (#434 findings 3+4) (unit test)
+
+**Background:** `html_parser.py` treats `<li>` as an ordinary `_BLOCK_TAGS` entry, reachable with no enclosing `<ul>`/`<ol>` at all — `_make_bullet_item` computes `depth = len(self._list_ordered) - 1`, which is `-1` for such an orphan. `emitter.py`'s bullet-grouping loop reading this raw `-1` unclamped for its `min_depth` routing check (`if min_depth == 0: ... else: isolated wrap path`) meant an orphan `<li>` took the 3-request isolated-run wrap path (insert anchor / bullets / delete anchor) purely because `-1 != 0`, even though the actual character-level result (0 literal leading tabs either way) is identical to what the plain 1-request `min_depth == 0` path already produces. Not a rendering defect — both paths converge on the same `nestingLevel: 0` — so there is no live-observable signal to check.
+
+**Result (2026-09-19) ❌ FAIL — first QA pass on PR #768, Kit.** The originally-shipped fix clamped `max(node.depth, 0)` at 3 separate `emitter.py` call sites instead of at the actual source of the negative value — `html_parser.py::_make_bullet_item`'s `depth = len(self._list_ordered) - 1` — leaving every *other* consumer of `BulletItem.depth` (`ast_to_markdown.py:119`'s own `"  " * node.depth`) to independently remember the same clamp, "currently benign only because `'x' * -1 == ''`, not because of an actual invariant." Recommended folding this into a single source-level clamp (finding 3) and deduping the 3 now-redundant `emitter.py` clamps once that lands (finding 4). Sent back to Jay alongside TC-DOC193's findings 1+2.
+
+**Fix pushed, awaiting re-verification (2026-09-19, Jay).** `_make_bullet_item` now clamps `depth = max(len(self._list_ordered) - 1, 0)` at the source — an orphan `<li>`'s `BulletItem.depth` is `0`, never `-1`, before it ever reaches `emitter.py` or `ast_to_markdown.py`. All 3 `emitter.py` call sites' redundant `max(node.depth, 0)` clamps removed; `ast_to_markdown.py`'s own `node.depth` usage is now safe by invariant rather than by accident of Python's negative-repeat semantics, needing no code change of its own. Live re-verification is Kit's own next pass, not this entry.
+
+**Checks (unit test)**
+- `tests/test_docs_core.py::TestBulletDepthEdgeCases::test_orphan_li_depth_is_clamped_at_the_ast_level` — `html_to_ast("<li>Orphan</li>")` produces a `BulletItem` with `depth == 0`, confirming the clamp lands at its actual source rather than being re-derived indirectly through `ast_to_requests`'s own behavior
+- `tests/test_docs_core.py::TestBulletDepthEdgeCases::test_negative_depth_orphan_li_does_not_take_isolated_wrap_path` — `html_to_ast("<li>Orphan</li>")` (the real production path, not a hand-built `BulletItem(depth=-1)`, which is no longer a shape `emitter.py` needs to defend against) produces exactly 1 `createParagraphBullets` request and no `deleteContentRange` request (the isolated-wrap path's signature)
+- `tests/test_docs_core.py::TestBulletDepthEdgeCases::test_negative_depth_orphan_li_groups_with_depth_zero_sibling` — `html_to_ast("<li>Orphan</li><ul><li>Normal</li></ul>")` still groups into one `createParagraphBullets` call, not two, and doesn't take the wrap path either
+
+**Result: N/A — unit-test-verified only, per TC-DOC189/TC-D249/TC-D250 convention.** No source HTML makes this fix produce different `get_doc_structure`/rendered output than the un-fixed code — both routes converge on the identical `nestingLevel: 0` result; the only difference is 2 fewer wasted API requests per orphan `<li>` run. `uv run python -m pytest tests/test_docs_core.py -k TestBulletDepthEdgeCases` → 8 passed locally (round 2: 4 original + 4 new from the QA findings above).
+
+**Result (2026-09-19) ✅ PASS — re-verification round on PR #766, Jay.** Both findings closed together: added `_AstParser._open_block(tag, *, resumed, named_style)`, a single setter for all 6 fields listed in finding 2, and routed all 4 call sites (`_resume_interrupted_block`'s resume branch, `<pre>`'s open, `_BLOCK_TAGS`' open, and `handle_data`'s implicit-paragraph open) through it — closing finding 1 as a structural consequence of finding 2's fix rather than as a standalone one-field patch. New test `tests/test_docs_content.py::TestBareTopLevelText::test_implicit_paragraph_open_resets_resumed_flag` reproduces finding 1's exact scenario (`<p>Before<table>...</table>After</p>Bare text`) and was confirmed to fail (`_block_resumed is True`) against the pre-fix code via a scratch-script diff before the fix, then pass after. Full suite green (`uv run python -m pytest` → 1508 passed, 3 skipped).
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+---
+
+### TC-DOC195: A resumed block's genuine trailing `&nbsp;` survives instead of vanishing (issue #444) ⚠️ destructive
+
+**Background:** #402 (TC-DOC138) already keeps a *fresh* `<p>&nbsp;</p>`'s whitespace-only content instead of dropping it, but a block *resumed* after a nested list/table interrupts it (e.g. `<li>Item<ul>...</ul>&nbsp;</li>`) still fell back to the pre-#402 always-drop behavior — a resumed block's whitespace-only flush is normally markup-formatting noise (e.g. the indentation newline between a nested list's `</ul>` and the outer `<li>`'s own `</li>`), not authored content, and the two need to stay distinguishable (see `test_nested_list_via_markdown_preserves_parent_text`). Fixed via a new `_is_formatting_whitespace` check in `html_parser.py`: a resumed segment's whitespace-only text that contains a character outside plain ASCII formatting whitespace (the decoded `\xa0` a `&nbsp;`/`&#160;` becomes — `HTMLParser`'s default `convert_charrefs=True` resolves these before `handle_data` ever sees them, so `handle_entityref`/`handle_charref` can't be used as the signal instead) is recognized as genuinely-authored content and preserved, since no pretty-printer/renderer has a reason to emit a non-breaking space as structural indentation. Deliberately does **not** extend to a *fresh* `<li>`/heading whose only content is `&nbsp;` (e.g. `<li>&nbsp;</li>` between two real siblings) — that's the PR #441 regression #402 itself already excludes, and it's unrelated to whether the character is "authored": lists/headings simply have no blank-line-spacer convention for a standalone empty item (`test_nbsp_only_list_item_still_dropped`/`test_nbsp_only_heading_still_dropped` cover that this stays unchanged). The identical fix also applies to the `<pre>` close-tag handler's own independent fresh/resumed whitespace check (#443) — covered by a unit test only (`test_resumed_pre_trailing_nbsp_preserved`), not a separate live case here, since a nested table inside `<pre>` has no live-observable signal beyond what TC-DOC154's own established pattern and that unit test already confirm deterministically.
+
+**Prompt**
+> "Write this HTML to doc {DOC_ID}: `<ul><li>Item<ul><li>Child</li></ul>&nbsp;</li></ul><p>Before<table><tr><td>cell</td></tr></table>&nbsp;</p>`"
+
+**Checks**
+- Call succeeds with no API error
+- `get_doc_structure` shows, in order: bulleted "Item" (depth 0), bulleted "Child" (nested, depth 1), a **third** bulleted paragraph whose text is just the nbsp character at depth 0 — previously this trailing content after the nested list vanished with no trace
+- "Before" paragraph, then the table, then a final paragraph whose text is just the nbsp character — the resumed `<p>`'s own trailing `&nbsp;` after the nested table also survives, matching the fresh-`<p>&nbsp;</p>` behavior TC-DOC138 already covers
+
+**Cleanup:** write fixture content back
+
+**Result (2026-09-20) ✅ PASS — Kit, PR #772.** Round 1's `/code-review high` found 3 blocking issues before this case was run live: (1) a resumed segment's preserved runs could carry an embedded ASCII newline adjacent to the authored `\xa0`/entity content, which the Docs API splits into a spurious extra paragraph regardless of styling (#719) — reproduces with source shaped `<ul><li>Item<ul><li>x</li></ul>\n&nbsp;</li></ul>` (a newline between the nested list's close tag and the entity); (2) `_ASCII_FORMATTING_WHITESPACE` included `\v`/`\f` despite qualifying for the same authored-content reasoning as `\xa0`; (3) the 3-line `is_resumed_authored_whitespace` expression was duplicated verbatim at both call sites (`_emit_block_node` and the `<pre>` close handler). Jay's round-2 fix (`6dbba4d`) added `_strip_formatting_whitespace` (strips formatting-noise characters from preserved runs before insertion, leaving genuine multi-line `<pre>` content untouched), narrowed the whitelist to `" \t\n\r"`, and deduped the shared check into `_is_resumed_authored_whitespace`. Full suite green (`uv run python -m pytest` → 1533 passed, 3 skipped, including 4 new regression tests). Live-verified against the fixture doc: (a) the finding-1 repro (`<ul><li>Item<ul><li>Child</li></ul>\n&nbsp;</li></ul>`) produced exactly 3 body paragraphs with no spurious split; (b) this case's own original prompt, run for the first time this round, matched every stated check exactly.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+### TC-DOC196: Several unreachable image URLs in one document — each fails alone, everything else lands (issue #510) ⚠️ requires-oauth ⚠️ destructive
+
+**Background:** Google's Docs API rejects an entire `batchUpdate` if any one `insertInlineImage` can't be fetched, and names only the *first* failing image per error. `_apply_doc_content` used to resend the whole document once per bad image. It now sends the text/style/bullet prefix once and retries only the trailing table/image insert pass per bad image. The failing index is also now read from the structured error body rather than `HttpError`'s display string. Round-trip counts aren't visible through the tool interface: unit tests cover those (`TestCreateDocImages::test_multiple_bad_images_retry_only_the_insert_tail`, `TestFailedInsertImageRequestIndex`). This case checks the end-to-end outcome with more than one bad image, plus a table in the same tail.
+
+**Prompt**
+**Playwright: required**
+> "Create a Google Doc titled 'TC-DOC196' with this markdown content (content_format markdown):
+> ```
+> # Title
+>
+> Before text with **bold**.
+>
+> ![Bad1](https://example.invalid/bad1.png)
+>
+> - item one
+> - item two
+>
+> ![Good](https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png)
+>
+> | a | b |
+> |---|---|
+> | 1 | 2 |
+>
+> ![Bad2](https://example.invalid/bad2.png)
+>
+> After text.
+> ```"
+
+**Checks**
+- `create_doc` returns `docId`/`web_link` with no top-level `error`
+- `images` has 3 entries in document order: `bad1.png` with an `error` starting `doc edit failed:`, the Google-logo URL with no `error`, and `bad2.png` with an `error` starting `doc edit failed:`
+- `get_doc_structure` shows, in order: the `Title` heading, "Before text with bold." (bold run intact), bulleted "item one"/"item two", the table (cells `a`, `b`, `1`, `2`), and "After text." — nothing truncated
+- The paragraph between the bullets and the table has one extra index slot beyond its text, meaning the good image was embedded (same index-math cross-check as TC-DOC57)
+- Playwright: the Google logo renders between the bullets and the table, and nothing renders where the two bad images were
+
+**Cleanup:** delete the created doc
+
+**Result (2026-09-23) ❌ SENT BACK — Kit, PR #787 round 1.** The live checks themselves all passed. `create_doc` returned no top-level error, and `images` had 3 entries in order: bad1 and bad2 each with `doc edit failed:`, the Google logo clean. `get_doc_structure` showed every element in order with nothing truncated (heading, bold run intact, both bullets, 2×2 table, "After text."). The paragraph at 49–51 has the extra index slot. A raw `documents.get` confirmed exactly 1 `inlineObject`, placed between the bullets and the table. Each bad image left an empty paragraph behind, which the pre-#510 retry did too. Playwright: **SKIPPED.** The browser profile is signed in as the personal account and got a 403 on the Shared-Drive doc (the post-2026-09-01 auth migration). The raw API placement check above stood in for it. Also checked, not a scripted check: review finding 2 (tail inserts inheriting styles after the prefix commits) was probed live with an image right after a `##` heading and a table right after a blockquote. The split-path doc and a no-bad-image control had identical paragraph and text styles, differing only by the dropped image's empty paragraph, so the finding was not reproduced. Also observed live: bad1's per-image error text quotes `requests[2]`, an index into the tail-only retry batch, not the original request list (see the PR comment, finding 9). Sent back for code-review findings 1/3, 4, 5, 6, 7, 8, 9 (see the PR comment), not for a live failure.
+
+**Result (2026-09-23) ✅ PASS — Kit, PR #787 round 2.** Re-verified against Jay's fix `69eff02` (fast path: `git show` plus a live re-run, no second full `/code-review`). Every round-1 finding is addressed in the diff. K=1 retries the whole remaining list as one atomic call, and the prefix/tail split starts only at the second image failure. The K≥2 partial-write window is documented in the code comment and `image-conversion.md`. Detection now uses `status == 400` plus `HttpError.reason`. The caller-facing text drops the `Invalid requests[N].` lead-in and the `HttpError` wrapper, and `rewrite_too_large_error` still fires on the stripped text (spot-checked). A fail-safe falls back to whole-list retries if any image request sits outside the inferred tail, and a unit test pins `ast_to_requests`'s tail invariant. Both stale comments are fixed. Full suite green (`uv run python -m pytest` → 1574 passed, 3 skipped). Live: this case's own prompt, K=2 (split path), matched every API check again. It gave the identical structure to round 1, with exactly 1 `inlineObject` between the bullets and the table (raw `documents.get`). Both bad-image errors read `doc edit failed: insertInlineImage: There was a problem retrieving the image...` with no wrapper and no internal index. An extra K=1 probe (heading, bold text, good image, table, one bad image, trailing text) also landed intact with one `inlineObject` and the same clean error text. Playwright: ✅ PASS (visual confirmed). It was skipped at first, for the same reason as round 1: the browser profile was signed in as the personal account and got a 403 on Shared-Drive docs. After the browser was switched to the Workspace account, this case's prompt was re-run on a fresh doc (post-merge, same code). The screenshot showed the Google logo between the bullets and the table and nothing where either bad image was, with the heading, bold run, table and "After text." all rendering normally. Created docs trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+---
+
+### TC-DOC197: `insert_local_images` — a local image over ~179 megapixels is still size-checked, not waved through as "not an image" (PR #801)
+**Background:** Pillow's `Image.open` refuses to identify an image whose header claims more than 2× `Image.MAX_IMAGE_PIXELS` (~179MP) and raises `DecompressionBombError` instead. The local size gate used to swallow that as "not a recognizable image", so the *most* oversized images skipped the megapixel check entirely and failed later with Google's bare "too large" error. `_read_dimensions` now reads the PNG/JPEG/GIF header without that guard, since no pixels are decoded there. `auto_downscale=True` still can't help, because downscaling needs a full decode, which the guard does block. That case must fail with a clear reason, not silently.
+
+**Setup:** generate a 14000x13000 (182MP) PNG. A 1-bit image keeps it tiny on disk:
+```
+uv run python3 -c "
+from PIL import Image
+Image.MAX_IMAGE_PIXELS = None
+Image.new('1', (14000, 13000)).save('/tmp/qa-bomb.png')
+"
+```
+Create a doc with the marker: `create_doc(title=..., content="<p>IMGMARKERBOMB</p>", folder_id={FOLDER_ID})`
+
+**Prompt**
+> "In doc {DOC_ID}, insert local images: marker 'IMGMARKERBOMB', local_path '/tmp/qa-bomb.png', into folder {FOLDER_ID}"
+
+Tool call: `insert_local_images(doc_id={DOC_ID}, images=[{"marker": "IMGMARKERBOMB", "local_path": "/tmp/qa-bomb.png"}], folder_id={FOLDER_ID})`
+
+**Checks**
+- `results[0]` has no `fileId` and an `error` containing "14000x13000 (182.0 megapixels)" and "25 megapixels"
+- No `qa-bomb.png` appears in `{FOLDER_ID}`, and the marker text is unchanged
+- Re-run with `auto_downscale=True`: `results[0]` still has no `fileId`, and its `error` ends with "Could not auto-downscale it (unreadable or corrupt image, animated, too large to decode safely, or still over the file-size limit after shrinking)." (the last reason was added by #894/#581)
+
+**Cleanup:** trash the doc; `rm /tmp/qa-bomb.png`
+
+**Result (2026-09-24) ✅ PASS — Kit, PR #801 round 2 (fix `4d5f842`, issue #560).** Both checks matched exactly, and nothing was uploaded. (Round 1 reproduced the pre-fix behavior locally: `check_image_file` returned `None` for this file.) Doc trashed.
+
+**Result (2026-10-10) ✅ PASS — PR #961 (Sky)**
+insert_local_images with the 14000x13000 PNG: results[0] no fileId, error names "14000x13000 (182.0 megapixels)" and "25 megapixels". With auto_downscale=True: error ends with "Could not auto-downscale it (unreadable or corrupt image, animated, too large to decode safely, or still over the file-size limit after shrinking)." No qa-bomb.png in FOLDER_ID; marker text unchanged. Doc trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+---
+
+### TC-DOC198: `insert_local_images` — an unreadable local file fails with "failed to read local file", not a raw upload error (PR #801)
+**Background:** PR #801 moved the local size gate from reading the whole file to `stat()` plus a header read. Round 1 found the header read swallowed `OSError`, so a permission-denied file passed the gate as "not an image". It then crashed inside the upload as a bare `[Errno 13]`. The file open is now outside the best-effort guard.
+
+**Setup:** `uv run python3 -c "from PIL import Image; Image.new('RGB', (10, 10)).save('/tmp/qa-noread.png')" && chmod 000 /tmp/qa-noread.png`. Create a doc with the marker `IMGMARKERNOREAD`.
+
+**Prompt**
+> "In doc {DOC_ID}, insert local images: marker 'IMGMARKERNOREAD', local_path '/tmp/qa-noread.png', into folder {FOLDER_ID}"
+
+**Checks**
+- `results[0].error` is exactly `failed to read local file: [Errno 13] Permission denied: '/tmp/qa-noread.png'`, with no `fileId`
+- Nothing uploaded; marker unchanged
+
+**Cleanup:** trash the doc; `chmod 644 /tmp/qa-noread.png && rm /tmp/qa-noread.png`
+
+**Result (2026-09-24) ✅ PASS — Kit, PR #801 round 2 (fix `4d5f842`, issue #560).** The error text matched exactly, with no `fileId` and nothing uploaded. (Round 1 reproduced the pre-fix behavior locally: `prepare_local_image` returned `None` and the file went on to the upload.) Doc trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+---
+
+### TC-DOC199: Image embedding shares through one helper and makes two Drive calls per uploaded image, not three (issue #511) ⚠️ requires-oauth ⚠️ destructive
+
+**Background:** #511 consolidated three hand-copied share blocks (`upload_and_share_image`, `insert_local_images`'s plain upload path, `_resolve_image_source`) into `images.py`'s `share_image_file`, the two revoke closures (`_apply_doc_content`, `insert_local_images`) into `revoke_image_shares`, the local-path size-gate → upload → share sequence both `create_doc`'s image resolution and `insert_local_images` ran into `upload_and_share_local_image`, and the per-image `fileId`/`error` fold (including the #649 orphan `fileId` whose hand-copied drift PR #652's QA round caught) into `record_image_outcome` (which also carries `downscaled`/`already_shared` into the outcome entry — see TC-DOC200/TC-DOC201). Each copy used to follow its `permissions().create()` with a `files().get()` just to read `webContentLink`. That field now comes back from the call that created or looked up the file (confirmed live on #511: `create()` returns it, identical to the post-share value), so each uploaded image takes two Drive calls instead of three. Nothing about the tools' outputs should change except:
+- Every sharing-failure message now reads `sharing failed for Drive file '<id>': ...` (the wording `create_doc`'s local/`drive:` path already used). Changed: `insert_local_images`' plain upload (was `uploaded file '<id>' but failed to share it: ...`) and every auto_downscale resized upload — `insert_local_images`, `create_doc`/`create_doc_from_file`/`write_doc_content`/`update_doc_from_file`, and `insert_inline_image`'s `drive_file_id` path (was `created Drive file '<id>' but failed to share it: ...`).
+- Every missing-`webContentLink` message now reads `Drive returned no webContentLink for file '<id>'`, and fails *before* sharing. Was: `file <id> shared but Drive returned no webContentLink` (`create_doc` family), `uploaded and shared as <id> but Drive returned no webContentLink` (`insert_local_images`), `resized image <id> uploaded but Drive returned no webContentLink` (auto_downscale resized uploads).
+- `upload_local_file`'s response gains `web_content_link` (TC-D93).
+- `create_doc` and its siblings now report `downscaled: true` like `insert_local_images` does (TC-DOC201), and an image file that was already link-shared keeps its link (`already_shared: true`, TC-DOC200) in both tools.
+
+These messages are only reachable through injected Drive failures, so they're covered by unit tests, not live. The Drive call count isn't visible through the tools, so it's covered by unit tests.
+
+**Action (live regression — the outcomes these paths produce are unchanged)**
+1. Run TC-DOC150 (`create_doc`, local-path image, revoke by default)
+2. Run TC-DOC151 (`create_doc`, `drive:` image, `revoke_sharing=False`)
+3. Run TC-DOC152 (`insert_local_images`, revoke by default)
+4. Run TC-DOC165 (`insert_local_images`, `auto_downscale=True`)
+
+**Checks**
+- Each case above passes exactly as written: images embed, `shared` and `list_permissions` match the case's revoke setting, and there's no `revoke_error`
+- Unit tests: `tests/test_docs_images.py::TestShareImageFile` (success without a `files()` call; missing link fails before sharing; `file_id` on a failure only when `created_here`), `TestRevokeImageShares` (per-entry `shared`/`revoke_error`), `TestUploadAndShareLocalImage` (two Drive calls, orphan `file_id` only after a successful upload, `downscaled` flag), `TestRecordImageOutcome`/`TestRecordImageOutcomeFlags`, `TestUploadAndShareImage::test_success_returns_uri_file_id_permission_id` and `TestInsertLocalImages::test_successful_single_image_places_and_deletes_marker` (no `files().get()`), `tests/test_docs_content.py::TestResolveImageSource::test_local_path_uploaded_shared_and_resolved` (no `files().get()`), and `tests/drive/test_transfer.py::TestUploadLocalFileCore::test_returns_web_content_link_when_drive_provides_it`
+
+**Cleanup:** per each referenced case
+
+**Result (2026-09-28) ❌ FAIL — Kit, PR #842 round 1 (`5604534`, issue #511).** API checks for all four referenced cases passed, and the 520 unit tests in the touched test files pass. Two defects were confirmed live, so this goes back to Dev. Playwright didn't connect this session, so the visual checks are pending for round 2.
+- TC-DOC150: `images=[{fileId, shared: false}]`, no `revoke_error`; `list_permissions` shows no `anyone` grant.
+- TC-DOC151: `images=[{src: "drive:<id>", fileId: <id>, shared: true}]`; `anyone`/`reader` still present.
+- TC-DOC152: `results[0]` has `fileId`, `index` 9, `shared: false`, no `revoke_error`; no `anyone` grant.
+- TC-DOC165: `fileId`, `downscaled: true`, `shared: false`, `index` 1 = the marker's `startIndex`; uploaded name unsuffixed `qa-oversized.png`.
+- ❌ **Pre-existing public link revoked (code-review F1, pre-existing on `develop`, but it lives in the new `share_image_file`).** The file already had the user's own `anyoneWithLink` reader grant (set with `share_file`). `create_doc(content="![Pixel](drive:<id>)")` with the default `revoke_sharing=True` returned `shared: false`, and `list_permissions` afterward showed the `anyone` grant **gone**. Drive's `permissions.create` returns the existing fixed-ID `anyoneWithLink` permission, and the revoke then deletes it.
+- ❌ **`create_doc` drops `downscaled` (code-review F3).** `create_doc(content="![Big](/tmp/qa-oversized.png)", auto_downscale=True)` resized and embedded the image, but `images[0]` had no `downscaled` key. `insert_local_images` reports `downscaled: true` for the same file (TC-DOC165 above).
+All docs, uploads, and grants were trashed or removed.
+
+**Result (2026-09-28) ✅ PASS — Kit, PR #842 round 2 (`07e5139`).** All six round-1 findings are fixed. F1 and F3 were re-verified live via TC-DOC200/TC-DOC201 above. F2/F4/F5/F6/F7 were checked in the fix diff, and the full unit suite passes (1900 passed, 3 skipped). Regression cases on the new code:
+- TC-DOC150: `shared: false`, no `anyone` grant. Playwright: the pixel dot renders between "Report" and "After the image."
+- TC-DOC151: `shared: true`, and `anyoneWithLink` is still present with `revoke_sharing=False`. Embed confirmed via `get_doc_as_markdown`.
+- TC-DOC152: `fileId`, `index` 9, `shared: false`, no `anyone` grant. Embed confirmed via `get_doc_as_markdown` (`Marker: ![](…)`).
+- TC-DOC165: `downscaled: true`, `shared: false`, `index` 1. Playwright: the red image renders where the marker was.
+All artifacts trashed.
+
+**Result (2026-10-17) 🟡 PARTIAL — v0.9.2 release pass**
+150, 152 and 165 pass; 151 skipped (sharing scope).
+
+---
+
+### TC-DOC200: Embedding an image that's already link-shared leaves its link in place (PR #842 QA round 1) ⚠️ requires-oauth ⚠️ destructive
+
+**Background:** Drive's `permissions.create()` for an `anyone` grant that already exists returns that grant's fixed ID (`anyoneWithLink`) instead of creating a new one. Before this fix, the default `revoke_sharing=True` then deleted it, removing a public link the user had set up themselves. `share_image_file` now compares the returned ID against the file's `permissionIds` from the same `get()`/`create()` call and never revokes a grant that was already there.
+
+**Setup:** `upload_local_file(local_path="<repo-root>/docs/qa/fixtures/qa-fixture-pixel.png", parent_folder_id={FOLDER_ID})` → note `fileId` as `{PIXEL_ID}`; then `share_file(file_id={PIXEL_ID}, permissions=[{"type": "anyone", "role": "reader"}], send_notification=False)`
+
+**Prompt**
+**Playwright: required**
+> "Create a Google Doc titled 'TC-DOC200' in folder {FOLDER_ID} from this markdown: `![Pixel](drive:{PIXEL_ID})`"
+
+Tool call: `create_doc(title="TC-DOC200", content="![Pixel](drive:{PIXEL_ID})", content_format="markdown", folder_id={FOLDER_ID})`
+
+**Checks**
+- Response has no `error`; `images` is `[{"src": "drive:{PIXEL_ID}", "fileId": "{PIXEL_ID}", "shared": true, "already_shared": true}]`, with no `revoke_error`
+- `list_permissions(file_id={PIXEL_ID})` still shows the `anyone`/`reader` grant (the regression: it used to be gone)
+- Control: `create_doc(title="TC-DOC200b", content="![Pixel](drive:{PIXEL_ID})", content_format="markdown", folder_id={FOLDER_ID})` after `remove_permission(file_id={PIXEL_ID}, permission_id="anyoneWithLink")` returns `shared: false` with no `already_shared`, and `list_permissions` shows no `anyone` grant (a grant this call created is still revoked)
+- 🔍 Visual check: the pixel image renders in TC-DOC200
+
+**Cleanup:** trash both docs and `{PIXEL_ID}`
+
+
+**Result (2026-09-28) ✅ PASS — Kit, PR #842 round 2 (`07e5139`).** With `anyoneWithLink` already set via `share_file`: `images=[{src, fileId, already_shared: true, shared: true}]`, no `revoke_error`. `list_permissions` still shows `anyoneWithLink`: the round-1 regression is fixed. Control (after `remove_permission`): TC-DOC200b returned `shared: false` with no `already_shared`, and no `anyone` grant remained. Embed confirmed via `get_doc_as_markdown` (`![](…)`). The 1×1 pixel sits under the cursor at index 1, so a screenshot can't show it. Docs and pixel trashed.
+
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+Needs a persistent anyone share; ran before the user's explicit sharing approval.
+
+---
+
+### TC-DOC201: `create_doc` reports `downscaled` for an auto-downscaled image (PR #842 QA round 1) ⚠️ requires-oauth ⚠️ destructive
+
+**Background:** `insert_local_images` reported `downscaled: true` for a resized image; `create_doc` resized and embedded the same file but dropped the flag. Both now record outcomes through `record_image_outcome`.
+
+**Setup:** create the oversized fixture as in TC-DOC162: `uv run python3 -c "from PIL import Image; Image.new('RGB', (6000, 6000), 'red').save('/tmp/qa-oversized.png')"`
+
+**Prompt**
+**Playwright: required**
+> "Create a Google Doc titled 'TC-DOC201' in folder {FOLDER_ID} from this markdown, auto-downscaling oversized images: `![Big](/tmp/qa-oversized.png)`"
+
+Tool call: `create_doc(title="TC-DOC201", content="![Big](/tmp/qa-oversized.png)", content_format="markdown", folder_id={FOLDER_ID}, auto_downscale=True)`
+
+**Checks**
+- Response has no `error`; `images[0]` has `fileId`, `shared: false`, and `downscaled: true`
+- 🔍 Visual check: a red image renders in the doc
+
+**Cleanup:** trash the doc and `images[0].fileId`; `rm /tmp/qa-oversized.png`
+
+**Result (2026-09-28) ✅ PASS — Kit, PR #842 round 2 (`07e5139`).** `images[0]` had `fileId`, `downscaled: true`, `shared: false`. Playwright: the red image renders. Extra check for the `drive:` half of F3: `create_doc(content="![Big](drive:<oversized upload>)", auto_downscale=True)` also returned `downscaled: true`, with a new resized `fileId`. Docs, the resized copies, and the oversized upload were trashed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+---
+
+### TC-DOC202: A failed doc edit still revokes the image's temporary share (#789) ⚠️ destructive
+
+**Background:** `_apply_doc_content` shares each local-path/`drive:` image `anyone:reader` before the doc edit, and used to revoke those shares only after the edit succeeded. Any failure after the shares were made (the content `batchUpdate`, a retry, `fill_tables`, anchor resolution) left the image publicly readable with nothing reporting it, and the raise lost every image file ID. The revoke now runs whether the edit succeeds, fails, or is cancelled, and a failed edit returns `{"error", "docId", "images"}` instead of raising (PR #877 round 2). The case forces a non-image failure by locking the target doc (`contentRestrictions.readOnly`), which makes the Docs API reject the `batchUpdate` with a 403. The doc is left empty so `write_doc_content` has nothing to clear and reaches the image step before the 403.
+
+**Setup:**
+1. `create_doc(title="TC-DOC202", folder_id={FOLDER_ID})` with no content. Record `docId` as `{LOCKED_DOC_ID}`.
+2. `upload_local_file(local_path="<repo-root>/docs/qa/fixtures/qa-fixture-pixel.png", folder_id={FOLDER_ID})`. Record its ID as `{PIXEL_FILE_ID}`.
+3. No tool sets a content restriction, so lock the doc with a scratch script from the checkout under test, using the same OAuth token as the server under test:
+
+```bash
+uv run python3 -c "
+from googleapiclient.discovery import build
+from mcp_gee_sweet.auth import _oauth_creds
+d = build('drive', 'v3', credentials=_oauth_creds(), cache_discovery=False)
+d.files().update(fileId='{LOCKED_DOC_ID}', body={'contentRestrictions': [{'readOnly': True, 'reason': 'TC-DOC202'}]}, supportsAllDrives=True).execute()
+"
+```
+
+**Prompt**
+> "Replace the content of doc {LOCKED_DOC_ID} with this markdown: `Text\n\n![Pixel](drive:{PIXEL_FILE_ID})`"
+
+Tool call: `write_doc_content(doc_id={LOCKED_DOC_ID}, content="Text\n\n![Pixel](drive:{PIXEL_FILE_ID})", content_format="markdown")`
+
+**Checks**
+- The call returns (doesn't raise) `{"error": "doc edit failed: ...", "docId": "{LOCKED_DOC_ID}", "images": [{"src": "drive:{PIXEL_FILE_ID}", "fileId": "{PIXEL_FILE_ID}", "shared": false}]}`, and the error text includes the Docs `batchUpdate`'s 403 "The caller does not have permission". If the call succeeds instead, the lock didn't take and the case proves nothing; re-check setup step 3
+- `list_permissions(file_id={PIXEL_FILE_ID})` shows no `anyone` permission. Before the fix, an `anyone`/`reader` grant was left behind here (reproduced live by the Dev with a scratch script on 2026-10-03)
+- If the server under test writes a log file (`LOG_FILE`), it has a WARNING line naming `{LOCKED_DOC_ID}`, with `files created by this call: none; pre-existing files: {PIXEL_FILE_ID}; still link-shared by this call: none` (a `drive:` source is the caller's own file, never listed as created)
+
+**Cleanup:** unlock the doc with the setup script, using `body={'contentRestrictions': [{'readOnly': False}]}`. Then trash `{LOCKED_DOC_ID}` and `{PIXEL_FILE_ID}`.
+
+**Result (2026-10-03) ✅ PASS — Kit, PR #877 round 1 (`505e8a5`).** `write_doc_content` failed with the expected 403 "The caller does not have permission" from the Docs `batchUpdate`. A `list_permissions` call made after the failure showed no `anyone` grant on the pixel. `LOG_FILE` had `WARNING ... Doc edit failed for {LOCKED_DOC_ID} after its images were resolved; image file IDs: {PIXEL_FILE_ID}; still link-shared: none`. The case passes, but the log line lists `{PIXEL_FILE_ID}`, the caller's own pre-existing `drive:` file, under the IDs `_log_images_after_failed_edit`'s docstring calls now-orphaned files (finding F2 in the round 1 PR comment). The doc was unlocked, and both files were trashed.
+
+**Result (2026-10-03) ✅ PASS — Kit, PR #877 round 2 (`de95c80`).** `write_doc_content` returned (didn't raise) `{"error": "doc edit failed: <HttpError 403 ... \"The caller does not have permission\">", "docId": "{LOCKED_DOC_ID}", "images": [{"src": "drive:{PIXEL_FILE_ID}", "fileId": "{PIXEL_FILE_ID}", "shared": false}]}`. `list_permissions` showed no `anyone` grant on the pixel. `LOG_FILE` had `files created by this call: none; pre-existing files: {PIXEL_FILE_ID}; still link-shared by this call: none`. Separately, a minimal anyio model of the new shielded resolve and revoke structure, cancelled both mid-resolution and mid-edit, ran every delete and logged the warning both times. The doc was unlocked, and both files were trashed.
+
+**Result (2026-10-04) ✅ PASS (log check not run) — Kit, PR #903 round 2 (`4e392c3`).** Re-run because the failed-edit log helper moved from `content.py` to `images.py` (`log_images_after_failed_edit`, shared with `insert_local_images`). `write_doc_content` returned (didn't raise) `{"error": "doc edit failed: <HttpError 403 ... \"The caller does not have permission\">", "docId": "{LOCKED_DOC_ID}", "images": [{"src": "drive:{PIXEL_FILE_ID}", "fileId": "{PIXEL_FILE_ID}", "shared": false}]}`. `list_permissions` showed no `anyone` grant on the pixel. The kit server writes no `LOG_FILE`, so the WARNING line wasn't checked live. `tests/test_docs_content.py` asserts its arguments, now patched on `images_module.logger`. The doc was unlocked, and both files were trashed.
+
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+The scratch script needs a usable OAuth token (see DOC80).
+
+---
+
+### TC-DOC203: A cancelled `insert_local_images` still revokes the image's temporary share (#883) ⚠️ requires-oauth ⚠️ destructive
+
+**Background:** `insert_local_images` uploads each image, shares it `anyone:reader`, sends the doc `batchUpdate`, then revokes the share. The revoke used to run only after the `batchUpdate` returned, so a call cancelled during the upload/share gather or the `batchUpdate` left the uploaded image publicly readable, with nothing reporting it. Now the upload/share gather is shielded from cancellation, so every granted share is recorded, and a shielded revoke runs on every exit, including a cancelled one. A cancelled call returns nothing, so every file it uploaded is logged as a WARNING, on every exit path: before the edit, with nothing left to embed, while the `batchUpdate` runs, and during the post-edit revoke (PR #903 round 2). A cancellation that arrives during the gather lands before the `batchUpdate` is sent, so the doc is left untouched. One that arrives while the `batchUpdate` runs can't stop it: the edit is atomic, so the doc is either untouched or has the image embedded, and either way no public share is left. This is the same pattern `_apply_doc_content` got in PR #877 (TC-DOC202), and both log through the same helper.
+
+No MCP client can cancel a tool call at a chosen point, so this case uses `scripts/qa_cancel_insert_local_images.py`. The script runs the checkout's own `insert_local_images` against the real APIs inside an anyio task group and cancels it at one point: `share` (while the permission is being granted), `share-fail` (the same, but the share then fails, leaving an unshared upload), `edit` (just before the `batchUpdate`), `inflight` (while the `batchUpdate` runs), or `revoke` (during the post-edit revoke). Run it from the checkout under test with that checkout's OAuth token (`TOKEN_PATH`). It prints the tool's WARNING to stderr.
+
+**Setup:**
+1. `create_doc(title="TC-DOC203", content="Before\n\nIMGMARKER883\n\nINFLIGHT883\n\nREVOKE883\n\nAfter", content_format="markdown", folder_id={FOLDER_ID})`. Record `docId` as `{DOC_ID}`.
+
+**Prompt**
+> (none — script-driven; the steps below are shell commands plus tool calls)
+
+**Steps**
+1. `uv run python scripts/qa_cancel_insert_local_images.py {DOC_ID} {FOLDER_ID} <repo-root>/docs/qa/fixtures/qa-fixture-pixel.png IMGMARKER883 share`. Record the file ID from the WARNING as `{SHARE_FILE_ID}`.
+2. The same command with `share-fail` in place of `share`. Record the WARNING's file ID as `{ORPHAN_FILE_ID}`.
+3. The same command with `edit`. Record the WARNING's file ID as `{EDIT_FILE_ID}`.
+4. The same command with `edit --keep-shared`. Record the WARNING's file ID as `{KEPT_FILE_ID}`.
+5. The same command with marker `INFLIGHT883` and point `inflight`. Record the WARNING's file ID as `{INFLIGHT_FILE_ID}`.
+6. The same command with marker `REVOKE883` and point `revoke`. Record the WARNING's file ID as `{REVOKE_FILE_ID}`.
+
+**Checks**
+- Each run prints `cancelled at '<point>'; the tool returned nothing` and a WARNING `Doc edit for {DOC_ID} failed or was cancelled after its images were resolved; files created by this call: <one file ID>; pre-existing files: none; still link-shared by this call: ...`. That last field is the `{KEPT_FILE_ID}` itself for step 4, and `none` for every other step. Before round 2, steps 2 and 6 logged nothing
+- `list_permissions` on `{SHARE_FILE_ID}`, `{ORPHAN_FILE_ID}`, `{EDIT_FILE_ID}`, `{INFLIGHT_FILE_ID}`, and `{REVOKE_FILE_ID}` shows no `anyone` permission. Before the fix, the `edit` run left an `anyone`/`reader` grant and logged nothing (reproduced live by the Dev with this script on 2026-10-04)
+- `list_permissions(file_id={KEPT_FILE_ID})` does show the `anyone`/`reader` permission (`revoke_sharing=False` is respected on the cancel path)
+- After `refresh_cache(doc_id={DOC_ID})`, `get_doc_content(file_id={DOC_ID})` still has `IMGMARKER883` (none of steps 1–4 edited the doc) and no longer has `REVOKE883` (step 6 cancels after the edit landed). `INFLIGHT883` may be either present or gone, since the in-flight edit can't be stopped; if it's gone, `get_doc_as_markdown` shows an image in its place
+
+**Cleanup:** trash `{SHARE_FILE_ID}`, `{ORPHAN_FILE_ID}`, `{EDIT_FILE_ID}`, `{KEPT_FILE_ID}`, `{INFLIGHT_FILE_ID}`, `{REVOKE_FILE_ID}`, and `{DOC_ID}`.
+
+**Result (2026-10-04) ✅ PASS (checks as written); 🔍 two probes beyond the case — Kit, PR #903 round 1 (`8a634db`).** All three steps ran from the kit worktree with its OAuth token, on a scratch doc in `{FOLDER_ID}`. Each step printed `cancelled at '<point>'; the tool returned nothing` and the expected WARNING. `still link-shared by this call` was `none` for `share` and `edit`, and listed `{KEPT_FILE_ID}` for `edit --keep-shared`. `list_permissions` showed no `anyone` grant on `{SHARE_FILE_ID}` or `{EDIT_FILE_ID}`, and showed `anyoneWithLink`/`reader` on `{KEPT_FILE_ID}`. `get_doc_content` still read `Before`, `IMGMARKER883`, `After`. That read came before any cache refresh, but the in-flight probe below then found the marker, so no step had edited the doc.
+
+Two extra probes ran from a scratch copy of the script (not committed):
+- **`share-fail`** (the gate holds the share, then raises instead of granting): the call uploaded a file, the share failed, the cancel arrived during the shielded gather, and **no WARNING was logged**. With every placement failed, the tool returns at `if not ready` before any unshielded await, so the cancellation is never seen there and the created orphan (#649) appears in no log. That breaks the docstring's new promise (finding 1 in the round 1 PR comment).
+- **`inflight`** (the gate hands the `batchUpdate` to its worker thread at once, and the cancel lands while the thread runs): the WARNING was logged and the share revoked, with no `anyone` grant afterward. The edit still landed after the cancel: after `refresh_cache`, `get_doc_as_markdown` showed the image embedded where the marker had been. Docs had fetched the image before the revoke. The batchUpdate is atomic (it either embeds with a successful fetch or fails whole), so neither ordering leaves a broken embed or a public share. The case's background says a cancel "during ... the `batchUpdate`" is covered, but the committed script only cancels before the send (finding 5).
+
+All files from both probes and the three steps, and the doc, were trashed.
+
+**Result (2026-10-04) ✅ PASS — Kit, PR #903 round 2 (`4e392c3`).** All six steps ran from the kit worktree with its OAuth token, on a fresh scratch doc in `{FOLDER_ID}`. Each step printed `cancelled at '<point>'; the tool returned nothing` and the WARNING `Doc edit for {DOC_ID} failed or was cancelled after its images were resolved; files created by this call: <one file ID>; pre-existing files: none; still link-shared by this call: ...`. That last field listed `{KEPT_FILE_ID}` for step 4 and was `none` for every other step. Steps 2 (`share-fail`, the orphan) and 6 (`revoke`), which logged nothing in round 1's probe, now log. `list_permissions` showed no `anyone` grant on `{SHARE_FILE_ID}`, `{ORPHAN_FILE_ID}`, `{EDIT_FILE_ID}`, `{INFLIGHT_FILE_ID}`, or `{REVOKE_FILE_ID}`, and showed `anyoneWithLink`/`reader` on `{KEPT_FILE_ID}`. After `refresh_cache`, `get_doc_as_markdown` read `Before`, `IMGMARKER883`, an image, an image, `After`. So steps 1–4 left `IMGMARKER883` untouched, step 6's edit landed before its cancel, and step 5's in-flight edit also landed (an image replaced `INFLIGHT883`). All six files and the doc were trashed.
+
+**Result (2026-10-14) ✅ PASS — Kit, PR #1029 round 1 (`089f6ee`).** Re-run on the shared `ImageShareLifecycle`. All six steps ran from the kit worktree with its OAuth token, on a fresh scratch doc in a scratch folder on the QA Shared Drive. Each printed `cancelled at '<point>'; the tool returned nothing` and the expected WARNING, whose `still link-shared by this call` listed `{KEPT_FILE_ID}` for step 4 and was `none` otherwise. `list_permissions` showed no `anyone` grant on the five revoked files and `anyoneWithLink`/`reader` on `{KEPT_FILE_ID}`. `get_doc_as_markdown` read `Before`, `IMGMARKER883`, an image, an image, `After`. New with #907: step 5 printed `(edit landed: no)` from the cancel path, then the lifecycle's "finished afterward" DEBUG line and a later `(edit landed: yes)`. Script note: steps 3–4 print `batchUpdates sent: 1; landed: 0`, but the `edit` gate cancels before the request is sent (`sent` is counted before the hold; sent back in the round 1 PR comment). Cleanup done.
+
+**Result (2026-10-14) ✅ PASS (partial re-run) — Kit, PR #1029 round 2 (`fd591d9`).** Re-verified the script-counter fix only: step 3 (`edit`) on a fresh scratch doc printed the cancel line, the WARNING (`still link-shared by this call: none`), and `batchUpdates sent: 0; landed: 0` (round 1 printed `sent: 1`). `IMGMARKER883` was still in the doc, and the file had no `anyone` grant. Cleanup done.
+
+**Result (2026-10-15) ✅ PASS — Kit, PR #1029 round 4 (`d748932`).** Re-run after the `develop` merge (#1023, #1034). All six steps ran from the kit worktree with its OAuth token, on a fresh scratch doc in a scratch folder on the QA Shared Drive. Each printed `cancelled at '<point>'; the tool returned nothing` and the expected WARNING, whose `still link-shared by this call` listed `{KEPT_FILE_ID}` for step 4 and was `none` otherwise. Steps 1–4 printed `batchUpdates sent: 0; landed: 0`. Step 5 printed `(edit landed: no)`, the lifecycle's "finished afterward" DEBUG line, then `(edit landed: yes)`. `list_permissions` showed no `anyone` grant on the five revoked files and `anyoneWithLink`/`reader` on `{KEPT_FILE_ID}`. After `refresh_cache`, `get_doc_as_markdown` read `Before`, `IMGMARKER883`, an image, an image, `After`. Cleanup done.
+
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+The scratch script needs a usable OAuth token (see DOC80).
+
+## Unreadable source file returns an error — `create_doc_from_file` / `update_doc_from_file` (PR #961)
+
+Both tools read the local file through the shared `_read_doc_source_file` helper. Before PR #961's round 2, a path that existed but wasn't a readable UTF-8 regular file raised out of the tool (`[Errno 21] Is a directory`, `'utf-8' codec can't decode byte 0xe9 ...`) instead of returning `{"error": ...}`.
+
+### TC-DOC213: A directory or non-UTF-8 source file returns `{"error": ...}`, and nothing is created or edited
+**Setup:**
+- `mkdir -p /tmp/tc-doc213/dir.md`
+- `python3 -c "open('/tmp/tc-doc213/latin1.html','wb').write('<p>caf\xe9</p>'.encode('latin-1'))"`
+- `get_doc_content(file_id={DOC_ID})`, note the content for comparison afterward
+
+**Steps**
+1. `create_doc_from_file(local_path="/tmp/tc-doc213/dir.md", folder_id={FOLDER_ID})`
+2. `create_doc_from_file(local_path="/tmp/tc-doc213/latin1.html", folder_id={FOLDER_ID})`
+3. `update_doc_from_file(doc_id={DOC_ID}, local_path="/tmp/tc-doc213/dir.md")`
+4. `update_doc_from_file(doc_id={DOC_ID}, local_path="/tmp/tc-doc213/latin1.html")`
+
+**Checks**
+- Each call returns a dict with an `error` key naming the path (any wording). None comes back as `Error executing tool ...`
+- `list_files(folder_id={FOLDER_ID})` shows no new Doc named `dir` or `latin1` (the filename stem `create_doc_from_file` uses as the default title; steps 1–2 fail before the Drive `create`)
+- `get_doc_content(file_id={DOC_ID})` matches the Setup snapshot (steps 3–4 fail before any Docs API call)
+
+**Cleanup:** `rm -rf /tmp/tc-doc213`
+
+**Result (2026-10-10) ✅ PASS — Sky, PR #961 round 2 (`849f0bb`).** Ran with the fixtures under this job's scratch dir instead of `/tmp/tc-doc213`. Steps 1 and 3 returned `{"error": "Not a regular file: <path>/dir.md"}`; steps 2 and 4 returned `{"error": "File is not valid UTF-8: <path>/latin1.html (invalid continuation byte at byte 6)"}`. No call surfaced as `Error executing tool`. `list_files({FOLDER_ID})` showed only the three standing fixtures. After `refresh_cache`, `get_doc_content({DOC_ID})` matched the Setup snapshot. Round 1 reproduced both raises on the pre-fix code (`075ce99`).
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+## Comment quoted text is plain text, not HTML-escaped (#984)
+
+Drive returns a comment's `quotedFileContent.value` HTML-escaped (`Caf&#233;`, `&amp;`, `&lt;`, `&quot;`, `&#39;`), and a literal `&amp;` in the anchor as `&amp;amp;`. `add_doc_comment`, `list_doc_comments`, and `get_doc_as_markdown(include_comments=True)` unescape it once. The Markdown export then escapes the quote only as Markdown needs, with `"> "` on every line, and escapes comment authors, text, and replies the same way.
+
+### TC-DOC215: Non-ASCII, `&`/`<`/`"`, literal-entity, and multi-line anchors round-trip as plain text ⚠️ destructive ⚠️ requires-oauth
+**Setup:** `create_doc(title="QA TC-DOC215", folder_id={FOLDER_ID}, content="<p>Café and Tom &amp; Jerry, a &lt; b, say \"hi\" it's &amp;amp; literal</p><p>line one</p><p>line *two* &lt;x&gt;</p>")`, note the returned `docId` as `{SCRATCH_DOC_ID}`
+
+**Steps**
+1. `add_doc_comment(doc_id={SCRATCH_DOC_ID}, content="QA TC-DOC215 a <b> *x*", quoted_text="Café and Tom & Jerry, a < b, say \"hi\" it's")`
+2. `add_doc_comment(doc_id={SCRATCH_DOC_ID}, content="QA TC-DOC215 b", quoted_text="&amp; literal")`
+3. `add_doc_comment(doc_id={SCRATCH_DOC_ID}, content="QA TC-DOC215 c", quoted_text="line one\nline *two* <x>")`
+4. `list_doc_comments(doc_id={SCRATCH_DOC_ID})`
+5. `get_doc_as_markdown(doc_id={SCRATCH_DOC_ID}, include_comments=True)`
+
+**Checks**
+- Steps 1–3 each return `quoted_text` equal to the `quoted_text` passed in, character for character: `Café`, not `Caf&#233;`; `&`, `<`, `"`, `'` unescaped; step 2 returns `&amp; literal`, not `&amp;amp; literal` or `& literal`
+- Step 4's three comments carry the same `quoted_text` values as steps 1–3
+- Step 5's `## Comments` section contains these quote blocks, each followed by a blank line before the comment text:
+  - `> Café and Tom & Jerry, a < b, say "hi" it's`
+  - `> \&amp; literal`
+  - `> line one\` (ending in a hard-break backslash, since PR #991 round 2) then `> line \*two\* \<x>` on the next line
+- Step 5 renders step 1's comment text as `QA TC-DOC215 a \<b> \*x\*` (plain text, escaped only as Markdown needs), and step 1 itself returns `content` unchanged
+- No `&#233;`, `&quot;`, `&#39;`, or `&lt;` appears anywhere in step 5's comments section
+
+**Cleanup:** `delete_file(file_id={SCRATCH_DOC_ID})`
+
+**Result (2026-10-11) ✅ PASS — Kit, PR #991 round 1 (`9953a83`).** Steps 1–3 echoed each `quoted_text` exactly (`Café and Tom & Jerry, a < b, say "hi" it's`, `&amp; literal`, `line one\nline *two* <x>`); step 4 returned the same three values. Step 5's comments section had `> Café and Tom & Jerry, a < b, say "hi" it's`, `> \&amp; literal`, and `> line one` / `> line \*two\* \<x>`, each followed by a blank line, and comment text `QA TC-DOC215 a \<b> \*x\*`; no `&#233;`/`&quot;`/`&#39;`/`&lt;` in the section. Extra probe: a comment created in the Docs UI (Playwright) on the doc's literal `&amp; literal` text also came back from `list_doc_comments` as `&amp; literal`, so Drive escapes UI-created anchors too and a single unescape is correct for them. The case passes, but the round was sent back for Markdown-escaping gaps in comment text that this case doesn't exercise (see the PR comment).
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+### TC-DOC217: Multi-line comment text and indented/rule body paragraphs stay plain text in the Markdown export ⚠️ destructive ⚠️ requires-oauth
+Comment text is plain text, so no line of it may render as Markdown structure, and each line keeps its own line (a hard break, not a soft wrap). Body paragraphs that start with spaces or a tab before a marker, or that are a `---` rule line, stay plain paragraphs too (#993). Replies are covered by unit tests only: the one tool that posts a reply, `resolve_doc_comment`, also resolves the comment, and `include_comments` exports only open ones.
+
+**Setup:**
+- `create_doc(title="QA TC-DOC217", folder_id={FOLDER_ID}, content="<p>anchor</p>")`, note the returned `docId` as `{SCRATCH_DOC_ID}`
+- `insert_doc_text(doc_id={SCRATCH_DOC_ID}, insertions=[{"index": 1, "text": " - a\n  # h\n---\n\ttab indent\n## Notes\n"}])`
+
+**Steps**
+1. `add_doc_comment(doc_id={SCRATCH_DOC_ID}, quoted_text="anchor", content="Summary\n---\nPoints:\n - a\n   - b\na | b\n-|-\nc | d\n## Notes\n\n    indented *x*")`
+1a. `add_doc_comment(doc_id={SCRATCH_DOC_ID}, quoted_text="Summary\n===  ", content="QA TC-DOC217 setext")` (the trailing spaces after `===` are part of the anchor; Drive keeps them in `quoted_text`)
+2. `get_doc_as_markdown(doc_id={SCRATCH_DOC_ID}, include_comments=True, local_path="/tmp/tc-doc217.md")`
+3. `uv run python -c "from markdown_it import MarkdownIt; print(MarkdownIt('commonmark').enable('table').render(open('/tmp/tc-doc217.md').read()))"`
+
+**Checks**
+- Step 3's HTML has no `<ul>`, `<ol>`, `<h1>`, `<table>`, or `<pre>`. It has exactly one `<h2>` (`Comments`) and one `<hr />`: the comments section's own heading and separator
+- The body renders `<p>- a</p>`, `<p># h</p>`, `<p>---</p>`, `<p>tab indent</p>`, and `<p>## Notes</p>`
+- Step 1's comment renders `Summary`, `---`, `Points:`, `- a`, `- b`, `a | b`, `-|-`, `c | d`, and `## Notes` as separate lines joined by `<br />` in one paragraph, with no literal `\` at any line end, then `<p>indented *x*</p>` as its own paragraph
+- Step 1a's quote renders as `<blockquote>` holding `<p>Summary<br />` and `===</p>`, with no `<h1>`
+
+**Cleanup:** `delete_file(file_id={SCRATCH_DOC_ID})`, `rm /tmp/tc-doc217.md`
+
+**Result (2026-10-11) ✅ PASS (case as written), ❌ sent back on probes — Kit, PR #991 round 2 (`de8143e`).** Ran with the export under this job's scratch dir instead of `/tmp`. Every check passed for the case's own content: body `<p>- a</p>`, `<p># h</p>`, `<p>---</p>`, `<p>tab indent</p>`; the comment's eight lines joined by `<br />` in one paragraph, then `<p>indented *x*</p>`; no `<ul>`/`<ol>`/`<table>`/`<pre>`. Extra probes on the same doc failed: (1) a body paragraph `## Notes` and a comment line `## Notes` each rendered as `<h2>`, and the comment line before it kept a literal `\`, because `_LEADING_SIMPLE_MARKER` matches only a single `#`; (2) `add_doc_comment(quoted_text="Summary\n===  ")` exported `> Summary\` / `> ===  `, which renders as `<h1>Summary\</h1>` inside the blockquote, because `_LEADING_RULE_LINE` doesn't allow trailing whitespace after `=`. Drive trims trailing whitespace from the end of comment `content` (not from `quoted_text`), and a mid-content `===  ` line is safe because the hard break before it blocks the setext.
+
+**Result (2026-10-11) ✅ PASS — Kit, PR #991 round 3 (`95ba882`).** Ran with the export under this job's scratch dir instead of `/tmp`. Step 3's HTML had no `<ul>`/`<ol>`/`<h1>`/`<table>`/`<pre>`, exactly one `<h2>` (`Comments`) and one `<hr />`. Body: `<p>- a</p>`, `<p># h</p>`, `<p>---</p>`, `<p>tab indent</p>`, `<p>## Notes</p>`. Step 1's comment rendered its nine lines through `## Notes` joined by `<br />` with no literal `\`, then `<p>indented *x*</p>`. Step 1a's `quoted_text` came back as `Summary\n===  ` (trailing spaces kept) and rendered as `<blockquote><p>Summary<br />===</p></blockquote>`, no `<h1>`.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+### TC-DOC218: A trailing-slash `local_path` naming a missing directory creates it; one naming an existing file is refused (issue #990) ⚠️ local-filesystem
+Every capped tool's `local_path` goes through the shared `write_capped_result_to_disk`. Before #990, `dir/` for a directory that didn't exist yet was written as a *file* named `dir`, and `file/` over an existing file overwrote it.
+
+**Setup:** `rm -rf /tmp/qa-990 && mkdir -p /tmp/qa-990/linkdir && printf 'keep me' > /tmp/qa-990/blocker && ln -s /tmp/qa-990/missing /tmp/qa-990/dangling && ln -s /tmp/qa-990/elsewhere /tmp/qa-990/linkdir/{DOC_ID}.md`. Confirm `/tmp/qa-990/new`, `/tmp/qa-990/missing`, and `/tmp/qa-990/elsewhere` don't exist.
+
+**Steps**
+1. `get_doc_as_markdown(doc_id={DOC_ID}, local_path="/tmp/qa-990/new/sub/")`
+2. `get_doc_as_markdown(doc_id={DOC_ID}, local_path="/tmp/qa-990/blocker/")`
+3. `get_doc_as_markdown(doc_id={DOC_ID}, local_path="/tmp/qa-990/blocker/sub/")`
+4. `get_doc_as_markdown(doc_id={DOC_ID}, local_path="/tmp/qa-990/dangling/")`
+5. `get_doc_as_markdown(doc_id={DOC_ID}, local_path="/tmp/qa-990/linkdir/")`
+
+**Checks**
+- Step 1 returns `local_path` `/tmp/qa-990/new/sub/{DOC_ID}.md`. `/tmp/qa-990/new/sub` is a directory (`test -d`), not a file, and the `.md` file in it holds raw Markdown whose byte size equals `bytes_written`
+- Step 2 raises "local_path '/tmp/qa-990/blocker/' has a non-directory path component at '/tmp/qa-990/blocker'; local_path ends in a path separator or '.', which makes it a directory target…", and `/tmp/qa-990/blocker` still holds `keep me`
+- Step 3 raises a `ValueError` "…has a non-directory path component at '/tmp/qa-990/blocker'" (a file further up the path), not a raw `NotADirectoryError` (PR #1000 QA round 1)
+- Step 4 raises a `ValueError` "…has a symlink to a missing target at '/tmp/qa-990/dangling'", not a raw `FileExistsError`, and `/tmp/qa-990/missing` still doesn't exist (PR #1000 QA round 1)
+- Step 5 raises a `ValueError` "…has a symlink to a missing target at '/tmp/qa-990/linkdir/{DOC_ID}.md'", and `/tmp/qa-990/elsewhere` still doesn't exist: the file joined onto a directory gets the same checks as a file `local_path` (PR #1000 QA round 2)
+
+**Cleanup:** `rm -rf /tmp/qa-990`
+
+**Result (2026-10-11) ✅ PASS — Kit, PR #1000 round 1 (`12bd36a`).** Ran under this job's scratch dir instead of `/tmp`. Step 1 returned `local_path` `<dir>/new/sub/{DOC_ID}.md`, `bytes_written` 96; `new/sub` is a directory and the file is 96 bytes. Step 2 raised the expected "ends in a separator, so it must be a directory, but … is an existing file" error and `blocker` still holds `keep me`. Probes outside the case (sent back): `<file>/sub/` with `<file>` a regular file raises a raw `NotADirectoryError`, and `<dangling symlink>/` raises `FileExistsError`, not the new `ValueError`.
+
+**Result (2026-10-11) ✅ PASS — Kit, PR #1000 round 2 (`695d0f9`).** Ran under this job's scratch dir instead of `/tmp`. Step 1 returned `<dir>/new/sub/{DOC_ID}.md`, `bytes_written` 96, and `new/sub` is a directory. Step 2 raised "…has a non-directory path component at '<dir>/blocker'; local_path ends in a path separator or '.', which makes it a directory target…", and `blocker` still holds `keep me`. Step 3 raised the `ValueError` naming `<dir>/blocker`. Step 4 raised "…has a symlink to a missing target at '<dir>/dangling'", and `missing` was not created.
+
+**Result (2026-10-11) ✅ PASS — Kit, PR #1000 round 3 (`290f5bc`).** Ran under this job's scratch dir instead of `/tmp`. Steps 1–4 matched round 2 (step 1 wrote `<dir>/new/sub/{DOC_ID}.md`, 96 bytes; steps 2–4 raised the expected `ValueError`s; `blocker` still holds `keep me`; `missing` not created). Step 5 raised "…has a symlink to a missing target at '<dir>/linkdir/{DOC_ID}.md'", and `elsewhere` was not created.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (ash).
+
+## Backup copy before replacing a doc's content — `write_doc_content` / `update_doc_from_file` (#878)
+
+### TC-DOC219: A replace backs the doc up first, removes the backup on success, and names it on failure ⚠️ destructive
+Before #878, a replace that failed after the clear left the doc empty, and the error didn't say so. Now a doc with content is copied with Drive before the clear (`"<title> (backup before replace)"`, next to the doc). The copy is removed on success and kept and named as `backupId` on failure. No tool call can make the content write fail after a successful clear, so part B injects the failure from a scratch script against the checkout under test. Design: `docs/design/doc-replace-backup.md`.
+
+Run it on a server whose account can own a copy of `{DOC_ID}`: OAuth, or a service account when `{DOC_ID}` is on a Shared Drive. A service account writing into a My Drive doc gets `storageQuotaExceeded` on the copy, so it replaces without a backup by design (#1018 widened this to a few other copy failures; TC-DOC224). Step 1 then returns a "replaced without a backup copy" `warning`, and step 4 reports "couldn't be backed up" instead of a `backupId`.
+
+**Setup:** `write_doc_content(doc_id={DOC_ID}, content="<p>TC-DOC219 before</p>")`. Note the doc's `name` from `get_file_metadata(file_id={DOC_ID})`.
+
+**Steps (part A, tool calls)**
+1. `write_doc_content(doc_id={DOC_ID}, content="<h1>TC-DOC219 after</h1><p>Replaced.</p>")`
+2. `search_files(query="<name> (backup before replace)")` (the name noted in Setup)
+3. `get_doc_content(file_id={DOC_ID})`
+
+**Steps (part B, scratch script from the checkout under test, same OAuth token as the server under test)**
+
+4. Run, with `{DOC_ID}` filled in:
+```
+uv run python3 -c "
+import asyncio, mcp_gee_sweet
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+from googleapiclient.discovery import build
+from mcp_gee_sweet import auth
+from mcp_gee_sweet.tools.docs import content as c
+creds = auth._oauth_creds()
+lc = SimpleNamespace(docs_service=build('docs', 'v1', credentials=creds),
+    drive_service=build('drive', 'v3', credentials=creds), doc_cache=MagicMock(),
+    drive_folder_cache=MagicMock(), folder_id=None)
+with patch.object(c, 'fill_tables', side_effect=RuntimeError('injected failure')):
+    print(asyncio.run(c._replace_doc_content(lc, '{DOC_ID}', '<p>TC-DOC219 failed write</p>', 'html',
+        autolink_urls=True, revoke_sharing=True, auto_downscale=False, allow_no_backup=False)))
+"
+```
+5. `get_doc_content(file_id={BACKUP_ID})`, where `{BACKUP_ID}` is step 4's `backupId`. Part B's mock `doc_cache` leaves the server's cache stale, so call `refresh_cache(doc_id={DOC_ID})` before reading `{DOC_ID}` again.
+
+**Steps (part C, a 503 returned after the request already ran, PR #1017 QA round 1)**
+
+6. Restore some content first: `write_doc_content(doc_id={DOC_ID}, content="<p>TC-DOC219 before C</p>")`. Then run the script below with `MATCH=':batchUpdate'` (the clear), then `refresh_cache(doc_id={DOC_ID})` and `get_doc_content(file_id={DOC_ID})`, then `get_doc_content(file_id=<its backupId>)`.
+7. `write_doc_content(doc_id={DOC_ID}, content="<p>TC-DOC219 before C2</p>")`, then run the script with `MATCH='/copy'` (the backup copy), then `refresh_cache(doc_id={DOC_ID})`, `get_doc_content(file_id={DOC_ID})`, and `search_files(query="<name> (backup before replace)")`.
+```
+MATCH=':batchUpdate' uv run python3 -c "
+import asyncio, os, mcp_gee_sweet
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from mcp_gee_sweet import auth
+from mcp_gee_sweet.tools.docs import content as c
+creds = auth._oauth_creds()
+lc = SimpleNamespace(docs_service=build('docs', 'v1', credentials=creds),
+    drive_service=build('drive', 'v3', credentials=creds), doc_cache=MagicMock(),
+    drive_folder_cache=MagicMock(), folder_id=None)
+real = c.execute_in_thread
+async def after_commit(fn, service):
+    result = await real(fn, service)
+    if os.environ['MATCH'] in getattr(getattr(fn, '__self__', None), 'uri', ''):
+        raise HttpError(resp=MagicMock(status=503), content=b'{}')
+    return result
+with patch.object(c, 'execute_in_thread', after_commit):
+    print(asyncio.run(c._replace_doc_content(lc, '{DOC_ID}', '<p>TC-DOC219 part C</p>', 'html',
+        autolink_urls=True, revoke_sharing=True, auto_downscale=False, allow_no_backup=False)))
+"
+```
+
+**Checks**
+- Step 1 returns `docId` and `web_link`, with no `error`, `backupId`, or `warning`
+- Step 2 finds no file: the backup was removed (deleted, or trashed on a Shared Drive where the account can't delete, #876)
+- Step 3 shows "TC-DOC219 after" and "Replaced.", and no "TC-DOC219 before"
+- Step 4 prints `{"error": "doc edit failed: injected failure. The document's previous content was cleared first; a full copy of it is kept as '<name> (backup before replace)' (backupId).", "docId": "{DOC_ID}", "backupId": "..."}`
+- Step 5 shows "TC-DOC219 after" and "Replaced.", the content from before step 4's failed write
+- Step 6's script prints an error containing "may have been cleared" and a `backupId`. `{DOC_ID}` reads empty, and the `backupId` doc shows "TC-DOC219 before C": the backup was kept, not deleted
+- Step 7's script prints "Couldn't back up the document before replacing its content, so it was left unchanged" ending in "A copy named '<name> (backup before replace)' may still have been created next to the document; check for it and delete it". `{DOC_ID}` still shows "TC-DOC219 before C2", and `search_files` finds that copy
+
+**Cleanup:** `delete_file` on `{BACKUP_ID}`, step 6's `backupId`, and the copy step 7's `search_files` found, then write fixture content back over `{DOC_ID}`
+
+**Result (2026-10-12) ❌ FAIL — Sky, PR #1017 round 1 (`94b1ddd`).** Ran on a scratch doc on the QA Shared Drive (OAuth), not the shared fixture doc, and part B used the script with the server's env loaded from this slot's MCP config. Part A passed: step 1 returned `docId`/`web_link` only; step 2 found no backup; step 3 showed the new content. Part B passed: step 4 printed the expected error with a `backupId`, step 5 showed the pre-failure content, and the same `search_files` query from step 2 found that kept backup (a positive control for step 2). The case fails on two extra probes run with the same script, `execute_in_thread` patched to raise `HttpError` 503 after the real call had already gone through. (a) On the clear: it returned "Couldn't clear the document, so it was left unchanged" and removed the backup, but a fresh `get_doc_content` (after `refresh_cache`) showed the doc empty: data loss (review finding 1). (b) On the `files.copy`: it returned "Couldn't back up… left unchanged" with no file ID, while a `(backup before replace)` copy now existed next to the doc (finding 5). `update_doc_from_file` replace on the same doc: new content written, no backup left behind. Note: part B's mock `doc_cache` leaves the server's cache stale, so call `refresh_cache(doc_id=…)` before step 5-style reads of `{DOC_ID}`. Cleanup done: the scratch doc and both kept copies were trashed.
+
+**Result (2026-10-13) ✅ PASS — Sky, PR #1017 round 2 (`e6f0902`).** Ran on a fresh scratch doc on the QA Shared Drive (OAuth). The scripts loaded the server's env from this slot's MCP config. Part A: step 1 returned `docId`/`web_link` only, step 2 found no backup, step 3 showed the new content. Part B: step 4 printed the expected "cleared first" error with a `backupId`, and step 5 showed "TC-DOC219 after / Replaced.". Part C step 6 (503 after the clear landed): "…may have been cleared; a full copy of it is kept…" with a `backupId`. After `refresh_cache`, `{DOC_ID}` read empty and the backup showed "TC-DOC219 before C". Step 7 (503 after the copy landed): "…left unchanged… A copy named '<name> (backup before replace)' may still have been created next to the document; check for it and delete it". `{DOC_ID}` still showed "TC-DOC219 before C2", and `search_files` found the copy. The 503 text in steps 6–7 shows the script's `MagicMock` reason, a script artifact. Extra probe: `_BACKUP_COPY_TIMEOUT` patched to 3 s, with the copy's worker thread blocking 15 s after the real copy. The coroutine returned after 3.7 s with "…left unchanged: TimeoutError. A copy named … may still have been created…", so the bound cancels the wait on the thread. `asyncio.run` still waited for the thread at exit, which is expected in a script. Each timeout run left the copy it warned about. Cleanup done: the scratch doc and all five copies were trashed.
+
+**Result (2026-10-13) ✅ PASS — Sky, PR #1017 round 3 (`b78faab`).** Re-verification of the round-2 cache fix. Part A ran on a fresh scratch doc on the QA Shared Drive (OAuth), with the cache warmed by a `get_doc_content` before step 1 and no `refresh_cache` before step 3. Step 1 returned `docId`/`web_link` only, step 2 found no backup, and step 3 showed "TC-DOC219 after / Replaced.", so the write invalidated the cached pre-write content. Parts B and C weren't re-run: the fix only moves `mark_dirty` on the success path, and both parts passed in round 2. The lookup-failure path is covered by the new unit assertion. Cleanup done: the scratch doc was trashed.
+
+**Result (2026-10-17) 🟡 PARTIAL — v0.9.2 release pass**
+Part A passes; parts B and C need the OAuth scratch script.
+
+### TC-DOC224: A caller who can edit the doc but can't add to its folder replaces it without a backup, and is told so (#1018) ⚠️ destructive ⚠️ requires-oauth
+#878's backup copy has no `parents`, so it goes into the doc's folder. A caller who can edit the doc but only read or comment on that folder gets 403 `insufficientFilePermissions` on the copy. That caller could write the doc before #878, so the replace now goes ahead without a backup and says so (`docs/design/doc-replace-backup.md`, "The copy fails"). Two identities are needed: the OAuth account owns the fixture, and the service account is the caller. The case runs as a scratch script from the checkout under test, with no MCP server involved, so it needs both `token.json` and service-account credentials in `src/mcp_gee_sweet/.env`. The fixture is a fresh My Drive folder, not `{DOC_ID}`, since the service account needs exactly reader access on the folder and writer access on the doc.
+
+**Setup:** none. The script creates and deletes its own fixture.
+
+**Steps**
+1. Run from the checkout under test:
+```
+uv run python -I -c "
+import asyncio, json, time, mcp_gee_sweet
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+from googleapiclient.discovery import build
+from mcp_gee_sweet import auth
+from mcp_gee_sweet.tools.docs import content as c
+oauth, sa = auth._oauth_creds(), auth._service_account_creds()
+od, odocs = build('drive', 'v3', credentials=oauth), build('docs', 'v1', credentials=oauth)
+lc = SimpleNamespace(docs_service=build('docs', 'v1', credentials=sa),
+    drive_service=build('drive', 'v3', credentials=sa), doc_cache=MagicMock(),
+    drive_folder_cache=MagicMock(), folder_id=None)
+def text(d):
+    b = odocs.documents().get(documentId=d).execute()['body']['content']
+    return ''.join(r.get('textRun', {}).get('content', '') for e in b for r in e.get('paragraph', {}).get('elements', [])).strip()
+def run(d, html):
+    return asyncio.run(c._replace_doc_content(lc, d, html, 'html', autolink_urls=True, revoke_sharing=True, auto_downscale=False, allow_no_backup=False))
+folder = od.files().create(body={'name': 'TC-DOC224 folder', 'mimeType': 'application/vnd.google-apps.folder'}, fields='id').execute()['id']
+try:
+    doc = od.files().create(body={'name': 'TC-DOC224 doc', 'mimeType': 'application/vnd.google-apps.document', 'parents': [folder]}, fields='id').execute()['id']
+    odocs.documents().batchUpdate(documentId=doc, body={'requests': [{'insertText': {'location': {'index': 1}, 'text': 'TC-DOC224 before\n'}}]}).execute()
+    for fid, role in ((folder, 'reader'), (doc, 'writer')):
+        od.permissions().create(fileId=fid, body={'type': 'user', 'role': role, 'emailAddress': sa.service_account_email}, sendNotificationEmail=False).execute()
+    time.sleep(3)
+    print('A', json.dumps({k: v for k, v in run(doc, '<p>TC-DOC224 after</p>').items() if k != 'docId'}), repr(text(doc)))
+    with patch.object(c, 'fill_tables', side_effect=RuntimeError('injected failure')):
+        print('B', json.dumps({k: v for k, v in run(doc, '<p>TC-DOC224 failed</p>').items() if k != 'docId'}))
+    print('C', [f['name'] for f in od.files().list(q=f\"'{folder}' in parents and trashed=false\", fields='files(name)').execute()['files']])
+finally:
+    od.files().delete(fileId=folder).execute()
+    print('cleanup done')
+"
+```
+
+**Checks**
+- Line `A` has `web_link` and `warning` "The document's previous content was replaced without a backup copy (this account can't add a file to the document's folder).", with no `error` or `backupId`. Its doc text is `'TC-DOC224 after'`
+- Line `B`'s `error` is "doc edit failed: injected failure. The document's previous content was cleared first and couldn't be backed up (this account can't add a file to the document's folder), so the document may be empty or partly written.", with no `backupId`
+- Line `C` lists only `TC-DOC224 doc`: no `(backup before replace)` copy was made
+- The log shows `Replacing doc … without a backup: this account can't add a file to the document's folder` before each of `A` and `B`
+- `cleanup done` is printed
+
+**Cleanup:** the script deletes the folder, and the doc with it. If it stopped before `cleanup done`, `search_files(query="TC-DOC224")` on the OAuth server and delete what it finds.
+
+**Result (2026-10-14) ✅ PASS — Sky, PR #1034 round 1 (`454001d`).** Ran the script as written from this slot's checkout, with this slot's OAuth token and the shared service-account key passed by env var. Line `A` had `web_link` and the expected `warning`, with doc text `'TC-DOC224 after'`. Line `B` had the expected "cleared first and couldn't be backed up (this account can't add a file to the document's folder)" error and no `backupId`. Line `C` listed only `TC-DOC224 doc`. Before each of `A` and `B`, the log showed googleapiclient's `403 … "insufficientFilePermissions"` and then `Replacing doc … without a backup: this account can't add a file to the document's folder`. `cleanup done` was printed. Extra probe: the service account was given writer access on both the doc and a My Drive folder, and the copy returned `storageQuotaExceeded`, as the design doc says. After the owner set `downloadRestrictions.itemDownloadRestriction.restrictedForWriters`, the same copy returned 403 `cannotCopyFile` (with or without `parents`). That reason isn't in `_no_backup_reason`, so such a writer is still refused.
+
+**Result (2026-10-14) ✅ PASS — Sky, PR #1034 round 2 (`ca210a4`).** Re-ran the script as written, and every check held, with the same `A`/`B`/`C` output and log lines as round 1. Extra probe for the round-1 fix: the same fixture, with `execute_in_thread` patched so that only the `webViewLink` lookup raises `ConnectionError`. The replace raised `RuntimeError` "The document's previous content was replaced without a backup copy (this account can't add a file to the document's folder). The new content was written, but looking up the document's link failed: injected lookup failure", with the `ConnectionError` as `__cause__`. The doc read `'TC-DOC224 lookup after'`, and the folder held no backup copy. `numChildrenInNonRootLimitExceeded` can't be produced live (a 500k-item folder), so it's unit-tested only. Cleanup done.
+
+**Result (2026-10-14) ✅ PASS — Kit, PR #1029 round 4 (`d748932`).** Re-ran after `develop` (#1034) was merged into PR #1029, whose `ImageShareLifecycle` now runs inside `_replace_doc_content`. The script ran as written (its `\"` escapes undone for a file) from the kit checkout, with this slot's OAuth token and service-account key passed by env var. Lines `A`, `B` and `C`, both `Replacing doc … without a backup` log lines (each after a 403 `insufficientFilePermissions`), and `cleanup done` all matched the checks.
+
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+The scratch script needs a usable OAuth token (see DOC80).
+
+## Image-share lifecycle: cancellation and cache follow-ups (#909)
+
+`_apply_doc_content` (behind `create_doc`, `create_doc_from_file`, `write_doc_content`, `update_doc_from_file`) and `insert_local_images` now share one temporary-image-share lifecycle, `images.ImageShareLifecycle` (#908). Before this, `_apply_doc_content` sent its content `batchUpdate` even when the call was cancelled during the shielded image gather (#904), and logged nothing when a cancellation arrived during its success-path revoke (#908). Both tools' cancel paths invalidated the doc cache before an in-flight edit landed, or not at all (#907). And `write_doc_content` and a resized `drive:` copy never marked the folder they uploaded into as dirty (#666). TC-DOC203 covers `insert_local_images` on the same lifecycle and should be re-run alongside these.
+
+### TC-DOC222: A cancelled `write_doc_content` never sends its edit after a cancel during the share, logs a cancel during the revoke, and re-invalidates the cache once an in-flight edit lands (#904, #907, #908) ⚠️ requires-oauth ⚠️ destructive ⚠️ local-filesystem
+
+**Background:** Same mechanism as TC-DOC203: `scripts/qa_cancel_insert_local_images.py` runs the checkout's own tool against the real APIs and cancels it at one point. `--tool write_doc_content` routes the call through `_replace_doc_content`/`_apply_doc_content` (its MARKER argument is ignored; `-` below). The script prints every doc-cache invalidation as `doc cache marked dirty for <id> (edit landed: yes|no)`, then waits for an in-flight edit to finish. Run it from the checkout under test with that checkout's OAuth token (`TOKEN_PATH`). It prints the tool's WARNINGs to stderr. On an empty doc `write_doc_content` sends no clear and makes no backup copy, so its first `batchUpdate` is the content one.
+
+**Setup:**
+1. `create_doc(title="TC-DOC222", folder_id={FOLDER_ID})` with no content. Record `docId` as `{DOC_ID}`.
+2. `create_doc(title="TC-DOC222 inflight", folder_id={FOLDER_ID})` with no content. Record `docId` as `{INFLIGHT_DOC_ID}`.
+3. `create_doc(title="TC-DOC222 markers", content="Before\n\nINFLIGHT909\n\nAfter", content_format="markdown", folder_id={FOLDER_ID})`. Record `docId` as `{MARKER_DOC_ID}`.
+
+**Prompt**
+> (none — script-driven; the steps below are shell commands plus tool calls)
+
+**Steps** (`<pixel>` is `<repo-root>/docs/qa/fixtures/qa-fixture-pixel.png`)
+1. `uv run python scripts/qa_cancel_insert_local_images.py {DOC_ID} {FOLDER_ID} <pixel> - share --tool write_doc_content`. Record the file ID from the WARNING as `{SHARE_FILE_ID}`.
+2. The same command with `revoke` in place of `share`. Record the WARNING's file ID as `{REVOKE_FILE_ID}`.
+3. `uv run python scripts/qa_cancel_insert_local_images.py {INFLIGHT_DOC_ID} {FOLDER_ID} <pixel> - inflight --tool write_doc_content`. Record the WARNING's file ID as `{INFLIGHT_FILE_ID}`.
+4. `uv run python scripts/qa_cancel_insert_local_images.py {MARKER_DOC_ID} {FOLDER_ID} <pixel> INFLIGHT909 inflight` (default tool, `insert_local_images`). Record the WARNING's file ID as `{ILI_FILE_ID}`.
+5. Step 1's command again, with `inflight` in place of `share`. `{DOC_ID}` has content since step 2, so this cancels during the *clear* `batchUpdate`, before any image work. Record the backup copy's ID from its WARNING as `{BACKUP_ID}`.
+
+**Checks**
+- Steps 1–4 each print `cancelled at '<point>'; the tool returned nothing` and a WARNING `Doc edit for <doc> failed or was cancelled after its images were resolved; files created by this call: <one file ID>; pre-existing files: none; still link-shared by this call: none`. Before #908, step 2 logged nothing
+- Step 1 prints `batchUpdates sent: 0; landed: 0`. Before #904, the content `batchUpdate` was still sent after the cancellation
+- Steps 3, 4 and 5 each print a `doc cache marked dirty for <doc> (edit landed: no)` line from the cancel path, then a later `doc cache marked dirty for <doc> (edit landed: yes)` line, and end with `batchUpdates sent: 1; landed: 1`. Before #907, the `(edit landed: yes)` line was missing. If a run shows only `(edit landed: yes)` lines, the edit finished before the cancel reached the tool; re-run that step on a fresh doc
+- Step 5 logs `Replacing doc {DOC_ID} was cancelled; kept its backup copy {BACKUP_ID}` and no image WARNING (no image was uploaded)
+- `list_permissions` on `{SHARE_FILE_ID}`, `{REVOKE_FILE_ID}`, `{INFLIGHT_FILE_ID}`, and `{ILI_FILE_ID}` shows no `anyone` permission
+- After `refresh_cache` on each doc, `get_doc_as_markdown` shows: `{INFLIGHT_DOC_ID}` with `Before`, an image, `After` (the in-flight edit landed); `{MARKER_DOC_ID}` with an image where `INFLIGHT909` was; `{DOC_ID}` empty (step 5's clear landed); `{BACKUP_ID}` with `Before`, an image, `After` (step 2's content)
+
+**Cleanup:** trash `{SHARE_FILE_ID}`, `{REVOKE_FILE_ID}`, `{INFLIGHT_FILE_ID}`, `{ILI_FILE_ID}`, `{BACKUP_ID}`, `{DOC_ID}`, `{INFLIGHT_DOC_ID}`, and `{MARKER_DOC_ID}`.
+
+**Result (2026-10-14) ✅ PASS (checks as written); ❌ sent back on a probe — Kit, PR #1029 round 1 (`089f6ee`).** Ran from the kit worktree with its OAuth token, docs in a scratch folder on the QA Shared Drive, the fixture pixel from this checkout. Steps 1–4 each printed the cancel line and the WARNING with `still link-shared by this call: none`. Step 1 printed `batchUpdates sent: 0; landed: 0`. Steps 3, 4 and 5 each printed `(edit landed: no)` line(s) from the cancel path (step 3 two: the lifecycle's and `_replace_doc_content`'s `_failed`), then `(edit landed: yes)`, and ended `sent: 1; landed: 1`. Step 5 logged `Replacing doc {DOC_ID} was cancelled; kept its backup copy {BACKUP_ID}` and no image WARNING. `list_permissions` showed no `anyone` grant on the four files. `get_doc_as_markdown`: `{INFLIGHT_DOC_ID}` `Before`/image/`After`; `{MARKER_DOC_ID}` an image where `INFLIGHT909` was; `{DOC_ID}` empty; `{BACKUP_ID}` `Before`/image/`After`. **Probe (failed):** step 2's command (`revoke`) on a doc that already had content, so a backup was made: two batchUpdates (clear + content) landed and the doc read `Before`/image/`After`, yet the call also logged `Replacing doc … was cancelled; kept its backup copy …`, and that copy was left in Drive for a replace that had fully succeeded. The lifecycle's new post-revoke checkpoint routes the cancel through `_failed` instead of after `_discard_backup` (review finding 2). Cleanup done.
+
+**Result (2026-10-14) ✅ PASS (partial re-run) — Kit, PR #1029 round 2 (`fd591d9`).** Re-ran step 3 and step 5 on fresh scratch docs; both matched round 1 (step 3: `(edit landed: no)` lines, then `(edit landed: yes)`, `sent: 1; landed: 1`, the doc `Before`/image/`After`; step 5: `kept its backup copy` logged, the backup held the old content). Round 1's failed probe (`revoke` on a doc with content) now passes: both batchUpdates landed, the doc read `Before`/image/`After`, no `kept its backup copy` line was logged, and after `refresh_cache` the folder held no `(backup before replace)` copy of that doc. Cleanup done.
+
+**Result (2026-10-14) ✅ PASS (probe only) — Kit, PR #1029 round 3 (`2311322`).** Steps not re-run; the round's fix only touches `create_doc`/`create_doc_from_file`'s Drive create. A scratch script (not committed) ran the checkout's `create_doc` against the real APIs with a mock folder cache and cancelled it while `files().create` ran on its worker thread. The tool returned nothing, the create landed afterward (the Doc was in the folder), and the folder was marked dirty once it landed. An uncancelled `create_doc` in the same folder marked it dirty as before. Cleanup done.
+
+**Result (2026-10-15) ✅ PASS — Kit, PR #1029 round 4 (`d748932`).** Full re-run after the `develop` merge brought #1034's no-backup changes into `_replace_doc_content`. Ran from the kit worktree with its OAuth token, docs in a scratch folder on the QA Shared Drive. Steps 1–4 each printed the cancel line and the WARNING with `still link-shared by this call: none`. Step 1 printed `batchUpdates sent: 0; landed: 0`. Steps 3, 4 and 5 printed `(edit landed: no)` line(s) from the cancel path (step 3 two), then `(edit landed: yes)`, and ended `sent: 1; landed: 1`. Step 5 logged `Replacing doc {DOC_ID} was cancelled; kept its backup copy {BACKUP_ID}` and no image WARNING. `list_permissions` showed no `anyone` grant on the four files. `get_doc_as_markdown`: `{INFLIGHT_DOC_ID}` `Before`/image/`After`; `{MARKER_DOC_ID}` an image where `INFLIGHT909` was; `{DOC_ID}` empty; `{BACKUP_ID}` `Before`/image/`After`. Round 1's probe (`revoke` on a doc that already had content, so a backup was made) passed again: `sent: 2; landed: 2`, the doc read `Before`/image/`After`, no `kept its backup copy` line was logged, and the folder held no `(backup before replace)` copy of that doc. Cleanup done.
+
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+The scratch script needs a usable OAuth token (see DOC80).
+
+---
+
+### TC-DOC223: An image upload or resized copy shows up in a cached folder listing without `refresh_cache`, and a failed edit still names its resized copy (#666) ⚠️ requires-oauth ⚠️ destructive ⚠️ local-filesystem
+
+**Background:** `list_files` caches each folder's listing. `create_doc` marked its target folder dirty, but `write_doc_content` (which uploads a local image into the server's default folder) never did. A `drive:` source's or `drive_file_id`'s resized copy lands next to its original, which no tool marked dirty either. Every upload result now names the folder its file was created in, and the shared image lifecycle (or `insert_inline_image`) marks that folder dirty. The case reads each listing once to cache it, and never calls `refresh_cache`.
+
+**Setup:**
+1. `uv run python3 -c "from PIL import Image; Image.new('RGB', (6000, 6000), 'red').save('/tmp/qa-oversized-909.png')"`
+2. `create_folder(name="TC-DOC223 originals", parent_folder_id={FOLDER_ID})`. Record its ID as `{ORIG_FOLDER_ID}`.
+3. `upload_local_file(local_path="/tmp/qa-oversized-909.png", parent_folder_id={ORIG_FOLDER_ID})`. Record the returned `fileId` as `{OVERSIZED_FILE_ID}`.
+4. `create_doc(title="TC-DOC223", content="Start", folder_id={FOLDER_ID})`. Record `docId` as `{DOC_ID}`.
+5. Read the server's default folder from its config (`DRIVE_FOLDER_ID`) as `{DEFAULT_FOLDER_ID}`. If it isn't set, skip steps 3–4 below and their check: `write_doc_content` can't upload a local image without one.
+
+**Steps**
+1. `list_files(folder_id={ORIG_FOLDER_ID})`, to cache the listing. It shows only `qa-oversized-909.png`.
+2. `insert_inline_image(doc_id={DOC_ID}, index=1, drive_file_id={OVERSIZED_FILE_ID}, auto_downscale=True)`. Record `resized_file_id`. Then `list_files(folder_id={ORIG_FOLDER_ID})` again.
+3. `list_files(folder_id={DEFAULT_FOLDER_ID}, mime_type="image/png")`, to cache the listing.
+4. `write_doc_content(doc_id={DOC_ID}, content="![Pixel](<repo-root>/docs/qa/fixtures/qa-fixture-pixel.png)", content_format="markdown")`. Record `images[0].fileId` as `{PIXEL_FILE_ID}`. Then `list_files(folder_id={DEFAULT_FOLDER_ID}, mime_type="image/png")` again.
+5. Lock `{DOC_ID}` read-only with TC-DOC202's setup step 3 script (doc ID `{DOC_ID}`, reason `TC-DOC223`). Then `insert_inline_image(doc_id={DOC_ID}, index=1, drive_file_id={OVERSIZED_FILE_ID}, auto_downscale=True)` again.
+
+**Checks**
+- Step 2's second listing includes `qa-oversized-909.png (resized)` with ID `resized_file_id`. Before the fix it showed only the original until `refresh_cache`
+- Step 4's second listing includes `{PIXEL_FILE_ID}` (`qa-fixture-pixel.png`). Before the fix it was missing until `refresh_cache`
+- Step 5 returns `{"error": ...}` with the Docs `batchUpdate`'s 403 "The caller does not have permission", plus a `resized_file_id` different from step 2's. That copy exists and is link-shared even though nothing was embedded; before the fix the error result didn't name it
+
+**Cleanup:** unlock `{DOC_ID}` with the same script, using `body={'contentRestrictions': [{'readOnly': False}]}`. Trash both steps' `resized_file_id`, `{OVERSIZED_FILE_ID}`, `{ORIG_FOLDER_ID}`, `{PIXEL_FILE_ID}`, and `{DOC_ID}`. `rm /tmp/qa-oversized-909.png`
+
+**Result (2026-10-14) ✅ PASS — Kit, PR #1029 round 1 (`089f6ee`).** Ran in a scratch folder on the QA Shared Drive; the oversized PNG went under this job's scratch dir instead of `/tmp`, and `{DEFAULT_FOLDER_ID}` is the Shared Drive root (`DRIVE_FOLDER_ID`). Step 1's listing showed only `qa-oversized-909.png`; step 2's second listing added `qa-oversized-909.png (resized)` with ID `resized_file_id`. Step 3's listing was empty; step 4's second listing showed `{PIXEL_FILE_ID}` (`qa-fixture-pixel.png`). No `refresh_cache` anywhere. Step 5 returned the 403 "The caller does not have permission" error plus a new `resized_file_id`, different from step 2's. Cleanup done.
+
+**Result (2026-10-17) 🟡 PARTIAL — v0.9.2 release pass**
+Steps 3–4 pass; steps 1–2 and 5 need an anyone share or the lock script.
+
+### TC-DOC225: A writer whose sharing settings block copying is refused by default, and replaces without a backup with `allow_no_backup=True` (#1035) ⚠️ destructive ⚠️ requires-oauth
+When `downloadRestrictions.itemDownloadRestriction.restrictedForWriters` is set on a doc, a writer's backup copy gets 403 `cannotCopyFile` (measured live, 2026-10-14). Unlike #1018's reasons (TC-DOC224), this one refuses by default and replaces without a backup only when the caller passes `allow_no_backup=True` (`docs/design/doc-replace-backup.md`, "The copy fails"). The same writer also gets 403 `cannotExportFile` on an export, so no other kind of backup is possible either. Same two-identity setup as TC-DOC224: the OAuth account owns the fixture, and the service account is the caller. The script runs from the checkout under test with no MCP server involved, so it needs both `token.json` and service-account credentials in `src/mcp_gee_sweet/.env`. Here the service account is a writer on both the folder and the doc, so the folder permission isn't what stops the copy.
+
+**Setup:** none. The script creates and deletes its own fixture.
+
+**Steps**
+1. Run from the checkout under test:
+```
+uv run python -I -c "
+import asyncio, json, time, mcp_gee_sweet
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+from googleapiclient.discovery import build
+from mcp_gee_sweet import auth
+from mcp_gee_sweet.tools.docs import content as c
+oauth, sa = auth._oauth_creds(), auth._service_account_creds()
+od, odocs = build('drive', 'v3', credentials=oauth), build('docs', 'v1', credentials=oauth)
+lc = SimpleNamespace(docs_service=build('docs', 'v1', credentials=sa),
+    drive_service=build('drive', 'v3', credentials=sa), doc_cache=MagicMock(),
+    drive_folder_cache=MagicMock(), folder_id=None)
+def text(d):
+    b = odocs.documents().get(documentId=d).execute()['body']['content']
+    return ''.join(r.get('textRun', {}).get('content', '') for e in b for r in e.get('paragraph', {}).get('elements', [])).strip()
+def run(d, html, allow):
+    return asyncio.run(c._replace_doc_content(lc, d, html, 'html', autolink_urls=True, revoke_sharing=True, auto_downscale=False, allow_no_backup=allow))
+folder = od.files().create(body={'name': 'TC-DOC225 folder', 'mimeType': 'application/vnd.google-apps.folder'}, fields='id').execute()['id']
+try:
+    doc = od.files().create(body={'name': 'TC-DOC225 doc', 'mimeType': 'application/vnd.google-apps.document', 'parents': [folder]}, fields='id').execute()['id']
+    odocs.documents().batchUpdate(documentId=doc, body={'requests': [{'insertText': {'location': {'index': 1}, 'text': 'TC-DOC225 before\n'}}]}).execute()
+    for fid in (folder, doc):
+        od.permissions().create(fileId=fid, body={'type': 'user', 'role': 'writer', 'emailAddress': sa.service_account_email}, sendNotificationEmail=False).execute()
+    od.files().update(fileId=doc, body={'downloadRestrictions': {'itemDownloadRestriction': {'restrictedForWriters': True}}}).execute()
+    time.sleep(5)
+    print('A', json.dumps({k: v for k, v in run(doc, '<p>TC-DOC225 refused</p>', False).items() if k != 'docId'}), repr(text(doc)))
+    print('B', json.dumps({k: v for k, v in run(doc, '<p>TC-DOC225 after</p>', True).items() if k != 'docId'}), repr(text(doc)))
+    print('C', [f['name'] for f in od.files().list(q=f\"'{folder}' in parents and trashed=false\", fields='files(name)').execute()['files']])
+finally:
+    od.files().delete(fileId=folder).execute()
+    print('cleanup done')
+"
+```
+
+**Checks**
+- Line `A`'s `error` is "Couldn't back up the document before replacing its content (the document's sharing settings don't allow this account to copy it), so it was left unchanged. To replace it without a backup, retry with allow_no_backup=True. Its previous content then can't be recovered with export_revision: Docs merges the revision from before the replace into the replace's own.", with no `backupId`. Its doc text is still `'TC-DOC225 before'`
+- Line `B` has `web_link` and `warning` "The document's previous content was replaced without a backup copy (the document's sharing settings don't allow this account to copy it).", with no `error` or `backupId`. Its doc text is `'TC-DOC225 after'`
+- Line `C` lists only `TC-DOC225 doc`: no `(backup before replace)` copy was made
+- The log shows googleapiclient's `403 … "cannotCopyFile"` before each of `A` and `B`, and `Replacing doc … without a backup: the document's sharing settings don't allow this account to copy it` before `B` only
+- `cleanup done` is printed
+
+**Cleanup:** the script deletes the folder, and the doc with it. If it stopped before `cleanup done`, `search_files(query="TC-DOC225")` on the OAuth server and delete what it finds.
+
+**Result (2026-10-16) ✅ PASS — Sky, PR #1042 round 1 (`4ba422c`).** Ran the script as written from this worktree. Line `A` returned the expected refusal with no `backupId`, and the doc text stayed `'TC-DOC225 before'`. Line `B` returned `web_link` and the expected `warning` with no `error` or `backupId`, and the doc text became `'TC-DOC225 after'`. Line `C` listed only `TC-DOC225 doc`. The log showed `403 … "cannotCopyFile"` before `A` and before `B`, and `Replacing doc … without a backup: the document's owner doesn't allow this account to copy it` before `B` only. `cleanup done` was printed. The case passes, but two extra probes in the same round found the refusal text wrong for callers this case doesn't cover. (1) A *reader* on a doc with `copyRequiresWriterPermission` also gets 403 `cannotCopyFile` (`capabilities.canCopy`/`canEdit` both false). It is told to retry with `allow_no_backup=True`, and that retry logs "Replacing … without a backup" and then fails at the clear with 403. (2) A writer on a Shared Drive doc with `restrictedForWriters` (the file has no `owners`) gets the same "the document's owner" wording. Both were sent back on the PR.
+
+**Result (2026-10-16) ✅ PASS — Sky, PR #1042 round 2 (`9323a1b`).** Ran the script as written from this worktree. Lines `A`, `B`, and `C` matched every check with the new "the document's sharing settings don't allow this account to copy it" wording, and so did the log lines. `cleanup done` was printed. The round-1 Shared Drive probe, re-run in the QA Shared Drive (service account as Content manager, `restrictedForWriters` set, `canEdit: true`), now gets the same sharing-settings refusal without naming an owner.
+
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+The scratch script needs a usable OAuth token (see DOC80).
+
+### TC-DOC226: A reader blocked from copying is told it can't edit the doc, with or without `allow_no_backup` (#1035) ⚠️ destructive ⚠️ requires-oauth
+With `copyRequiresWriterPermission` set, a caller with only reader access also gets 403 `cannotCopyFile` on the backup copy. `allow_no_backup=True` can't help it, since the clear would fail, so after that copy failure the doc's `capabilities.canEdit` is read. When it's false, the call refuses with an error saying the account can't edit the doc, whatever the flag says (`docs/design/doc-replace-backup.md`, "The copy fails"; PR #1042 QA round 1). Before the fix, the default call said to retry with `allow_no_backup=True`, and that retry logged `Replacing doc … without a backup` and then failed at the clear with a 403. Same two-identity setup as TC-DOC225: the OAuth account owns the fixture, and the service account is the caller, here with reader access on the doc only.
+
+**Setup:** none. The script creates and deletes its own fixture.
+
+**Steps**
+1. Run from the checkout under test:
+```
+uv run python -I -c "
+import asyncio, json, time, mcp_gee_sweet
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+from googleapiclient.discovery import build
+from mcp_gee_sweet import auth
+from mcp_gee_sweet.tools.docs import content as c
+oauth, sa = auth._oauth_creds(), auth._service_account_creds()
+od, odocs = build('drive', 'v3', credentials=oauth), build('docs', 'v1', credentials=oauth)
+lc = SimpleNamespace(docs_service=build('docs', 'v1', credentials=sa),
+    drive_service=build('drive', 'v3', credentials=sa), doc_cache=MagicMock(),
+    drive_folder_cache=MagicMock(), folder_id=None)
+def text(d):
+    b = odocs.documents().get(documentId=d).execute()['body']['content']
+    return ''.join(r.get('textRun', {}).get('content', '') for e in b for r in e.get('paragraph', {}).get('elements', [])).strip()
+def run(d, html, allow):
+    return asyncio.run(c._replace_doc_content(lc, d, html, 'html', autolink_urls=True, revoke_sharing=True, auto_downscale=False, allow_no_backup=allow))
+folder = od.files().create(body={'name': 'TC-DOC226 folder', 'mimeType': 'application/vnd.google-apps.folder'}, fields='id').execute()['id']
+try:
+    doc = od.files().create(body={'name': 'TC-DOC226 doc', 'mimeType': 'application/vnd.google-apps.document', 'parents': [folder]}, fields='id').execute()['id']
+    odocs.documents().batchUpdate(documentId=doc, body={'requests': [{'insertText': {'location': {'index': 1}, 'text': 'TC-DOC226 before\n'}}]}).execute()
+    od.permissions().create(fileId=doc, body={'type': 'user', 'role': 'reader', 'emailAddress': sa.service_account_email}, sendNotificationEmail=False).execute()
+    od.files().update(fileId=doc, body={'copyRequiresWriterPermission': True}).execute()
+    time.sleep(5)
+    print('A', json.dumps({k: v for k, v in run(doc, '<p>TC-DOC226 default</p>', False).items() if k != 'docId'}), repr(text(doc)))
+    print('B', json.dumps({k: v for k, v in run(doc, '<p>TC-DOC226 flag</p>', True).items() if k != 'docId'}), repr(text(doc)))
+finally:
+    od.files().delete(fileId=folder).execute()
+    print('cleanup done')
+"
+```
+
+**Checks**
+- Lines `A` and `B` each have exactly one key, `error`: "This account can't edit the document, so it was left unchanged (Drive also refused the backup copy: the document's sharing settings don't allow this account to copy it)." Neither mentions `allow_no_backup`. Each line's doc text is still `'TC-DOC226 before'`
+- The log shows googleapiclient's `403 … "cannotCopyFile"` before each of `A` and `B`, and no `Replacing doc … without a backup` line anywhere
+- `cleanup done` is printed
+
+**Cleanup:** the script deletes the folder, and the doc with it. If it stopped before `cleanup done`, `search_files(query="TC-DOC226")` on the OAuth server and delete what it finds.
+
+**Result (2026-10-16) ✅ PASS — Sky, PR #1042 round 2 (`9323a1b`).** Ran the script as written from this worktree. Lines `A` and `B` each had only `error`, with the expected "This account can't edit the document …" text and no mention of `allow_no_backup`. The doc text stayed `'TC-DOC226 before'` after both. The log showed `403 … "cannotCopyFile"` before each line and no `Replacing doc … without a backup` line. `cleanup done` was printed.
+
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+The scratch script needs a usable OAuth token (see DOC80).

@@ -1,7 +1,7 @@
 [project]
 name = "mcp-gee-sweet"
 dynamic = ["version"]
-description = "MCP server for Google Workspace — Sheets, Drive, Docs (HTML or Markdown), and Calendar."
+description = "MCP server for Google Workspace — Sheets, Drive, Docs (HTML or Markdown), Calendar, and Gmail."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -13,6 +13,7 @@ keywords = [
     "google-docs",
     "google-drive",
     "google-calendar",
+    "gmail",
     "claude",
     "ai-agent",
 ]
@@ -28,16 +29,17 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "mcp>=2.0.0",
-    "google-auth>=2.56.3",
-    "google-auth-oauthlib>=1.4.0",
+    "mcp>=2.3.0,<3",
+    "anyio>=4.0.0",
+    "google-auth>=2.57.0",
+    "google-auth-oauthlib>=1.4.1",
     "google-api-python-client>=2.199.0",
     "markdown>=3.10.3",
     "openpyxl>=3.1.5",
     "Pillow>=11.0.0",
     # floor pins for transitive CVEs — ensures safe resolution for downstream consumers
     "starlette>=1.6.0",
-    "cryptography>=50.0.0",
+    "cryptography>=50.0.1",
     "python-multipart>=0.0.31",
     "python-dotenv>=1.2.3",
 ]
@@ -94,6 +96,7 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=7.1.0",
-    "ruff>=0.16.4",
+    "ruff>=0.16.5",
     "tomli>=2.0.1; python_version < '3.11'",
+    "markdown-it-py>=3.0.0",
 ]

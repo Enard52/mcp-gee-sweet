@@ -1,9 +1,14 @@
 """Tests for docs content tools and HTML/Markdown pipeline."""
 
+import inspect
 import io
 import json
-from unittest.mock import MagicMock, patch
+import os
+import threading
+from functools import partial
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
+import anyio
 import pytest
 from googleapiclient.errors import HttpError
 from PIL import Image as PILImage
@@ -23,13 +28,20 @@ from mcp_gee_sweet.tools.docs.ast import (
     Table,
 )
 from mcp_gee_sweet.tools.docs.content import (
+    _failed_insert_image_message,
+    _failed_insert_image_request_index,
     _has_pending_anchor_links,
     _md_to_html,
+    _positional_insert_tail_start,
     _resolve_heading_anchors,
     _resolve_image_source,
     _to_doc_requests,
 )
+from mcp_gee_sweet.tools.docs.emitter import ast_to_requests, extract_images
 from mcp_gee_sweet.tools.docs.html_parser import html_to_ast
+from mcp_gee_sweet.tools.drive import _USER_QUOTA_ERROR
+
+from .fakes import as_service_account
 
 
 def _make_png_bytes(width: int, height: int) -> bytes:
@@ -44,7 +56,7 @@ def _make_png_bytes(width: int, height: int) -> bytes:
 def _make_tool_registry():
     captured = {}
 
-    def tool(annotations=None):
+    def tool(annotations=None, local_only=False):
         def decorator(func):
             captured[func.__name__] = func
             return func
@@ -148,15 +160,23 @@ class TestCreateDoc:
 
     async def test_quota_exceeded_returns_error_dict(self):
         """create_doc must return {"error": ...} on storageQuotaExceeded, not raise."""
-        drive_svc = MagicMock()
+        drive_svc = as_service_account(MagicMock())
         drive_svc.files.return_value.create.return_value.execute.side_effect = _quota_http_error()
         docs_svc = MagicMock()
         ctx = self._ctx(drive_svc, docs_svc)
         result = await _docs_tools["create_doc"](title="Test", content="<p>hi</p>", ctx=ctx)
         assert "error" in result
         assert "storageQuotaExceeded" not in result["error"]
-        assert "Service accounts" in result["error"]
+        assert "This service account has no My Drive storage" in result["error"]
         assert "server://auth-status" in result["error"]
+
+    async def test_quota_exceeded_for_user_identity_says_storage_is_full(self):
+        # A user whose own Drive is full must not be told to switch to OAuth (#1009).
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.create.return_value.execute.side_effect = _quota_http_error()
+        ctx = self._ctx(drive_svc, MagicMock())
+        result = await _docs_tools["create_doc"](title="Test", content="<p>hi</p>", ctx=ctx)
+        assert result == {"error": _USER_QUOTA_ERROR}
 
     async def test_non_quota_403_still_raises(self):
         """A 403 that is NOT storageQuotaExceeded must propagate — not be swallowed."""
@@ -735,6 +755,34 @@ class TestBareTopLevelText:
         texts = ["".join(r.text for r in n.runs) for n in nodes]
         assert texts == ["plain", "tagged", "trailing"]
 
+    async def test_implicit_paragraph_open_resets_unsupported_content_flag(self):
+        # #417: every other block-open path (pre, _BLOCK_TAGS, resume) resets
+        # self._block_had_unsupported_content — the implicit top-level
+        # paragraph opened for bare text (#343) didn't, leaving it stale from
+        # whatever block closed just before. A dropped <img> (no src) inside
+        # the preceding <p> sets the flag True; it must not still read True
+        # once the following bare text opens its own implicit paragraph.
+        from mcp_gee_sweet.tools.docs.html_parser import _AstParser
+
+        parser = _AstParser()
+        parser.feed("<p>Real text<img></p>Bare text")
+        assert parser._block_had_unsupported_content is False
+
+    async def test_implicit_paragraph_open_resets_resumed_flag(self):
+        # #417 round 2: the same implicit-paragraph open path fixed above
+        # also left self._block_resumed stale — a <table> interrupting an
+        # open <p> and then closing sets self._block_resumed = True via
+        # _resume_interrupted_block; the following </p> close doesn't touch
+        # the flag at all, so it's still True by the time bare top-level
+        # text opens its own implicit paragraph right after. Confirmed
+        # live against the pre-round-2 code that this reproduces (True);
+        # the shared _open_block() reset now clears it to False here too.
+        from mcp_gee_sweet.tools.docs.html_parser import _AstParser
+
+        parser = _AstParser()
+        parser.feed("<p>Before<table><tr><td>cell</td></tr></table>After</p>Bare text")
+        assert parser._block_resumed is False
+
     async def test_bare_text_after_unclosed_void_tag_still_wrapped(self):
         # Regression guard (found in PR #385's own review round): a void
         # element written without a self-closing slash (e.g. "<meta ...>",
@@ -809,6 +857,46 @@ class TestMdToHtml:
     async def test_link(self):
         html = _md_to_html("[click](https://example.com)")
         assert 'href="https://example.com"' in html
+
+    async def test_bare_hyphen_as_first_list_line_collapses_to_plain_paragraph(self):
+        """Known limitation (#692, docs/known-limitations.md): a bare '-' line with
+        nothing after it never matches python-markdown's list-item regex ("- " +
+        content). As the first line of a would-be list (no preceding text line, e.g.
+        right after a heading — the tc-doc106-nested-lists-4space.md fixture's Case
+        2 shape), the whole block including the following well-formed list-item
+        lines collapses into one literal paragraph; no list is produced at all."""
+        html = _md_to_html("-\n- item two\n- item three\n")
+        assert "<ul>" not in html
+        assert "<p>-\n- item two\n- item three</p>" in html
+
+    async def test_bare_hyphen_line_becomes_setext_heading_not_list_item(self):
+        """Known limitation (#692, docs/known-limitations.md): the same bare '-'
+        line, when it instead follows a text line, is consumed together with that
+        line as python-markdown's own setext H2 underline syntax, which takes
+        priority over list-item recognition. This pins the documented (buggy-
+        looking but upstream) behavior so a future python-markdown upgrade that
+        changes it doesn't go unnoticed."""
+        html = _md_to_html("- item one\n-\n- item three\n")
+        assert "<h2>- item one</h2>" in html
+        assert "<ul>" in html
+        assert "<li>item three</li>" in html
+
+    async def test_bare_hyphen_workaround_nbsp_produces_empty_list_item(self):
+        """The documented workaround (docs/known-limitations.md, #692): replacing
+        the offending bare '-' line itself with a '- ' + non-breaking-space marker
+        parses as a genuine empty list item in both manifestations above, instead
+        of collapsing to a paragraph or heading."""
+        nbsp = chr(0xA0)  # non-breaking space; ruff RUF001 flags it if written literally
+
+        # First-line manifestation, fixed:
+        html = _md_to_html(f"- {nbsp}\n- item two\n- item three\n")
+        assert "<ul>" in html
+        assert html.count("<li>") == 3
+
+        # Mid-list / setext-heading manifestation, fixed:
+        html = _md_to_html(f"- item one\n- {nbsp}\n- item three\n")
+        assert "<h2>" not in html
+        assert html.count("<li>") == 3
 
     async def test_pipe_table(self):
         md = "| A | B |\n|---|---|\n| 1 | 2 |\n"
@@ -983,6 +1071,24 @@ class TestToDocRequestsMarkdown:
         ]
         assert len(font_reqs) >= 1
 
+    async def test_markdown_multiline_fenced_code_uses_soft_breaks_not_newlines(self):
+        # #719: the Docs API treats every "\n" in inserted text as a new
+        # paragraph boundary, so a multi-line fenced code block's *internal*
+        # line breaks must be written as "\v" (soft break) instead — this is
+        # what keeps the whole block as one Docs paragraph rather than
+        # fragmenting it into one NORMAL_TEXT paragraph per line.
+        requests, _ = _to_doc_requests("```\nline1\nline2\nline3\n```\n", "markdown")
+        insert = next(r for r in requests if "insertText" in r)
+        text = insert["insertText"]["text"]
+        assert text == "line1\vline2\vline3\n"
+
+    async def test_markdown_single_line_fenced_code_unaffected(self):
+        # No embedded newline to substitute — a single-line fenced block's
+        # insertText is unchanged by the #719 fix.
+        requests, _ = _to_doc_requests("```\nx = 1\n```\n", "markdown")
+        insert = next(r for r in requests if "insertText" in r)
+        assert insert["insertText"]["text"] == "x = 1\n"
+
     async def test_markdown_image_and_thematic_break_preserve_paragraph_boundary(self):
         # #401 end-to-end repro: an unsupported image followed by a thematic
         # break, followed by real headings, must not fuse into one run of
@@ -1103,6 +1209,21 @@ class TestResolveImageSource:
         assert "error" in result
         assert "No file found" in result["error"]
 
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file permissions")
+    async def test_local_path_unreadable_is_clean_read_error_without_upload(self, tmp_path):
+        # PR #801 QA round 1: a permission-denied file must fail at the size gate
+        # with a clean read error, not reach the upload.
+        img = tmp_path / "locked.png"
+        img.write_bytes(b"fake")
+        img.chmod(0)
+        drive_svc = MagicMock()
+        try:
+            result = await _resolve_image_source(drive_svc, str(img), "folder1")
+        finally:
+            img.chmod(0o644)
+        assert result["error"].startswith("failed to read local file:")
+        drive_svc.files.return_value.create.assert_not_called()
+
     async def test_local_path_with_no_folder_id_is_error(self, tmp_path):
         img = tmp_path / "pic.png"
         img.write_bytes(b"fake")
@@ -1120,23 +1241,27 @@ class TestResolveImageSource:
             "id": "uploaded1",
             "name": "pic.png",
             "webViewLink": "https://drive.google.com/file/d/uploaded1/view",
+            "webContentLink": "https://drive.google.com/uc?id=uploaded1",
         }
         drive_svc.permissions.return_value.create.return_value.execute.return_value = {
             "id": "perm2"
-        }
-        drive_svc.files.return_value.get.return_value.execute.return_value = {
-            "webContentLink": "https://drive.google.com/uc?id=uploaded1"
         }
         result = await _resolve_image_source(drive_svc, str(img), "folder1")
         assert result == {
             "uri": "https://drive.google.com/uc?id=uploaded1",
             "file_id": "uploaded1",
             "permission_id": "perm2",
+            "created_in": "folder1",
         }
+        # #511: two Drive calls (create, share), no follow-up files().get().
+        drive_svc.files.return_value.get.assert_not_called()
 
     async def test_sharing_failure_is_error(self, tmp_path):
         drive_svc = MagicMock()
-        drive_svc.files.return_value.get.return_value.execute.return_value = {"name": "file1"}
+        drive_svc.files.return_value.get.return_value.execute.return_value = {
+            "name": "file1",
+            "webContentLink": "https://drive.google.com/uc?id=file1",
+        }
         drive_svc.permissions.return_value.create.return_value.execute.side_effect = RuntimeError(
             "boom"
         )
@@ -1161,6 +1286,7 @@ class TestResolveImageSource:
             "id": "uploaded1",
             "name": "pic.png",
             "webViewLink": "https://drive.google.com/file/d/uploaded1/view",
+            "webContentLink": "https://drive.google.com/uc?id=uploaded1",
         }
         drive_svc.permissions.return_value.create.return_value.execute.side_effect = RuntimeError(
             "boom"
@@ -1172,9 +1298,6 @@ class TestResolveImageSource:
 
     async def test_missing_web_content_link_is_error(self):
         drive_svc = MagicMock()
-        drive_svc.permissions.return_value.create.return_value.execute.return_value = {
-            "id": "perm1"
-        }
         drive_svc.files.return_value.get.return_value.execute.return_value = {}
         result = await _resolve_image_source(drive_svc, "drive:file1", "folder1")
         assert "error" in result
@@ -1182,11 +1305,13 @@ class TestResolveImageSource:
         # "drive:" source — no orphan created by this call, so no file_id (PR #652
         # QA round 1, finding 2).
         assert "file_id" not in result
+        # #511: nothing can embed a file with no link, so it's never shared.
+        drive_svc.permissions.return_value.create.assert_not_called()
 
     async def test_local_upload_missing_web_content_link_returns_orphan_file_id(self, tmp_path):
         # The local-upload counterpart to the drive: case above: the file was
-        # freshly uploaded, so a missing webContentLink read-back still leaves a
-        # real orphan whose id must be surfaced (#649).
+        # freshly uploaded, so a missing webContentLink still leaves a real orphan
+        # whose id must be surfaced (#649). Since #511 it fails before sharing.
         img = tmp_path / "pic.png"
         img.write_bytes(b"fake")
         drive_svc = MagicMock()
@@ -1196,14 +1321,11 @@ class TestResolveImageSource:
             "name": "pic.png",
             "webViewLink": "https://drive.google.com/file/d/uploaded1/view",
         }
-        drive_svc.permissions.return_value.create.return_value.execute.return_value = {
-            "id": "perm2"
-        }
-        drive_svc.files.return_value.get.return_value.execute.return_value = {}
         result = await _resolve_image_source(drive_svc, str(img), "folder1")
         assert "error" in result
         assert "webContentLink" in result["error"]
         assert result["file_id"] == "uploaded1"
+        drive_svc.permissions.return_value.create.assert_not_called()
 
     async def test_oversized_drive_image_fails_fast_without_sharing(self):
         drive_svc = MagicMock()
@@ -1250,15 +1372,15 @@ class TestResolveImageSource:
 
     async def test_oversized_drive_image_auto_downscale_creates_resized_copy(self):
         drive_svc = MagicMock()
-        drive_svc.files.return_value.get.return_value.execute.side_effect = [
-            {
-                "name": "big.png",
-                "parents": ["folder1"],
-                "imageMediaMetadata": {"width": 6000, "height": 6000},
-            },
-            {"webContentLink": "https://drive.google.com/uc?id=resized1"},
-        ]
-        drive_svc.files.return_value.create.return_value.execute.return_value = {"id": "resized1"}
+        drive_svc.files.return_value.get.return_value.execute.return_value = {
+            "name": "big.png",
+            "parents": ["folder1"],
+            "imageMediaMetadata": {"width": 6000, "height": 6000},
+        }
+        drive_svc.files.return_value.create.return_value.execute.return_value = {
+            "id": "resized1",
+            "webContentLink": "https://drive.google.com/uc?id=resized1",
+        }
         drive_svc.permissions.return_value.create.return_value.execute.return_value = {
             "id": "perm-resized"
         }
@@ -1284,6 +1406,8 @@ class TestResolveImageSource:
             "uri": "https://drive.google.com/uc?id=resized1",
             "file_id": "resized1",
             "permission_id": "perm-resized",
+            "created_in": "folder1",
+            "downscaled": True,
         }
         create_kwargs = drive_svc.files.return_value.create.call_args.kwargs
         assert create_kwargs["body"]["name"] == "big.png (resized)"
@@ -1317,18 +1441,20 @@ class TestResolveImageSource:
         img = tmp_path / "big.png"
         img.write_bytes(_make_png_bytes(6000, 6000))
         drive_svc = MagicMock()
-        drive_svc.files.return_value.create.return_value.execute.return_value = {"id": "resized2"}
+        drive_svc.files.return_value.create.return_value.execute.return_value = {
+            "id": "resized2",
+            "webContentLink": "https://drive.google.com/uc?id=resized2",
+        }
         drive_svc.permissions.return_value.create.return_value.execute.return_value = {
             "id": "perm-resized2"
-        }
-        drive_svc.files.return_value.get.return_value.execute.return_value = {
-            "webContentLink": "https://drive.google.com/uc?id=resized2"
         }
         result = await _resolve_image_source(drive_svc, str(img), "folder1", auto_downscale=True)
         assert result == {
             "uri": "https://drive.google.com/uc?id=resized2",
             "file_id": "resized2",
             "permission_id": "perm-resized2",
+            "created_in": "folder1",
+            "downscaled": True,
         }
         create_kwargs = drive_svc.files.return_value.create.call_args.kwargs
         assert create_kwargs["body"]["name"] == "big.png"
@@ -1396,6 +1522,54 @@ class TestCreateDocImages:
             fileId="file1", permissionId="perm1", supportsAllDrives=True
         )
 
+    async def test_drive_reference_already_link_shared_is_not_revoked(self):
+        # PR #842 QA round 1 F1 (reproduced live): share_file had already made the
+        # file anyoneWithLink; embedding it must not remove that link.
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.permissions.return_value.create.return_value.execute.return_value = {
+            "id": "anyoneWithLink"
+        }
+        drive_svc.files.return_value.get.return_value.execute.return_value = {
+            "webContentLink": "https://drive.google.com/uc?id=file1",
+            "permissionIds": ["owner1", "anyoneWithLink"],
+        }
+        ctx = self._ctx(drive_svc, docs_svc)
+        result = await _docs_tools["create_doc"](
+            title="Doc",
+            content="![Alt](drive:file1)",
+            content_format="markdown",
+            ctx=ctx,
+        )
+        assert result["images"] == [
+            {"src": "drive:file1", "fileId": "file1", "shared": True, "already_shared": True}
+        ]
+        drive_svc.permissions.return_value.delete.assert_not_called()
+
+    async def test_auto_downscaled_local_image_reports_downscaled(self, tmp_path):
+        # PR #842 QA round 1 F3 (reproduced live): insert_local_images reported
+        # downscaled for the same file; create_doc dropped it.
+        img = tmp_path / "big.png"
+        img.write_bytes(_make_png_bytes(6000, 6000))
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.create.return_value.execute.side_effect = [
+            {"id": "doc123", "name": "Test", "parents": ["folder1"], "webViewLink": "x"},
+            {"id": "r1", "webContentLink": "https://drive.google.com/uc?id=r1"},
+        ]
+        drive_svc.permissions.return_value.create.return_value.execute.return_value = {
+            "id": "perm1"
+        }
+        ctx = self._ctx(drive_svc, docs_svc, folder_id="folder1")
+        result = await _docs_tools["create_doc"](
+            title="Doc",
+            content=f"![Big]({img})",
+            content_format="markdown",
+            auto_downscale=True,
+            ctx=ctx,
+        )
+        assert result["images"] == [
+            {"src": str(img), "fileId": "r1", "shared": False, "downscaled": True}
+        ]
+
     async def test_revoke_sharing_false_leaves_image_shared(self):
         drive_svc, docs_svc = self._make_services()
         drive_svc.permissions.return_value.create.return_value.execute.return_value = {
@@ -1442,6 +1616,405 @@ class TestCreateDocImages:
             }
         ]
 
+    def _shared_drive_image_services(self):
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.permissions.return_value.create.return_value.execute.return_value = {
+            "id": "perm1"
+        }
+        drive_svc.files.return_value.get.return_value.execute.return_value = {
+            "webContentLink": "https://drive.google.com/uc?id=file1"
+        }
+        return drive_svc, docs_svc
+
+    def _assert_file1_revoked(self, drive_svc):
+        drive_svc.permissions.return_value.delete.assert_called_once_with(
+            fileId="file1", permissionId="perm1", supportsAllDrives=True
+        )
+
+    async def test_share_revoked_when_content_batch_update_raises(self):
+        # #789: a non-image batchUpdate failure used to skip the revoke, leaving
+        # the image anyone:reader with nothing reporting it. The failure now
+        # comes back as an error result carrying the doc ID and image outcomes.
+        drive_svc, docs_svc = self._shared_drive_image_services()
+        docs_svc.documents.return_value.batchUpdate.return_value.execute.side_effect = (
+            _other_403_error()
+        )
+        ctx = self._ctx(drive_svc, docs_svc)
+        result = await _docs_tools["create_doc"](
+            title="Doc",
+            content="Text\n\n![Alt](drive:file1)",
+            content_format="markdown",
+            ctx=ctx,
+        )
+        assert result["error"].startswith("doc edit failed: ")
+        assert result["docId"] == "doc123"
+        assert result["images"] == [{"src": "drive:file1", "fileId": "file1", "shared": False}]
+        self._assert_file1_revoked(drive_svc)
+
+    async def test_share_revoked_when_retry_after_image_drop_raises(self):
+        # The first attempt names a bad image (a different, https one) and is
+        # retried without it; the retry then fails for a non-image reason.
+        drive_svc, docs_svc = self._shared_drive_image_services()
+        ctx = self._ctx(drive_svc, docs_svc)
+        bad_uri = "https://example.com/bad.png"
+        content = f"![Bad]({bad_uri}) ![Alt](drive:file1)"
+        fail_bad = self._fail_first_matching({bad_uri})
+        calls = []
+
+        def side_effect(documentId, body):
+            calls.append(body["requests"])
+            if len(calls) == 1:
+                return fail_bad(documentId, body)
+            m = MagicMock()
+            m.execute.side_effect = _other_403_error()
+            return m
+
+        docs_svc.documents.return_value.batchUpdate.side_effect = side_effect
+        result = await _docs_tools["create_doc"](
+            title="Doc", content=content, content_format="markdown", ctx=ctx
+        )
+        assert len(calls) == 2
+        assert result["error"].startswith("doc edit failed: ")
+        outcomes = {o["src"]: o for o in result["images"]}
+        # The image dropped before the failure keeps its own error (#789 F4).
+        assert "There was a problem retrieving the image" in outcomes[bad_uri]["error"]
+        assert outcomes["drive:file1"] == {"src": "drive:file1", "fileId": "file1", "shared": False}
+        self._assert_file1_revoked(drive_svc)
+
+    async def test_share_revoked_when_fill_tables_raises(self):
+        drive_svc, docs_svc = self._shared_drive_image_services()
+        ctx = self._ctx(drive_svc, docs_svc)
+        with patch.object(content_module, "fill_tables", side_effect=RuntimeError("fill boom")):
+            result = await _docs_tools["create_doc"](
+                title="Doc",
+                content="![Alt](drive:file1)\n\n| a | b |\n|---|---|\n| 1 | 2 |",
+                content_format="markdown",
+                ctx=ctx,
+            )
+        assert result["error"] == "doc edit failed: fill boom"
+        self._assert_file1_revoked(drive_svc)
+
+    async def test_share_revoked_when_anchor_resolution_raises(self):
+        drive_svc, docs_svc = self._shared_drive_image_services()
+        ctx = self._ctx(drive_svc, docs_svc)
+        with patch.object(
+            content_module, "_resolve_heading_anchors", side_effect=RuntimeError("anchor boom")
+        ):
+            result = await _docs_tools["create_doc"](
+                title="Doc",
+                content="# Intro\n\n![Alt](drive:file1)\n\n[back](#intro)",
+                content_format="markdown",
+                ctx=ctx,
+            )
+        assert result["error"] == "doc edit failed: anchor boom"
+        self._assert_file1_revoked(drive_svc)
+
+    async def test_failed_edit_without_images_returns_error_result(self):
+        drive_svc, docs_svc = self._make_services()
+        docs_svc.documents.return_value.batchUpdate.return_value.execute.side_effect = RuntimeError(
+            "edit boom"
+        )
+        ctx = self._ctx(drive_svc, docs_svc, folder_id="folder1")
+        result = await _docs_tools["create_doc"](title="Doc", content="<p>Text</p>", ctx=ctx)
+        assert result == {"error": "doc edit failed: edit boom", "docId": "doc123"}
+        # The doc was created, so the folder listing changed either way.
+        ctx.request_context.lifespan_context.drive_folder_cache.mark_dirty.assert_called_once_with(
+            "folder1"
+        )
+
+    async def test_write_doc_content_failed_edit_returns_error_result(self):
+        drive_svc, docs_svc = self._shared_drive_image_services()
+        docs_svc.documents.return_value.get.return_value.execute.return_value = {
+            "body": {"content": [{"endIndex": 2}]}
+        }
+        docs_svc.documents.return_value.batchUpdate.return_value.execute.side_effect = RuntimeError(
+            "edit boom"
+        )
+        ctx = _make_ctx(drive_service=drive_svc, docs_service=docs_svc, doc_cache=MagicMock())
+        result = await _docs_tools["write_doc_content"](
+            doc_id="doc9", content="![Alt](drive:file1)", content_format="markdown", ctx=ctx
+        )
+        assert result == {
+            "error": "doc edit failed: edit boom",
+            "docId": "doc9",
+            "images": [{"src": "drive:file1", "fileId": "file1", "shared": False}],
+        }
+        ctx.request_context.lifespan_context.doc_cache.mark_dirty.assert_called_with("doc9")
+        self._assert_file1_revoked(drive_svc)
+
+    async def _create_doc_with_failing_edit(self, drive_svc, docs_svc, content, **kwargs):
+        docs_svc.documents.return_value.batchUpdate.return_value.execute.side_effect = RuntimeError(
+            "edit boom"
+        )
+        ctx = self._ctx(drive_svc, docs_svc, folder_id="folder1")
+        with patch.object(images_module, "logger") as mock_logger:
+            result = await _docs_tools["create_doc"](
+                title="Doc", content=content, content_format="markdown", ctx=ctx, **kwargs
+            )
+        assert result["error"] == "doc edit failed: edit boom"
+        return mock_logger
+
+    async def test_failed_edit_logs_pre_existing_drive_file_apart_from_created(self):
+        # PR #877 QA round 1 F2: a drive: source is the caller's own file, never an
+        # orphan this call created.
+        drive_svc, docs_svc = self._shared_drive_image_services()
+        mock_logger = await self._create_doc_with_failing_edit(
+            drive_svc, docs_svc, "![Alt](drive:file1)"
+        )
+        # (doc, created by this call, pre-existing, still link-shared by this call)
+        assert mock_logger.warning.call_args.args[1:] == ("doc123", "none", "file1", "none")
+
+    async def test_failed_edit_logs_local_upload_as_created(self, tmp_path):
+        img = tmp_path / "pixel.png"
+        img.write_bytes(_make_png_bytes(2, 2))
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.create.return_value.execute.side_effect = [
+            {"id": "doc123", "name": "Test", "parents": ["folder1"], "webViewLink": "x"},
+            {"id": "up1", "webContentLink": "https://drive.google.com/uc?id=up1"},
+        ]
+        drive_svc.permissions.return_value.create.return_value.execute.return_value = {
+            "id": "perm1"
+        }
+        mock_logger = await self._create_doc_with_failing_edit(
+            drive_svc, docs_svc, f"![Pixel]({img})"
+        )
+        assert mock_logger.warning.call_args.args[1:] == ("doc123", "up1", "none", "none")
+
+    async def test_failed_edit_already_shared_file_not_logged_as_still_shared(self):
+        # PR #877 QA round 1 F2: a link that predates the call isn't this call's leak.
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.permissions.return_value.create.return_value.execute.return_value = {
+            "id": "anyoneWithLink"
+        }
+        drive_svc.files.return_value.get.return_value.execute.return_value = {
+            "webContentLink": "https://drive.google.com/uc?id=file1",
+            "permissionIds": ["owner1", "anyoneWithLink"],
+        }
+        mock_logger = await self._create_doc_with_failing_edit(
+            drive_svc, docs_svc, "![Alt](drive:file1)"
+        )
+        assert mock_logger.warning.call_args.args[1:] == ("doc123", "none", "file1", "none")
+        drive_svc.permissions.return_value.delete.assert_not_called()
+
+    async def test_failed_edit_with_revoke_sharing_false_keeps_share_and_logs_it(self):
+        drive_svc, docs_svc = self._shared_drive_image_services()
+        mock_logger = await self._create_doc_with_failing_edit(
+            drive_svc, docs_svc, "![Alt](drive:file1)", revoke_sharing=False
+        )
+        drive_svc.permissions.return_value.delete.assert_not_called()
+        assert mock_logger.warning.call_args.args[1:] == ("doc123", "none", "file1", "file1")
+
+    async def test_failed_edit_without_shared_images_logs_nothing(self):
+        drive_svc, docs_svc = self._make_services()
+        mock_logger = await self._create_doc_with_failing_edit(
+            drive_svc, docs_svc, "![Alt](https://example.com/a.png)"
+        )
+        mock_logger.warning.assert_not_called()
+        drive_svc.permissions.assert_not_called()
+
+    @staticmethod
+    def _blocking(started: threading.Event, release: threading.Event, value):
+        def execute(**kwargs):
+            started.set()
+            release.wait(5)
+            return value
+
+        return execute
+
+    async def _cancel_create_doc_once_started(self, ctx, started, release):
+        """Run create_doc in an anyio task group (mcp cancels a request through an
+        anyio cancel scope), cancel it once `started` fires, then let the blocked
+        worker thread finish."""
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(
+                partial(
+                    _docs_tools["create_doc"],
+                    title="Doc",
+                    content="![Alt](drive:file1)",
+                    content_format="markdown",
+                    ctx=ctx,
+                )
+            )
+            await anyio.to_thread.run_sync(started.wait, 5)
+            tg.cancel_scope.cancel()
+            release.set()
+
+    async def test_share_revoked_when_cancelled_mid_edit(self):
+        # PR #877 QA round 1 F1: the revoke is shielded, so a cancellation doesn't
+        # also cancel the revoke it's waiting on, and the warning still fires.
+        drive_svc, docs_svc = self._shared_drive_image_services()
+        started, release = threading.Event(), threading.Event()
+        docs_svc.documents.return_value.batchUpdate.return_value.execute.side_effect = (
+            self._blocking(started, release, {})
+        )
+        ctx = self._ctx(drive_svc, docs_svc)
+        with patch.object(images_module, "logger") as mock_logger:
+            await self._cancel_create_doc_once_started(ctx, started, release)
+        self._assert_file1_revoked(drive_svc)
+        assert mock_logger.warning.call_args.args[1:] == ("doc123", "none", "file1", "none")
+
+    async def test_share_revoked_when_cancelled_mid_share(self):
+        # PR #877 QA round 1 F1: cancelled while the share is being granted, the
+        # resolution still finishes (shielded) so the new permission is recorded
+        # and revoked instead of being lost with the cancelled gather.
+        drive_svc, docs_svc = self._shared_drive_image_services()
+        started, release = threading.Event(), threading.Event()
+        drive_svc.permissions.return_value.create.return_value.execute.side_effect = self._blocking(
+            started, release, {"id": "perm1"}
+        )
+        ctx = self._ctx(drive_svc, docs_svc)
+        await self._cancel_create_doc_once_started(ctx, started, release)
+        self._assert_file1_revoked(drive_svc)
+        # #904: the cancellation lands before the content batchUpdate is handed to
+        # a worker thread that could no longer be stopped.
+        docs_svc.documents.return_value.batchUpdate.assert_not_called()
+
+    async def test_cancelled_mid_edit_marks_doc_dirty_after_edit_lands(self):
+        # #907: the cancelled edit's worker thread still commits after the
+        # cancellation unwinds, so the doc is marked dirty again once it does,
+        # not only on the cancel path before it.
+        drive_svc, docs_svc = self._shared_drive_image_services()
+        started, release, landed = threading.Event(), threading.Event(), []
+
+        def execute(**kwargs):
+            started.set()
+            release.wait(5)
+            landed.append(True)
+            return {}
+
+        docs_svc.documents.return_value.batchUpdate.return_value.execute.side_effect = execute
+        ctx = self._ctx(drive_svc, docs_svc)
+        doc_cache = ctx.request_context.lifespan_context.doc_cache
+        dirty_after_landing = []
+        doc_cache.mark_dirty.side_effect = lambda doc_id: dirty_after_landing.append(
+            (doc_id, bool(landed))
+        )
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(
+                partial(
+                    _docs_tools["create_doc"],
+                    title="Doc",
+                    content="![Alt](drive:file1)",
+                    content_format="markdown",
+                    ctx=ctx,
+                )
+            )
+            await anyio.to_thread.run_sync(started.wait, 5)
+            tg.cancel_scope.cancel()
+        assert dirty_after_landing == [("doc123", False)]
+        release.set()
+        with anyio.fail_after(2):
+            while ("doc123", True) not in dirty_after_landing:
+                await anyio.sleep(0.01)
+
+    async def test_cancelled_create_doc_still_marks_target_folder_dirty(self):
+        # PR #1029 QA round 1: the doc exists in the folder from the create on, so
+        # a cancellation out of the content step still changes its listing.
+        drive_svc, docs_svc = self._shared_drive_image_services()
+        started, release = threading.Event(), threading.Event()
+        drive_svc.permissions.return_value.create.return_value.execute.side_effect = self._blocking(
+            started, release, {"id": "perm1"}
+        )
+        ctx = self._ctx(drive_svc, docs_svc, folder_id="folder1")
+        await self._cancel_create_doc_once_started(ctx, started, release)
+        ctx.request_context.lifespan_context.drive_folder_cache.mark_dirty.assert_called_with(
+            "folder1"
+        )
+
+    @pytest.mark.parametrize("tool_name", ["create_doc", "create_doc_from_file"])
+    async def test_cancelled_mid_create_marks_folder_dirty_after_create_lands(
+        self, tmp_path, tool_name
+    ):
+        # PR #1029 QA round 2: the create's worker thread can't be stopped, so the
+        # Doc lands in the folder after the cancellation unwinds, past the
+        # post-create mark_dirty. The folder is marked dirty once it lands.
+        drive_svc, docs_svc = self._make_services()
+        started, release, landed = threading.Event(), threading.Event(), []
+
+        def create(**kwargs):
+            started.set()
+            release.wait(5)
+            landed.append(True)
+            return {"id": "doc123", "name": "Doc", "parents": ["folder1"], "webViewLink": "x"}
+
+        drive_svc.files.return_value.create.return_value.execute.side_effect = create
+        ctx = self._ctx(drive_svc, docs_svc, folder_id="folder1")
+        dirty_after_landing = []
+        ctx.request_context.lifespan_context.drive_folder_cache.mark_dirty.side_effect = (
+            lambda folder_id: dirty_after_landing.append((folder_id, bool(landed)))
+        )
+        if tool_name == "create_doc":
+            call = partial(_docs_tools["create_doc"], title="Doc", content="Text", ctx=ctx)
+        else:
+            source = tmp_path / "doc.md"
+            source.write_text("Text\n")
+            call = partial(_docs_tools["create_doc_from_file"], local_path=str(source), ctx=ctx)
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(call)
+            await anyio.to_thread.run_sync(started.wait, 5)
+            tg.cancel_scope.cancel()
+        assert dirty_after_landing == []
+        release.set()
+        with anyio.fail_after(2):
+            while ("folder1", True) not in dirty_after_landing:
+                await anyio.sleep(0.01)
+
+    async def test_cancelled_mid_revoke_after_successful_edit_is_logged(self):
+        # #908: a cancellation that arrives during the success path's shielded
+        # revoke used to be absorbed by the shield with nothing logged.
+        drive_svc, docs_svc = self._shared_drive_image_services()
+        started, release = threading.Event(), threading.Event()
+        drive_svc.permissions.return_value.delete.return_value.execute.side_effect = self._blocking(
+            started, release, {}
+        )
+        ctx = self._ctx(drive_svc, docs_svc)
+        with patch.object(images_module, "logger") as mock_logger:
+            await self._cancel_create_doc_once_started(ctx, started, release)
+        self._assert_file1_revoked(drive_svc)
+        assert mock_logger.warning.call_args.args[1:] == ("doc123", "none", "file1", "none")
+
+    async def test_resized_drive_copy_marks_its_own_folder_dirty(self):
+        # #666: a drive: source's resized copy lands next to the original, not in
+        # the doc's folder, so that folder's listing changed too.
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.get.return_value.execute.return_value = {
+            "name": "big.png",
+            "parents": ["origfolder"],
+            "imageMediaMetadata": {"width": 6000, "height": 6000},
+        }
+        drive_svc.files.return_value.create.return_value.execute.side_effect = [
+            {"id": "doc123", "name": "Test", "parents": ["folder1"], "webViewLink": "x"},
+            {"id": "resized1", "webContentLink": "https://drive.google.com/uc?id=resized1"},
+        ]
+        drive_svc.permissions.return_value.create.return_value.execute.return_value = {
+            "id": "perm1"
+        }
+        png_bytes = _make_png_bytes(6000, 6000)
+
+        class _FakeDownloader:
+            def __init__(self, fh, request):
+                fh.write(png_bytes)
+
+            def next_chunk(self):
+                return None, True
+
+        ctx = self._ctx(drive_svc, docs_svc, folder_id="folder1")
+        with (
+            patch("mcp_gee_sweet.tools.docs.images.MediaIoBaseDownload", _FakeDownloader),
+            patch("mcp_gee_sweet.tools.docs.images.thread_http"),
+        ):
+            result = await _docs_tools["create_doc"](
+                title="Doc",
+                content="![Big](drive:orig1)",
+                content_format="markdown",
+                auto_downscale=True,
+                ctx=ctx,
+            )
+        assert result["images"][0]["fileId"] == "resized1"
+        folder_cache = ctx.request_context.lifespan_context.drive_folder_cache
+        dirtied = {c.args[0] for c in folder_cache.mark_dirty.call_args_list}
+        assert dirtied == {"origfolder", "folder1"}
+
     async def test_unresolvable_image_reported_as_error_doc_still_created(self, tmp_path):
         drive_svc, docs_svc = self._make_services()
         ctx = self._ctx(drive_svc, docs_svc)
@@ -1475,7 +2048,12 @@ class TestCreateDocImages:
         drive_svc.files.return_value.list.return_value.execute.return_value = {"files": []}
         drive_svc.files.return_value.create.return_value.execute.side_effect = [
             {"id": "doc123", "name": "Test", "parents": ["folder1"], "webViewLink": "x"},
-            {"id": "uploaded1", "name": "pic.png", "webViewLink": "y"},
+            {
+                "id": "uploaded1",
+                "name": "pic.png",
+                "webViewLink": "y",
+                "webContentLink": "https://drive.google.com/uc?id=uploaded1",
+            },
         ]
         drive_svc.permissions.return_value.create.return_value.execute.side_effect = RuntimeError(
             "boom"
@@ -1504,7 +2082,10 @@ class TestCreateDocImages:
         # logic keyed on "fileId in a failed outcome" could delete it (PR #652 QA
         # round 1, finding 2).
         drive_svc, docs_svc = self._make_services()
-        drive_svc.files.return_value.get.return_value.execute.return_value = {"name": "file1"}
+        drive_svc.files.return_value.get.return_value.execute.return_value = {
+            "name": "file1",
+            "webContentLink": "https://drive.google.com/uc?id=file1",
+        }
         drive_svc.permissions.return_value.create.return_value.execute.side_effect = RuntimeError(
             "boom"
         )
@@ -1589,18 +2170,285 @@ class TestCreateDocImages:
         assert "error" in outcomes[bad_uri]
         assert "doc edit failed" in outcomes[bad_uri]["error"]
 
-        # The retried (second) batchUpdate call must still contain the good
-        # image's request and everything else — only the bad one was removed.
-        second_call_requests = docs_svc.documents.return_value.batchUpdate.call_args.kwargs["body"][
-            "requests"
+        # #510: the caller-facing error comes from the API's own message, minus
+        # the internal "Invalid requests[N]." lead-in and HttpError's display
+        # wrapper.
+        assert "requests[" not in outcomes[bad_uri]["error"]
+        assert "<HttpError" not in outcomes[bad_uri]["error"]
+        assert "There was a problem retrieving the image" in outcomes[bad_uri]["error"]
+
+        # #510 QA round 1: K=1 stays two atomic calls — the retry is the whole
+        # remaining list with only the bad image removed, never a split.
+        calls = [
+            c.kwargs["body"]["requests"]
+            for c in docs_svc.documents.return_value.batchUpdate.call_args_list
         ]
-        assert any(
-            r.get("insertInlineImage", {}).get("uri") == good_uri for r in second_call_requests
+        assert len(calls) == 2
+        full, retry = calls
+        assert retry == [r for r in full if r.get("insertInlineImage", {}).get("uri") != bad_uri]
+
+    def _fail_first_matching(self, bad_uris: set[str]):
+        """batchUpdate side effect: fail on the first request (in list order) whose
+        image uri is in bad_uris, mirroring the live API naming only one per
+        error; succeed otherwise."""
+
+        def side_effect(documentId, body):
+            m = MagicMock()
+            bad_index = next(
+                (
+                    i
+                    for i, r in enumerate(body["requests"])
+                    if r.get("insertInlineImage", {}).get("uri") in bad_uris
+                ),
+                None,
+            )
+            if bad_index is None:
+                m.execute.return_value = {}
+            else:
+                m.execute.side_effect = self._insert_image_http_error(bad_index)
+            return m
+
+        return side_effect
+
+    async def test_multiple_bad_images_retry_only_the_insert_tail(self):
+        # #510: Google names only the first failing image per error (confirmed
+        # live), so K bad images need K retries. The first retry is still one
+        # atomic whole-list call; from the second bad image on, the text/style
+        # prefix is committed once and only the positional-insert tail is retried.
+        drive_svc, docs_svc = self._make_services()
+        good_uri = "https://example.com/good.png"
+        bad_uris = {
+            "https://example.com/bad1.png",
+            "https://example.com/bad2.png",
+            "https://example.com/bad3.png",
+        }
+        content = (
+            "Before\n\n![Bad1](https://example.com/bad1.png)\n\n![Good](https://example.com/good.png)"
+            "\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n![Bad2](https://example.com/bad2.png)"
+            "\n\nMiddle\n\n![Bad3](https://example.com/bad3.png)\n\nAfter"
         )
-        assert not any(
-            r.get("insertInlineImage", {}).get("uri") == bad_uri for r in second_call_requests
+        docs_svc.documents.return_value.batchUpdate.side_effect = self._fail_first_matching(
+            bad_uris
         )
-        assert docs_svc.documents.return_value.batchUpdate.call_count == 2
+        ctx = self._ctx(drive_svc, docs_svc)
+
+        # fill_tables (the table's cell-fill pass) isn't under test here.
+        with patch.object(content_module, "fill_tables"):
+            result = await _docs_tools["create_doc"](
+                title="Doc", content=content, content_format="markdown", ctx=ctx
+            )
+
+        outcomes = {o["src"]: o for o in result["images"]}
+        assert "error" not in outcomes[good_uri]
+        assert all("doc edit failed" in outcomes[uri]["error"] for uri in bad_uris)
+
+        calls = [
+            c.kwargs["body"]["requests"]
+            for c in docs_svc.documents.return_value.batchUpdate.call_args_list
+        ]
+        # full (fails bad #1), whole-list retry (fails bad #2), prefix commit,
+        # tail (fails bad #3), tail (succeeds).
+        full, retry, prefix, *tail_attempts = calls
+        assert len(tail_attempts) == 2
+        assert any("insertText" in r for r in retry)
+        assert not any("insertInlineImage" in r or "insertTable" in r for r in prefix)
+        for attempt in tail_attempts:
+            assert all("insertInlineImage" in r or "insertTable" in r for r in attempt)
+        final_tail = tail_attempts[-1]
+        assert [r["insertInlineImage"]["uri"] for r in final_tail if "insertInlineImage" in r] == [
+            good_uri
+        ]
+        assert any("insertTable" in r for r in final_tail)
+        assert prefix + final_tail == [
+            r for r in full if r.get("insertInlineImage", {}).get("uri") not in bad_uris
+        ]
+
+    @staticmethod
+    def _image_link_ranges(requests: list[dict]) -> list[dict]:
+        return [
+            r["updateTextStyle"]["range"]
+            for r in requests
+            if r.get("updateTextStyle", {}).get("fields") == "link"
+            and r["updateTextStyle"]["textStyle"]["link"]["url"].startswith("https://link/")
+        ]
+
+    async def test_bad_linked_image_drops_its_link_request_too(self):
+        # #977: left behind, a dropped image's link request would link whatever
+        # character now sits at the image's position.
+        drive_svc, docs_svc = self._make_services()
+        bad_uri = "https://example.com/bad.png"
+        content = (
+            f"Before [![Bad]({bad_uri})](https://link/bad) and "
+            "[![Good](https://example.com/good.png)](https://link/good) after"
+        )
+        # The retry pops from the same list it sent, so snapshot each call.
+        sent: list[list[dict]] = []
+        fail = self._fail_first_matching({bad_uri})
+
+        def side_effect(documentId, body):
+            sent.append(list(body["requests"]))
+            return fail(documentId, body)
+
+        docs_svc.documents.return_value.batchUpdate.side_effect = side_effect
+        ctx = self._ctx(drive_svc, docs_svc)
+
+        result = await _docs_tools["create_doc"](
+            title="Doc", content=content, content_format="markdown", ctx=ctx
+        )
+
+        assert "error" in {o["src"]: o for o in result["images"]}[bad_uri]
+        full, retry = sent
+        assert len(self._image_link_ranges(full)) == 2
+        bad_index = next(
+            i for i, r in enumerate(full) if r.get("insertInlineImage", {}).get("uri") == bad_uri
+        )
+        assert retry == full[:bad_index] + full[bad_index + 2 :]
+        good = next(r for r in retry if "insertInlineImage" in r)
+        index = good["insertInlineImage"]["location"]["index"]
+        assert self._image_link_ranges(retry) == [{"startIndex": index, "endIndex": index + 1}]
+
+    async def test_multiple_bad_linked_images_still_retry_only_the_insert_tail(self):
+        # #977 + #510: link requests ride inside the positional-insert tail, so
+        # the K>=2 split still finds every image there instead of falling back
+        # to whole-list retries.
+        drive_svc, docs_svc = self._make_services()
+        bad_uris = {"https://example.com/bad1.png", "https://example.com/bad2.png"}
+        content = (
+            "Before\n\n[![Bad1](https://example.com/bad1.png)](https://link/1)\n\n"
+            "[![Good](https://example.com/good.png)](https://link/good)\n\n"
+            "[![Bad2](https://example.com/bad2.png)](https://link/2)\n\nAfter"
+        )
+        docs_svc.documents.return_value.batchUpdate.side_effect = self._fail_first_matching(
+            bad_uris
+        )
+        ctx = self._ctx(drive_svc, docs_svc)
+
+        await _docs_tools["create_doc"](
+            title="Doc", content=content, content_format="markdown", ctx=ctx
+        )
+
+        _full, _retry, prefix, tail = [
+            c.kwargs["body"]["requests"]
+            for c in docs_svc.documents.return_value.batchUpdate.call_args_list
+        ]
+        assert not any("insertInlineImage" in r for r in prefix)
+        assert self._image_link_ranges(prefix) == []
+        assert [r["insertInlineImage"]["uri"] for r in tail if "insertInlineImage" in r] == [
+            "https://example.com/good.png"
+        ]
+        index = tail[0]["insertInlineImage"]["location"]["index"]
+        assert tail == [tail[0], tail[1]]
+        assert self._image_link_ranges(tail) == [{"startIndex": index, "endIndex": index + 1}]
+
+    @staticmethod
+    def _server_error() -> HttpError:
+        return HttpError(resp=MagicMock(status=500), content=b'{"error": {"message": "x"}}')
+
+    async def test_non_image_error_on_single_retry_propagates_with_nothing_committed(self):
+        # #510 QA round 1: with one bad image the retry is atomic, so a
+        # non-image failure there raises before anything reaches the doc.
+        drive_svc, docs_svc = self._make_services()
+        bad_uri = "https://example.com/bad.png"
+        content = f"Before\n\n![Bad]({bad_uri})\n\nAfter"
+        fail_bad = self._fail_first_matching({bad_uri})
+        calls = []
+
+        def side_effect(documentId, body):
+            calls.append(body["requests"])
+            if len(calls) == 1:
+                return fail_bad(documentId, body)
+            m = MagicMock()
+            m.execute.side_effect = self._server_error()
+            return m
+
+        docs_svc.documents.return_value.batchUpdate.side_effect = side_effect
+        ctx = self._ctx(drive_svc, docs_svc)
+
+        result = await _docs_tools["create_doc"](
+            title="Doc", content=content, content_format="markdown", ctx=ctx
+        )
+        assert result["error"].startswith("doc edit failed: ")
+        assert len(calls) == 2
+        # The failed retry still carried the text: no call ever sent it alone.
+        assert any("insertText" in r for r in calls[1])
+
+    async def test_non_image_error_after_prefix_commit_propagates(self):
+        # The documented K>=2 partial-write window: once the prefix is committed,
+        # a non-image tail failure must still surface, not loop or be swallowed.
+        # PR #877 QA round 1 F5: the shared drive: image's share is still revoked
+        # and the warning still fires on this path.
+        drive_svc, docs_svc = self._shared_drive_image_services()
+        bad_uris = {"https://example.com/bad1.png", "https://example.com/bad2.png"}
+        content = (
+            "Before\n\n![Bad1](https://example.com/bad1.png)\n\n"
+            "![Good](drive:file1)\n\n![Bad2](https://example.com/bad2.png)"
+        )
+        fail_bad = self._fail_first_matching(bad_uris)
+        calls = []
+
+        def side_effect(documentId, body):
+            calls.append(body["requests"])
+            if len(calls) <= 3:  # full, whole-list retry, prefix commit
+                return fail_bad(documentId, body)
+            m = MagicMock()
+            m.execute.side_effect = self._server_error()
+            return m
+
+        docs_svc.documents.return_value.batchUpdate.side_effect = side_effect
+        ctx = self._ctx(drive_svc, docs_svc)
+
+        with patch.object(images_module, "logger") as mock_logger:
+            result = await _docs_tools["create_doc"](
+                title="Doc", content=content, content_format="markdown", ctx=ctx
+            )
+        assert result["error"].startswith("doc edit failed: ")
+        assert len(calls) == 4
+        assert not any("insertInlineImage" in r for r in calls[2])
+        outcomes = {o["src"]: o for o in result["images"]}
+        assert all("doc edit failed" in outcomes[uri]["error"] for uri in bad_uris)
+        assert outcomes["drive:file1"] == {"src": "drive:file1", "fileId": "file1", "shared": False}
+        self._assert_file1_revoked(drive_svc)
+        assert mock_logger.warning.call_args.args[1:] == ("doc123", "none", "file1", "none")
+
+    async def test_image_outside_insert_tail_falls_back_to_whole_list_retries(self):
+        # #510 QA round 1: the tail boundary is inferred from request kinds. If
+        # ast_to_requests ever emitted something after its positional-insert pass,
+        # the scan would find no tail — the retry must degrade to the old
+        # whole-list behavior instead of committing an image-bearing prefix.
+        drive_svc, docs_svc = self._make_services()
+        bad_uris = {"https://example.com/bad1.png", "https://example.com/bad2.png"}
+        good_uri = "https://example.com/good.png"
+        content = (
+            f"Before\n\n![Bad1](https://example.com/bad1.png)\n\n![Good]({good_uri})"
+            "\n\n![Bad2](https://example.com/bad2.png)"
+        )
+        trailing = {"updateDocumentStyle": {"documentStyle": {}, "fields": "marginTop"}}
+        real_ast_to_requests = content_module.ast_to_requests
+
+        def with_trailing_request(*args, **kwargs):
+            requests, tables = real_ast_to_requests(*args, **kwargs)
+            return [*requests, trailing], tables
+
+        docs_svc.documents.return_value.batchUpdate.side_effect = self._fail_first_matching(
+            bad_uris
+        )
+        ctx = self._ctx(drive_svc, docs_svc)
+
+        with patch.object(content_module, "ast_to_requests", with_trailing_request):
+            result = await _docs_tools["create_doc"](
+                title="Doc", content=content, content_format="markdown", ctx=ctx
+            )
+
+        outcomes = {o["src"]: o for o in result["images"]}
+        assert "error" not in outcomes[good_uri]
+        calls = [
+            c.kwargs["body"]["requests"]
+            for c in docs_svc.documents.return_value.batchUpdate.call_args_list
+        ]
+        # full, retry (fails bad #2), retry (succeeds) — every call is the whole list.
+        assert len(calls) == 3
+        assert all(any("insertText" in r for r in call) for call in calls)
+        assert calls[-1][-1] == trailing
 
     async def test_oversized_uri_image_error_is_rewritten(self):
         # A bare http(s) image source can't be pre-validated (#400's scope boundary
@@ -1793,6 +2641,25 @@ class TestCreateDocFromFile:
         result = await _docs_tools["create_doc_from_file"](local_path=str(txt_file), ctx=ctx)
         assert "error" in result
         assert ".txt" in result["error"]
+        # create_doc_from_file has no content_format parameter to suggest (#567).
+        assert "content_format" not in result["error"]
+
+    @pytest.mark.parametrize("kind", ["directory", "latin1"])
+    async def test_unreadable_source_returns_error(self, tmp_path, kind):
+        # PR #961 QA round 1: a path that exists but isn't a readable UTF-8 file
+        # returns {"error": ...} instead of raising, and creates nothing.
+        if kind == "directory":
+            src = tmp_path / "dir.md"
+            src.mkdir()
+        else:
+            src = tmp_path / "latin1.html"
+            src.write_bytes("<p>caf\xe9</p>".encode("latin-1"))
+        drive_svc, docs_svc = self._make_services()
+        ctx = self._ctx(drive_svc, docs_svc)
+        result = await _docs_tools["create_doc_from_file"](local_path=str(src), ctx=ctx)
+        assert "error" in result
+        assert str(src) in result["error"]
+        drive_svc.files.return_value.create.assert_not_called()
 
 
 class TestUpdateDocFromFile:
@@ -1838,7 +2705,11 @@ class TestUpdateDocFromFile:
         assert "error" not in result
         # No new Doc created — only the existing one's content was touched.
         drive_svc.files.return_value.create.assert_not_called()
-        docs_svc.documents.return_value.get.assert_called_once_with(documentId="doc1")
+        # Read before the backup copy, and again after it (#878).
+        assert docs_svc.documents.return_value.get.call_args_list == [
+            call(documentId="doc1"),
+            call(documentId="doc1"),
+        ]
 
     async def test_md_file_heading_emitted(self, tmp_path):
         md_file = tmp_path / "doc.md"
@@ -1903,7 +2774,67 @@ class TestUpdateDocFromFile:
         )
         assert "error" in result
         assert ".txt" in result["error"]
+        assert "pass content_format explicitly" in result["error"]
         docs_svc.documents.return_value.get.assert_not_called()
+
+    @pytest.mark.parametrize("kind", ["directory", "latin1"])
+    async def test_unreadable_source_returns_error(self, tmp_path, kind):
+        # PR #961 QA round 1: same as create_doc_from_file; the doc is never touched.
+        if kind == "directory":
+            src = tmp_path / "dir.md"
+            src.mkdir()
+        else:
+            src = tmp_path / "latin1.html"
+            src.write_bytes("<p>caf\xe9</p>".encode("latin-1"))
+        drive_svc, docs_svc = self._make_services()
+        ctx = self._ctx(drive_svc, docs_svc)
+        result = await _docs_tools["update_doc_from_file"](
+            doc_id="doc1", local_path=str(src), ctx=ctx
+        )
+        assert "error" in result
+        assert str(src) in result["error"]
+        docs_svc.documents.return_value.get.assert_not_called()
+
+    def test_doc_content_flags_are_keyword_only(self):
+        # #567 / PR #961 QA round 1: positional bools could be swapped at a call site
+        # and still type-check, in both shared helpers.
+        for fn, names in (
+            (
+                content_module._replace_doc_content,
+                ("autolink_urls", "revoke_sharing", "auto_downscale", "allow_no_backup"),
+            ),
+            (
+                content_module._apply_doc_content,
+                ("autolink_urls", "target_folder_id", "revoke_sharing", "auto_downscale"),
+            ),
+        ):
+            params = inspect.signature(fn).parameters
+            for name in names:
+                assert params[name].kind is inspect.Parameter.KEYWORD_ONLY, (fn.__name__, name)
+
+    @pytest.mark.parametrize(
+        "flags",
+        [
+            {"autolink_urls": False, "revoke_sharing": True, "auto_downscale": True},
+            {"autolink_urls": True, "revoke_sharing": False, "auto_downscale": False},
+        ],
+    )
+    async def test_flags_reach_apply_doc_content_unswapped(self, tmp_path, flags):
+        # #567: _replace_doc_content's three bools are keyword-only, so each tool
+        # flag must land in its own _apply_doc_content slot.
+        md_file = tmp_path / "notes.md"
+        md_file.write_text("text\n")
+        drive_svc, docs_svc = self._make_services(end_index=2)
+        ctx = self._ctx(drive_svc, docs_svc)
+        real_apply = content_module._apply_doc_content
+        with patch.object(content_module, "_apply_doc_content", return_value=None) as apply:
+            await _docs_tools["update_doc_from_file"](
+                doc_id="doc1", local_path=str(md_file), ctx=ctx, **flags
+            )
+        # Bind against the real signature so the assertion holds however the call
+        # site passes them, and fails if the call wouldn't bind at all.
+        bound = inspect.signature(real_apply).bind(*apply.call_args.args, **apply.call_args.kwargs)
+        assert {k: bound.arguments[k] for k in flags} == flags
 
     async def test_clears_trailing_mark_style_before_deleting_in_its_own_batch(self, tmp_path):
         # Same clear-then-insert mechanism as write_doc_content (#255) — verified here
@@ -2031,6 +2962,74 @@ class TestGetDocStructureBullet:
         assert result["elements"][0]["bullet"] == {"listId": "list1", "nestingLevel": 0}
 
 
+class TestGetDocStructureCodeBlockSoftBreak:
+    """#731 (found in QA on #719's own PR): get_doc_structure built its text
+    straight off the raw Docs API response with no reversal for emitter.py's
+    "\\n" -> "\\v" substitution on a code-styled paragraph, leaking a literal
+    "\\v" (U+000B) instead of restoring the original newline."""
+
+    def _ctx(self, docs_svc):
+        return _make_ctx(docs_service=docs_svc)
+
+    async def test_courier_new_paragraph_soft_breaks_restored_to_newlines(self):
+        style = {"weightedFontFamily": {"fontFamily": "Courier New"}}
+        para = {
+            "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+            "elements": [{"textRun": {"content": "line1\vline2\vline3\n", "textStyle": style}}],
+        }
+        doc = {
+            "documentId": "doc1",
+            "title": "Doc",
+            "body": {"content": [{"startIndex": 1, "endIndex": 20, "paragraph": para}]},
+        }
+        docs_svc = MagicMock()
+        docs_svc.documents.return_value.get.return_value.execute.return_value = doc
+
+        result = await _docs_tools["get_doc_structure"](doc_id="doc1", ctx=self._ctx(docs_svc))
+
+        elem = result["elements"][0]
+        assert "\v" not in elem["text"]
+        assert elem["text"] == "line1\nline2\nline3\n"
+        assert elem["runs"][0]["text"] == "line1\nline2\nline3\n"
+
+    async def test_table_cell_courier_new_soft_breaks_restored_to_newlines(self):
+        style = {"weightedFontFamily": {"fontFamily": "Courier New"}}
+        cell = {
+            "startIndex": 5,
+            "endIndex": 20,
+            "content": [
+                {
+                    "paragraph": {
+                        "elements": [
+                            {"textRun": {"content": "a\vb\n", "textStyle": style}},
+                        ]
+                    }
+                }
+            ],
+        }
+        doc = {
+            "documentId": "doc1",
+            "title": "Doc",
+            "body": {
+                "content": [
+                    {
+                        "startIndex": 1,
+                        "endIndex": 30,
+                        "table": {"tableRows": [{"tableCells": [cell]}]},
+                    }
+                ]
+            },
+        }
+        docs_svc = MagicMock()
+        docs_svc.documents.return_value.get.return_value.execute.return_value = doc
+
+        result = await _docs_tools["get_doc_structure"](doc_id="doc1", ctx=self._ctx(docs_svc))
+
+        cell_result = result["elements"][0]["cells"][0]
+        assert "\v" not in cell_result["text"]
+        assert cell_result["text"] == "a\nb"
+
+
 # ---------------------------------------------------------------------------
 # Heading-anchor resolution (#409): _has_pending_anchor_links,
 # _resolve_heading_anchors, and end-to-end via create_doc_from_file.
@@ -2081,45 +3080,42 @@ class TestHasPendingAnchorLinks:
 
 
 class TestResolveHeadingAnchorsHelper:
+    def _paragraph_elem(self, start, text, *, heading_id=None, link_url=None):
+        """Build one body-content element: a heading paragraph (heading_id
+        given) or a plain paragraph, optionally carrying a same-document
+        '#slug' link on its one run. Shared by every fixture in this class
+        (issue #454 QA finding — was previously duplicated between this
+        helper and _doc_with_anchor below, two independent builders for the
+        same JSON shape)."""
+        end = start + len(text) + 1
+        style = (
+            {"namedStyleType": "HEADING_1", "headingId": heading_id}
+            if heading_id
+            else {"namedStyleType": "NORMAL_TEXT"}
+        )
+        text_style = {"link": {"url": link_url}} if link_url else {}
+        return {
+            "startIndex": start,
+            "endIndex": end,
+            "paragraph": {
+                "paragraphStyle": style,
+                "elements": [
+                    {
+                        "startIndex": start,
+                        "endIndex": end,
+                        "textRun": {"content": text + "\n", "textStyle": text_style},
+                    }
+                ],
+            },
+        }
+
     def _doc_with_anchor(self, anchor_url, heading_text="Overview", heading_id="h.xyz"):
         return {
             "documentId": "doc1",
             "body": {
                 "content": [
-                    {
-                        "startIndex": 1,
-                        "endIndex": 1 + len(heading_text) + 1,
-                        "paragraph": {
-                            "paragraphStyle": {
-                                "namedStyleType": "HEADING_1",
-                                "headingId": heading_id,
-                            },
-                            "elements": [
-                                {
-                                    "startIndex": 1,
-                                    "endIndex": 1 + len(heading_text) + 1,
-                                    "textRun": {"content": heading_text + "\n", "textStyle": {}},
-                                }
-                            ],
-                        },
-                    },
-                    {
-                        "startIndex": 20,
-                        "endIndex": 25,
-                        "paragraph": {
-                            "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
-                            "elements": [
-                                {
-                                    "startIndex": 20,
-                                    "endIndex": 25,
-                                    "textRun": {
-                                        "content": "Link\n",
-                                        "textStyle": {"link": {"url": anchor_url}},
-                                    },
-                                }
-                            ],
-                        },
-                    },
+                    self._paragraph_elem(1, heading_text, heading_id=heading_id),
+                    self._paragraph_elem(20, "Link", link_url=anchor_url),
                 ]
             },
         }
@@ -2172,6 +3168,54 @@ class TestResolveHeadingAnchorsHelper:
         summary = await _resolve_heading_anchors(docs_svc, "doc1")
         assert summary == {"resolved": [], "stripped": []}
         docs_svc.documents.return_value.batchUpdate.assert_not_called()
+
+    async def test_linked_image_anchor_is_resolved(self):
+        # #977: a linked image's link lives on its inlineObjectElement's own
+        # textStyle, not a textRun, so "[![alt](src)](#overview)" needs the
+        # walker to look there too.
+        image_para = {
+            "startIndex": 20,
+            "endIndex": 23,
+            "paragraph": {
+                "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                "elements": [
+                    {
+                        "startIndex": 20,
+                        "endIndex": 21,
+                        "textRun": {"content": "x", "textStyle": {}},
+                    },
+                    {
+                        "startIndex": 21,
+                        "endIndex": 22,
+                        "inlineObjectElement": {
+                            "inlineObjectId": "kix.1",
+                            "textStyle": {"link": {"url": "#overview"}},
+                        },
+                    },
+                    {
+                        "startIndex": 22,
+                        "endIndex": 23,
+                        "textRun": {"content": "\n", "textStyle": {}},
+                    },
+                ],
+            },
+        }
+        docs_svc = MagicMock()
+        docs_svc.documents.return_value.get.return_value.execute.return_value = {
+            "documentId": "doc1",
+            "body": {
+                "content": [
+                    self._paragraph_elem(1, "Overview", heading_id="h.xyz"),
+                    image_para,
+                ]
+            },
+        }
+        summary = await _resolve_heading_anchors(docs_svc, "doc1")
+        assert summary["resolved"] == [{"anchor": "#overview", "heading": "Overview"}]
+        requests = docs_svc.documents.return_value.batchUpdate.call_args.kwargs["body"]["requests"]
+        assert [r["updateTextStyle"]["range"] for r in requests] == [
+            {"startIndex": 21, "endIndex": 22}
+        ]
 
     async def test_anchor_link_inside_table_cell_is_resolved(self):
         # Regression: the body walk used to only look at top-level
@@ -2306,6 +3350,40 @@ class TestResolveHeadingAnchorsHelper:
         # same convention as _collect_doc_paragraphs) through the run's own
         # 5-UTF-16-unit content "Link\n".
         assert style["range"] == {"startIndex": 1, "endIndex": 6}
+
+    async def test_multiple_anchors_slugify_heading_list_once_per_scheme(self):
+        # Regression (#454): resolving N anchors against the same heading
+        # list must slugify that list once per known scheme, not once per
+        # scheme per anchor — the whole point of precomputing scheme_slugs
+        # once in _resolve_heading_anchors and threading it through every
+        # resolve_heading_anchor call in the loop.
+        docs_svc = MagicMock()
+        docs_svc.documents.return_value.get.return_value.execute.return_value = {
+            "documentId": "doc1",
+            "body": {
+                "content": [
+                    self._paragraph_elem(1, "Overview", heading_id="h.one"),
+                    self._paragraph_elem(20, "Notes", heading_id="h.two"),
+                    self._paragraph_elem(40, "Link A", link_url="#overview"),
+                    self._paragraph_elem(60, "Link B", link_url="#notes"),
+                    self._paragraph_elem(80, "Link C", link_url="#totally-unrelated"),
+                ]
+            },
+        }
+
+        from mcp_gee_sweet.tools.docs import anchors as anchors_module
+
+        with patch(
+            "mcp_gee_sweet.tools.docs.anchors._slugs_with_dedup",
+            wraps=anchors_module._slugs_with_dedup,
+        ) as spy:
+            summary = await _resolve_heading_anchors(docs_svc, "doc1")
+
+        assert {r["anchor"] for r in summary["resolved"]} == {"#overview", "#notes"}
+        assert summary["stripped"] == ["#totally-unrelated"]
+        # 3 anchors x 2 known schemes would be 6 calls without caching;
+        # precomputing scheme_slugs once means exactly 2 (one per scheme).
+        assert spy.call_count == 2
 
 
 class TestCreateDocFromFileAnchorResolution:
@@ -2591,6 +3669,864 @@ class TestWriteDocContent:
         assert result["images"] == [{"src": "https://example.com/a.png"}]
 
 
+class TestReplaceDocBackup:
+    """#878: write_doc_content / update_doc_from_file copy a doc with content before
+    clearing it, delete the copy once the new content is in, and keep it (named as
+    backupId) when the replacement fails. Drive's revision history can't serve: the
+    revision current before the clear is merged away by it (measured live)."""
+
+    @staticmethod
+    def _backup(can_delete=True):
+        return {
+            "id": "backup1",
+            "name": "My Doc (backup before replace)",
+            "capabilities": {"canDelete": can_delete},
+        }
+
+    def _make_services(self, end_index=50, backup=None):
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.get.return_value.execute.return_value = {
+            "webViewLink": "https://example.com"
+        }
+        drive_svc.files.return_value.copy.return_value.execute.return_value = (
+            backup if backup is not None else self._backup()
+        )
+        docs_svc = MagicMock()
+        docs_svc.documents.return_value.get.return_value.execute.return_value = {
+            "title": "My Doc",
+            "body": {"content": [{"endIndex": end_index}]},
+        }
+        return drive_svc, docs_svc
+
+    def _ctx(self, drive_svc, docs_svc):
+        return _make_ctx(drive_service=drive_svc, docs_service=docs_svc, doc_cache=MagicMock())
+
+    @staticmethod
+    def _batch_update_execute(docs_svc):
+        return docs_svc.documents.return_value.batchUpdate.return_value.execute
+
+    @staticmethod
+    def _fail_content_write(docs_svc, exc):
+        """The clear succeeds; the content batchUpdate after it raises `exc`."""
+        calls = []
+
+        def execute(**kwargs):
+            calls.append(kwargs)
+            if len(calls) > 1:
+                raise exc
+            return {}
+
+        docs_svc.documents.return_value.batchUpdate.return_value.execute.side_effect = execute
+
+    async def _write(self, ctx, content="<p>New</p>"):
+        return await _docs_tools["write_doc_content"](doc_id="doc1", content=content, ctx=ctx)
+
+    async def test_backup_made_before_clear_and_deleted_after_success(self):
+        drive_svc, docs_svc = self._make_services()
+        order = []
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = lambda **kw: (
+            order.append("copy") or self._backup()
+        )
+        self._batch_update_execute(docs_svc).side_effect = lambda **kw: order.append("edit") or {}
+        result = await self._write(self._ctx(drive_svc, docs_svc))
+
+        assert order[0] == "copy"
+        drive_svc.files.return_value.copy.assert_called_once_with(
+            fileId="doc1",
+            body={"name": "My Doc (backup before replace)"},
+            fields="id,name,capabilities(canDelete)",
+            supportsAllDrives=True,
+        )
+        drive_svc.files.return_value.delete.assert_called_once_with(
+            fileId="backup1", supportsAllDrives=True
+        )
+        assert result == {"docId": "doc1", "web_link": "https://example.com"}
+
+    async def test_backup_trashed_when_it_cannot_be_deleted(self):
+        # A Content manager on a Shared Drive can trash but not delete (#876).
+        backup = self._backup(can_delete=False)
+        drive_svc, docs_svc = self._make_services(backup=backup)
+        await self._write(self._ctx(drive_svc, docs_svc))
+        drive_svc.files.return_value.delete.assert_not_called()
+        drive_svc.files.return_value.update.assert_called_once_with(
+            fileId="backup1", body={"trashed": True}, fields="id", supportsAllDrives=True
+        )
+
+    async def test_backup_removal_failure_is_a_warning_not_an_error(self):
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.delete.return_value.execute.side_effect = RuntimeError("gone")
+        result = await self._write(self._ctx(drive_svc, docs_svc))
+        assert "error" not in result
+        assert result["warning"] == (
+            "Couldn't remove the backup copy backup1 made before replacing the content; "
+            "delete it manually (gone)."
+        )
+
+    async def test_empty_doc_is_not_backed_up(self):
+        drive_svc, docs_svc = self._make_services(end_index=2)
+        result = await self._write(self._ctx(drive_svc, docs_svc))
+        drive_svc.files.return_value.copy.assert_not_called()
+        assert "error" not in result
+
+    async def test_failed_copy_leaves_doc_unchanged(self):
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = _other_403_error()
+        ctx = self._ctx(drive_svc, docs_svc)
+        result = await self._write(ctx)
+        assert result["docId"] == "doc1"
+        assert result["error"].startswith(
+            "Couldn't back up the document before replacing its content, so it was left unchanged"
+        )
+        self._batch_update_execute(docs_svc).assert_not_called()
+        ctx.request_context.lifespan_context.doc_cache.mark_dirty.assert_not_called()
+
+    async def test_quota_error_on_copy_replaces_without_backup(self):
+        # A service account writing into a user-owned doc can't own the copy, and
+        # write_doc_content is the documented way to write such a doc.
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = _quota_http_error()
+        result = await self._write(self._ctx(drive_svc, docs_svc))
+        assert result == {
+            "docId": "doc1",
+            "web_link": "https://example.com",
+            "warning": (
+                "The document's previous content was replaced without a backup copy "
+                "(there's no Drive storage quota left for the copy)."
+            ),
+        }
+        drive_svc.files.return_value.delete.assert_not_called()
+
+    async def test_quota_error_on_copy_then_failed_write_says_no_backup(self):
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = _quota_http_error()
+        self._fail_content_write(docs_svc, RuntimeError("edit boom"))
+        result = await self._write(self._ctx(drive_svc, docs_svc))
+        assert result == {
+            "error": (
+                "doc edit failed: edit boom. The document's previous content was cleared "
+                "first and couldn't be backed up (there's no Drive storage quota left "
+                "for the copy), so the document may be empty or partly written."
+            ),
+            "docId": "doc1",
+        }
+
+    @staticmethod
+    def _reason_error(status, reason):
+        return HttpError(
+            resp=MagicMock(status=status),
+            content=json.dumps({"error": {"errors": [{"reason": reason}]}}).encode(),
+        )
+
+    # #1018: the reason string for the folder case was measured live (2026-10-14):
+    # files.copy by a caller who can edit the doc but only read or comment on its
+    # folder (My Drive or Shared Drive) returns 403 insufficientFilePermissions.
+    _FALLBACK_REASONS = (
+        (
+            "insufficientFilePermissions",
+            "this account can't add a file to the document's folder",
+        ),
+        ("teamDriveFileLimitExceeded", "the document's Shared Drive is at its item limit"),
+        ("numChildrenInNonRootLimitExceeded", "the document's folder is at its item limit"),
+    )
+
+    @pytest.mark.parametrize(("reason", "why"), _FALLBACK_REASONS)
+    async def test_permission_or_limit_error_on_copy_replaces_with_warning(self, reason, why):
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = self._reason_error(
+            403, reason
+        )
+        result = await self._write(self._ctx(drive_svc, docs_svc))
+        assert result == {
+            "docId": "doc1",
+            "web_link": "https://example.com",
+            "warning": (
+                f"The document's previous content was replaced without a backup copy ({why})."
+            ),
+        }
+        # The clear and the content write both went out.
+        assert self._batch_update_execute(docs_svc).call_count == 2
+        drive_svc.files.return_value.delete.assert_not_called()
+
+    @pytest.mark.parametrize(("reason", "why"), _FALLBACK_REASONS)
+    async def test_permission_or_limit_error_on_copy_then_failed_write_says_no_backup(
+        self, reason, why
+    ):
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = self._reason_error(
+            403, reason
+        )
+        self._fail_content_write(docs_svc, RuntimeError("edit boom"))
+        result = await self._write(self._ctx(drive_svc, docs_svc))
+        assert result == {
+            "error": (
+                f"doc edit failed: edit boom. The document's previous content was cleared "
+                f"first and couldn't be backed up ({why}), so the document may be empty "
+                f"or partly written."
+            ),
+            "docId": "doc1",
+        }
+
+    @pytest.mark.parametrize("reason", ["rateLimitExceeded", "userRateLimitExceeded"])
+    async def test_rate_limit_403_on_copy_still_refuses(self, reason):
+        # Drive returns these as 403s too; they mean "try again", not "can't copy here".
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = self._reason_error(
+            403, reason
+        )
+        result = await self._write(self._ctx(drive_svc, docs_svc))
+        assert result["error"].startswith(
+            "Couldn't back up the document before replacing its content, so it was left unchanged"
+        )
+        self._batch_update_execute(docs_svc).assert_not_called()
+
+    async def test_fallback_reason_with_other_status_still_refuses(self):
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = self._reason_error(
+            400, "insufficientFilePermissions"
+        )
+        result = await self._write(self._ctx(drive_svc, docs_svc))
+        assert "left unchanged" in result["error"]
+        self._batch_update_execute(docs_svc).assert_not_called()
+
+    async def test_no_backup_and_doc_emptied_during_copy_has_no_warning(self):
+        # Nothing was cleared, so nothing was lost without a backup.
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = self._reason_error(
+            403, "insufficientFilePermissions"
+        )
+        docs_svc.documents.return_value.get.return_value.execute.side_effect = [
+            {"title": "My Doc", "body": {"content": [{"endIndex": 50}]}},
+            {"title": "My Doc", "body": {"content": [{"endIndex": 2}]}},
+        ]
+        result = await self._write(self._ctx(drive_svc, docs_svc))
+        assert result == {"docId": "doc1", "web_link": "https://example.com"}
+
+    async def test_update_doc_from_file_no_backup_warning(self, tmp_path):
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = self._reason_error(
+            403, "insufficientFilePermissions"
+        )
+        src = tmp_path / "doc.md"
+        src.write_text("# New\n", encoding="utf-8")
+        result = await _docs_tools["update_doc_from_file"](
+            doc_id="doc1", local_path=str(src), ctx=self._ctx(drive_svc, docs_svc)
+        )
+        assert result["warning"] == (
+            "The document's previous content was replaced without a backup copy "
+            "(this account can't add a file to the document's folder)."
+        )
+
+    # #1035: cannotCopyFile was measured live (2026-10-14): a writer on a doc whose
+    # owner set downloadRestrictions' restrictedForWriters. These replace without a
+    # backup only with allow_no_backup=True.
+    _OPT_IN_REASONS = (
+        ("cannotCopyFile", "the document's sharing settings don't allow this account to copy it"),
+        (
+            "activeItemCreationLimitExceeded",
+            "this account is at its limit for creating Drive items",
+        ),
+    )
+
+    @pytest.mark.parametrize(("reason", "why"), _OPT_IN_REASONS)
+    async def test_opt_in_reason_refuses_by_default_and_names_the_flag(self, reason, why):
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = self._reason_error(
+            403, reason
+        )
+        ctx = self._ctx(drive_svc, docs_svc)
+        result = await self._write(ctx)
+        assert result == {
+            "error": (
+                f"Couldn't back up the document before replacing its content ({why}), so "
+                f"it was left unchanged. To replace it without a backup, retry with "
+                f"allow_no_backup=True. Its previous content then can't be recovered with "
+                f"export_revision: Docs merges the revision from before the replace into "
+                f"the replace's own."
+            ),
+            "docId": "doc1",
+        }
+        self._batch_update_execute(docs_svc).assert_not_called()
+        ctx.request_context.lifespan_context.doc_cache.mark_dirty.assert_not_called()
+        # Never backed up another way (export or download).
+        drive_svc.files.return_value.export.assert_not_called()
+        drive_svc.files.return_value.export_media.assert_not_called()
+        drive_svc.files.return_value.get_media.assert_not_called()
+
+    @staticmethod
+    def _capabilities(drive_svc, can_edit=None, error=None):
+        """files.get answers a capabilities read with `can_edit` (or raises
+        `error`), and the webViewLink lookup as usual."""
+
+        def get(**kwargs):
+            request = MagicMock()
+            if "capabilities" in kwargs.get("fields", ""):
+                if error is not None:
+                    request.execute.side_effect = error
+                else:
+                    request.execute.return_value = {"capabilities": {"canEdit": can_edit}}
+            else:
+                request.execute.return_value = {"webViewLink": "https://example.com"}
+            return request
+
+        drive_svc.files.return_value.get.side_effect = get
+
+    @pytest.mark.parametrize("allow_no_backup", [False, True])
+    @pytest.mark.parametrize(("reason", "why"), _OPT_IN_REASONS)
+    async def test_opt_in_reason_for_non_editor_says_it_cannot_edit(
+        self, reason, why, allow_no_backup
+    ):
+        # PR #1042 QA round 1: a reader gets cannotCopyFile under
+        # copyRequiresWriterPermission, and the flag can't help it.
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = self._reason_error(
+            403, reason
+        )
+        self._capabilities(drive_svc, can_edit=False)
+        ctx = self._ctx(drive_svc, docs_svc)
+        result = await _docs_tools["write_doc_content"](
+            doc_id="doc1", content="<p>New</p>", allow_no_backup=allow_no_backup, ctx=ctx
+        )
+        assert result == {
+            "error": (
+                f"This account can't edit the document, so it was left unchanged "
+                f"(Drive also refused the backup copy: {why})."
+            ),
+            "docId": "doc1",
+        }
+        self._batch_update_execute(docs_svc).assert_not_called()
+        ctx.request_context.lifespan_context.doc_cache.mark_dirty.assert_not_called()
+
+    @pytest.mark.parametrize("allow_no_backup", [False, True])
+    async def test_opt_in_reason_for_editor_follows_the_flag(self, allow_no_backup):
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = self._reason_error(
+            403, "cannotCopyFile"
+        )
+        self._capabilities(drive_svc, can_edit=True)
+        result = await _docs_tools["write_doc_content"](
+            doc_id="doc1",
+            content="<p>New</p>",
+            allow_no_backup=allow_no_backup,
+            ctx=self._ctx(drive_svc, docs_svc),
+        )
+        if allow_no_backup:
+            assert "warning" in result and "error" not in result
+        else:
+            assert "retry with allow_no_backup=True" in result["error"]
+
+    async def test_unreadable_capabilities_fall_back_to_the_flag(self):
+        # The clear's own 4xx would still leave the doc unchanged for a non-editor.
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = self._reason_error(
+            403, "cannotCopyFile"
+        )
+        self._capabilities(drive_svc, error=self._reason_error(500, "backendError"))
+        result = await self._write(self._ctx(drive_svc, docs_svc))
+        assert "retry with allow_no_backup=True" in result["error"]
+
+    async def test_capabilities_not_read_for_automatic_or_successful_backup(self):
+        for side_effect in (None, self._reason_error(403, "insufficientFilePermissions")):
+            drive_svc, docs_svc = self._make_services()
+            if side_effect is not None:
+                drive_svc.files.return_value.copy.return_value.execute.side_effect = side_effect
+            await self._write(self._ctx(drive_svc, docs_svc))
+            fields = [
+                c.kwargs.get("fields") for c in drive_svc.files.return_value.get.call_args_list
+            ]
+            assert fields == ["webViewLink"]
+
+    @pytest.mark.parametrize(("reason", "why"), _OPT_IN_REASONS)
+    async def test_opt_in_reason_with_flag_replaces_with_warning(self, reason, why):
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = self._reason_error(
+            403, reason
+        )
+        result = await _docs_tools["write_doc_content"](
+            doc_id="doc1",
+            content="<p>New</p>",
+            allow_no_backup=True,
+            ctx=self._ctx(drive_svc, docs_svc),
+        )
+        assert result == {
+            "docId": "doc1",
+            "web_link": "https://example.com",
+            "warning": (
+                f"The document's previous content was replaced without a backup copy ({why})."
+            ),
+        }
+        assert self._batch_update_execute(docs_svc).call_count == 2
+        drive_svc.files.return_value.copy.return_value.execute.assert_called_once()
+        drive_svc.files.return_value.delete.assert_not_called()
+
+    @pytest.mark.parametrize(("reason", "why"), _OPT_IN_REASONS)
+    async def test_opt_in_reason_with_flag_then_failed_write_says_no_backup(self, reason, why):
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = self._reason_error(
+            403, reason
+        )
+        self._fail_content_write(docs_svc, RuntimeError("edit boom"))
+        result = await _docs_tools["write_doc_content"](
+            doc_id="doc1",
+            content="<p>New</p>",
+            allow_no_backup=True,
+            ctx=self._ctx(drive_svc, docs_svc),
+        )
+        assert result == {
+            "error": (
+                f"doc edit failed: edit boom. The document's previous content was cleared "
+                f"first and couldn't be backed up ({why}), so the document may be empty "
+                f"or partly written."
+            ),
+            "docId": "doc1",
+        }
+
+    async def test_opt_in_reason_with_other_status_still_refuses_with_flag(self):
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = self._reason_error(
+            400, "cannotCopyFile"
+        )
+        result = await _docs_tools["write_doc_content"](
+            doc_id="doc1",
+            content="<p>New</p>",
+            allow_no_backup=True,
+            ctx=self._ctx(drive_svc, docs_svc),
+        )
+        assert result["error"].startswith(
+            "Couldn't back up the document before replacing its content, so it was left unchanged"
+        )
+        self._batch_update_execute(docs_svc).assert_not_called()
+
+    @pytest.mark.parametrize("reason", ["rateLimitExceeded", "userRateLimitExceeded"])
+    async def test_flag_does_not_widen_to_other_copy_failures(self, reason):
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = self._reason_error(
+            403, reason
+        )
+        result = await _docs_tools["write_doc_content"](
+            doc_id="doc1",
+            content="<p>New</p>",
+            allow_no_backup=True,
+            ctx=self._ctx(drive_svc, docs_svc),
+        )
+        assert "allow_no_backup" not in result["error"]
+        assert result["error"].startswith(
+            "Couldn't back up the document before replacing its content, so it was left unchanged"
+        )
+        self._batch_update_execute(docs_svc).assert_not_called()
+
+    @pytest.mark.parametrize("allow_no_backup", [False, True])
+    async def test_flag_does_not_change_automatic_fallback(self, allow_no_backup):
+        # #1018's reasons replace without a backup whatever the flag says.
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = self._reason_error(
+            403, "insufficientFilePermissions"
+        )
+        result = await _docs_tools["write_doc_content"](
+            doc_id="doc1",
+            content="<p>New</p>",
+            allow_no_backup=allow_no_backup,
+            ctx=self._ctx(drive_svc, docs_svc),
+        )
+        assert result["warning"] == (
+            "The document's previous content was replaced without a backup copy "
+            "(this account can't add a file to the document's folder)."
+        )
+
+    async def test_flag_does_not_skip_a_backup_that_succeeds(self):
+        drive_svc, docs_svc = self._make_services()
+        result = await _docs_tools["write_doc_content"](
+            doc_id="doc1",
+            content="<p>New</p>",
+            allow_no_backup=True,
+            ctx=self._ctx(drive_svc, docs_svc),
+        )
+        assert "warning" not in result
+        drive_svc.files.return_value.copy.return_value.execute.assert_called_once()
+        drive_svc.files.return_value.delete.return_value.execute.assert_called_once()
+
+    @pytest.mark.parametrize("allow_no_backup", [False, True])
+    async def test_update_doc_from_file_passes_allow_no_backup(self, tmp_path, allow_no_backup):
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = self._reason_error(
+            403, "cannotCopyFile"
+        )
+        src = tmp_path / "doc.md"
+        src.write_text("# New\n", encoding="utf-8")
+        result = await _docs_tools["update_doc_from_file"](
+            doc_id="doc1",
+            local_path=str(src),
+            allow_no_backup=allow_no_backup,
+            ctx=self._ctx(drive_svc, docs_svc),
+        )
+        if allow_no_backup:
+            assert result["warning"] == (
+                "The document's previous content was replaced without a backup copy "
+                "(the document's sharing settings don't allow this account to copy it)."
+            )
+        else:
+            assert "retry with allow_no_backup=True" in result["error"]
+            self._batch_update_execute(docs_svc).assert_not_called()
+
+    async def test_failed_write_after_clear_keeps_backup_and_names_it(self):
+        drive_svc, docs_svc = self._make_services()
+        self._fail_content_write(docs_svc, RuntimeError("edit boom"))
+        ctx = self._ctx(drive_svc, docs_svc)
+        result = await self._write(ctx)
+        assert result == {
+            "error": (
+                "doc edit failed: edit boom. The document's previous content was cleared "
+                "first; a full copy of it is kept as 'My Doc (backup before replace)' "
+                "(backupId)."
+            ),
+            "docId": "doc1",
+            "backupId": "backup1",
+        }
+        drive_svc.files.return_value.delete.assert_not_called()
+        drive_svc.files.return_value.update.assert_not_called()
+        ctx.request_context.lifespan_context.doc_cache.mark_dirty.assert_called_with("doc1")
+
+    async def test_failed_write_with_images_keeps_image_outcomes_and_backup(self):
+        drive_svc, docs_svc = self._make_services()
+        self._fail_content_write(docs_svc, RuntimeError("edit boom"))
+        result = await self._write(
+            self._ctx(drive_svc, docs_svc), content='<img src="https://example.com/a.png">'
+        )
+        assert result["backupId"] == "backup1"
+        assert result["images"] == [{"src": "https://example.com/a.png"}]
+
+    async def test_rejected_clear_discards_backup_and_reports_unchanged(self):
+        drive_svc, docs_svc = self._make_services()
+        self._batch_update_execute(docs_svc).side_effect = _other_403_error()
+        ctx = self._ctx(drive_svc, docs_svc)
+        result = await self._write(ctx)
+        assert result["docId"] == "doc1"
+        assert result["error"].startswith("Couldn't clear the document, so it was left unchanged")
+        assert "backupId" not in result
+        drive_svc.files.return_value.delete.assert_called_once_with(
+            fileId="backup1", supportsAllDrives=True
+        )
+        ctx.request_context.lifespan_context.doc_cache.mark_dirty.assert_not_called()
+
+    async def test_rejected_clear_reports_backup_removal_failure(self):
+        drive_svc, docs_svc = self._make_services()
+        self._batch_update_execute(docs_svc).side_effect = _other_403_error()
+        drive_svc.files.return_value.delete.return_value.execute.side_effect = RuntimeError("gone")
+        result = await self._write(self._ctx(drive_svc, docs_svc))
+        assert result["error"].startswith("Couldn't clear the document")
+        assert result["warning"] == (
+            "Couldn't remove the backup copy backup1 made before replacing the content; "
+            "delete it manually (gone)."
+        )
+
+    async def test_non_http_clear_failure_keeps_backup(self):
+        # A transport error doesn't say whether the clear landed, so the backup stays.
+        drive_svc, docs_svc = self._make_services()
+        self._batch_update_execute(docs_svc).side_effect = TimeoutError("timed out")
+        result = await self._write(self._ctx(drive_svc, docs_svc))
+        assert result["backupId"] == "backup1"
+        drive_svc.files.return_value.delete.assert_not_called()
+
+    async def test_cancelled_after_clear_keeps_backup_and_logs_it(self):
+        drive_svc, docs_svc = self._make_services()
+        started, release = threading.Event(), threading.Event()
+        calls = []
+
+        def execute(**kwargs):
+            calls.append(kwargs)
+            if len(calls) > 1:  # the content write, after the clear
+                started.set()
+                release.wait(5)
+            return {}
+
+        self._batch_update_execute(docs_svc).side_effect = execute
+        ctx = self._ctx(drive_svc, docs_svc)
+        with patch.object(content_module, "logger") as mock_logger:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(partial(self._write, ctx))
+                await anyio.to_thread.run_sync(started.wait, 5)
+                tg.cancel_scope.cancel()
+                release.set()
+        drive_svc.files.return_value.delete.assert_not_called()
+        mock_logger.warning.assert_called_once_with(
+            "Replacing doc %s was cancelled; kept its backup copy %s", "doc1", "backup1"
+        )
+
+    async def test_cancelled_during_revoke_after_full_replace_discards_backup(self):
+        # PR #1029 QA round 1 (reproduced live): a cancellation held off by the
+        # image-share revoke lands after the new content fully landed. The doc was
+        # replaced, so the backup is removed, not kept as if the write were partial.
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.get.return_value.execute.return_value = {
+            "webViewLink": "https://example.com",
+            "webContentLink": "https://drive.google.com/uc?id=file1",
+        }
+        drive_svc.permissions.return_value.create.return_value.execute.return_value = {
+            "id": "perm1"
+        }
+        started, release = threading.Event(), threading.Event()
+
+        def revoke(**kwargs):
+            started.set()
+            release.wait(5)
+            return {}
+
+        drive_svc.permissions.return_value.delete.return_value.execute.side_effect = revoke
+        ctx = self._ctx(drive_svc, docs_svc)
+        with patch.object(content_module, "logger") as mock_logger:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(partial(self._write, ctx, '<img src="drive:file1">'))
+                await anyio.to_thread.run_sync(started.wait, 5)
+                tg.cancel_scope.cancel()
+                release.set()
+        drive_svc.files.return_value.delete.assert_called_once_with(
+            fileId="backup1", supportsAllDrives=True
+        )
+        kept = [c for c in mock_logger.warning.call_args_list if "kept its backup" in c.args[0]]
+        assert kept == []
+
+    async def test_cancelled_mid_clear_marks_doc_dirty_after_clear_lands(self):
+        # #907: the clear's worker thread still commits after the cancellation
+        # unwinds, so the doc is marked dirty again once it does.
+        drive_svc, docs_svc = self._make_services()
+        started, release, landed = threading.Event(), threading.Event(), []
+
+        def execute(**kwargs):
+            started.set()
+            release.wait(5)
+            landed.append(True)
+            return {}
+
+        self._batch_update_execute(docs_svc).side_effect = execute
+        ctx = self._ctx(drive_svc, docs_svc)
+        dirty_after_landing = []
+        ctx.request_context.lifespan_context.doc_cache.mark_dirty.side_effect = lambda doc_id: (
+            dirty_after_landing.append((doc_id, bool(landed)))
+        )
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(partial(self._write, ctx))
+            await anyio.to_thread.run_sync(started.wait, 5)
+            tg.cancel_scope.cancel()
+        assert ("doc1", True) not in dirty_after_landing
+        release.set()
+        with anyio.fail_after(2):
+            while ("doc1", True) not in dirty_after_landing:
+                await anyio.sleep(0.01)
+
+    async def test_local_image_upload_marks_folder_dirty(self, tmp_path):
+        # #666: the image is uploaded into the server's default folder, whose
+        # listing then changed.
+        img = tmp_path / "pixel.png"
+        img.write_bytes(_make_png_bytes(2, 2))
+        drive_svc, docs_svc = self._make_services(end_index=2)
+        drive_svc.files.return_value.create.return_value.execute.return_value = {
+            "id": "up1",
+            "webContentLink": "https://drive.google.com/uc?id=up1",
+        }
+        drive_svc.permissions.return_value.create.return_value.execute.return_value = {
+            "id": "perm1"
+        }
+        ctx = _make_ctx(
+            drive_service=drive_svc,
+            docs_service=docs_svc,
+            doc_cache=MagicMock(),
+            drive_folder_cache=MagicMock(),
+            folder_id="folder1",
+        )
+        result = await _docs_tools["write_doc_content"](
+            doc_id="doc1", content=f"![Pixel]({img})", content_format="markdown", ctx=ctx
+        )
+        assert result["images"] == [{"src": str(img), "fileId": "up1", "shared": False}]
+        ctx.request_context.lifespan_context.drive_folder_cache.mark_dirty.assert_called_once_with(
+            "folder1"
+        )
+
+    async def test_update_doc_from_file_failed_write_names_backup(self, tmp_path):
+        source = tmp_path / "doc.md"
+        source.write_text("# New\n")
+        drive_svc, docs_svc = self._make_services()
+        self._fail_content_write(docs_svc, RuntimeError("edit boom"))
+        result = await _docs_tools["update_doc_from_file"](
+            doc_id="doc1", local_path=str(source), ctx=self._ctx(drive_svc, docs_svc)
+        )
+        assert result["backupId"] == "backup1"
+        assert result["error"].startswith("doc edit failed: edit boom. ")
+
+    # PR #1017 QA round 1.
+
+    @staticmethod
+    def _http_error(status):
+        return HttpError(resp=MagicMock(status=status), content=b'{"error": {"message": "x"}}')
+
+    async def test_5xx_on_clear_keeps_backup_and_says_may_have_cleared(self):
+        # A 5xx doesn't say whether the clear ran; Sky reproduced one that had.
+        drive_svc, docs_svc = self._make_services()
+        self._batch_update_execute(docs_svc).side_effect = self._http_error(503)
+        ctx = self._ctx(drive_svc, docs_svc)
+        result = await self._write(ctx)
+        assert result["backupId"] == "backup1"
+        assert "may have been cleared" in result["error"]
+        drive_svc.files.return_value.delete.assert_not_called()
+        ctx.request_context.lifespan_context.doc_cache.mark_dirty.assert_called_once_with("doc1")
+
+    async def test_429_on_clear_is_rejected(self):
+        drive_svc, docs_svc = self._make_services()
+        self._batch_update_execute(docs_svc).side_effect = self._http_error(429)
+        result = await self._write(self._ctx(drive_svc, docs_svc))
+        assert result["error"].startswith("Couldn't clear the document, so it was left unchanged")
+        drive_svc.files.return_value.delete.assert_called_once()
+
+    async def test_non_http_clear_failure_says_may_have_cleared(self):
+        drive_svc, docs_svc = self._make_services()
+        self._batch_update_execute(docs_svc).side_effect = ConnectionRefusedError()
+        result = await self._write(self._ctx(drive_svc, docs_svc))
+        assert result["error"] == (
+            "doc edit failed: ConnectionRefusedError. The document's previous content may "
+            "have been cleared; a full copy of it is kept as "
+            "'My Doc (backup before replace)' (backupId)."
+        )
+
+    async def test_clear_uses_end_index_read_after_the_copy(self):
+        # The doc grew while the copy ran: the clear must cover the new text too.
+        drive_svc, docs_svc = self._make_services()
+        docs_svc.documents.return_value.get.return_value.execute.side_effect = [
+            {"title": "My Doc", "body": {"content": [{"endIndex": 50}]}},
+            {"title": "My Doc", "body": {"content": [{"endIndex": 80}]}},
+        ]
+        await self._write(self._ctx(drive_svc, docs_svc))
+        clear = docs_svc.documents.return_value.batchUpdate.call_args_list[0].kwargs["body"]
+        assert clear["requests"][1]["deleteContentRange"]["range"] == {
+            "startIndex": 1,
+            "endIndex": 79,
+        }
+
+    async def test_doc_emptied_during_copy_is_not_cleared_but_backup_still_named(self):
+        drive_svc, docs_svc = self._make_services()
+        docs_svc.documents.return_value.get.return_value.execute.side_effect = [
+            {"title": "My Doc", "body": {"content": [{"endIndex": 50}]}},
+            {"title": "My Doc", "body": {"content": [{"endIndex": 2}]}},
+        ]
+        self._batch_update_execute(docs_svc).side_effect = RuntimeError("edit boom")
+        result = await self._write(self._ctx(drive_svc, docs_svc))
+        # Only the content write was sent, no clear.
+        assert self._batch_update_execute(docs_svc).call_count == 1
+        assert result["error"] == (
+            "doc edit failed: edit boom. A full copy of the document from before this call "
+            "is kept as 'My Doc (backup before replace)' (backupId)."
+        )
+
+    async def test_reread_failure_discards_backup_and_leaves_doc_unchanged(self):
+        drive_svc, docs_svc = self._make_services()
+        docs_svc.documents.return_value.get.return_value.execute.side_effect = [
+            {"title": "My Doc", "body": {"content": [{"endIndex": 50}]}},
+            RuntimeError("read boom"),
+        ]
+        result = await self._write(self._ctx(drive_svc, docs_svc))
+        assert result["error"] == (
+            "Couldn't clear the document, so it was left unchanged: read boom"
+        )
+        self._batch_update_execute(docs_svc).assert_not_called()
+        drive_svc.files.return_value.delete.assert_called_once()
+
+    async def test_copy_retried_on_429(self):
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = [
+            self._http_error(429),
+            self._backup(),
+        ]
+        with patch.object(content_module.anyio, "sleep", new_callable=AsyncMock) as mock_sleep:
+            result = await self._write(self._ctx(drive_svc, docs_svc))
+        assert "error" not in result
+        assert drive_svc.files.return_value.copy.return_value.execute.call_count == 2
+        mock_sleep.assert_called_once_with(1)
+
+    async def test_copy_5xx_not_retried_and_names_possible_copy(self):
+        # The copy may exist despite the 5xx; a retry would make a second one.
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = self._http_error(503)
+        result = await self._write(self._ctx(drive_svc, docs_svc))
+        assert drive_svc.files.return_value.copy.return_value.execute.call_count == 1
+        assert result["error"].endswith(
+            ". A copy named 'My Doc (backup before replace)' may still have been created "
+            "next to the document; check for it and delete it"
+        )
+        self._batch_update_execute(docs_svc).assert_not_called()
+
+    async def test_copy_4xx_does_not_mention_possible_copy(self):
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = _other_403_error()
+        result = await self._write(self._ctx(drive_svc, docs_svc))
+        assert "may still have been created" not in result["error"]
+
+    async def test_copy_timeout_is_bounded_and_names_possible_copy(self):
+        drive_svc, docs_svc = self._make_services()
+        release = threading.Event()
+
+        def stalled(**kwargs):
+            release.wait(5)
+            return self._backup()
+
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = stalled
+        try:
+            with patch.object(content_module, "_BACKUP_COPY_TIMEOUT", 0.2):
+                result = await self._write(self._ctx(drive_svc, docs_svc))
+        finally:
+            release.set()
+        assert result["error"].startswith(
+            "Couldn't back up the document before replacing its content, so it was left "
+            "unchanged: TimeoutError. A copy named"
+        )
+        self._batch_update_execute(docs_svc).assert_not_called()
+
+    async def test_link_lookup_failure_still_removes_backup_and_dirties_cache(self):
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.get.return_value.execute.side_effect = RuntimeError("get boom")
+        ctx = self._ctx(drive_svc, docs_svc)
+        with pytest.raises(RuntimeError, match="get boom"):
+            await self._write(ctx)
+        drive_svc.files.return_value.delete.assert_called_once_with(
+            fileId="backup1", supportsAllDrives=True
+        )
+        # The doc was already replaced (PR #1017 QA round 2).
+        ctx.request_context.lifespan_context.doc_cache.mark_dirty.assert_called_once_with("doc1")
+
+    async def test_link_lookup_failure_after_no_backup_replace_still_reports_it(self):
+        # The content was replaced with no backup; a lookup error alone wouldn't
+        # tell the caller the old content is gone (PR #1034 QA round 1).
+        drive_svc, docs_svc = self._make_services()
+        drive_svc.files.return_value.copy.return_value.execute.side_effect = self._reason_error(
+            403, "insufficientFilePermissions"
+        )
+        lookup_error = RuntimeError("get boom")
+        drive_svc.files.return_value.get.return_value.execute.side_effect = lookup_error
+        ctx = self._ctx(drive_svc, docs_svc)
+        with pytest.raises(RuntimeError) as excinfo:
+            await self._write(ctx)
+        assert str(excinfo.value) == (
+            "The document's previous content was replaced without a backup copy "
+            "(this account can't add a file to the document's folder). The new content "
+            "was written, but looking up the document's link failed: get boom"
+        )
+        assert excinfo.value.__cause__ is lookup_error
+        ctx.request_context.lifespan_context.doc_cache.mark_dirty.assert_called_once_with("doc1")
+
+    async def test_backup_removal_and_link_lookup_run_together(self):
+        drive_svc, docs_svc = self._make_services()
+        both = threading.Barrier(2, timeout=5)
+
+        def delete_execute(**kwargs):
+            both.wait()
+            return {}
+
+        def get_execute(**kwargs):
+            both.wait()
+            return {"webViewLink": "https://example.com"}
+
+        drive_svc.files.return_value.delete.return_value.execute.side_effect = delete_execute
+        drive_svc.files.return_value.get.return_value.execute.side_effect = get_execute
+        result = await self._write(self._ctx(drive_svc, docs_svc))
+        assert result == {"docId": "doc1", "web_link": "https://example.com"}
+
+
 def _build_doc_body(paragraph_runs: list[list[str]]) -> tuple[dict, list[tuple[int, str]]]:
     """Build a synthetic Docs API body from a list of paragraphs, each a list of
     textRun content strings (the last run of a paragraph should end in "\\n",
@@ -2637,6 +4573,29 @@ class TestFindInDoc:
         result = await _docs_tools["find_in_doc"](doc_id="missing", query="x", ctx=ctx)
 
         assert "error" in result
+
+    async def test_courier_new_paragraph_soft_breaks_restored_to_newlines(self):
+        # #731 (found in QA on #719's own PR): _collect_doc_paragraphs (which
+        # find_in_doc uses) yielded a Courier-New run's content unmodified —
+        # a multi-line code block written by #719's fix leaked a literal "\v"
+        # (U+000B) into matched_text/context instead of the original "\n".
+        style = {"weightedFontFamily": {"fontFamily": "Courier New"}}
+        para = {
+            "elements": [
+                {
+                    "startIndex": 1,
+                    "textRun": {"content": "line1\vneedle\vline3\n", "textStyle": style},
+                }
+            ]
+        }
+        doc = {"body": {"content": [{"startIndex": 1, "endIndex": 19, "paragraph": para}]}}
+        ctx = self._ctx(self._docs_svc(doc))
+
+        results = await _docs_tools["find_in_doc"](doc_id="doc1", query="needle", ctx=ctx)
+
+        assert len(results) == 1
+        assert "\v" not in results[0]["context"]
+        assert results[0]["context"] == "line1\nneedle\nline3"
 
     async def test_match_offset_after_astral_character_is_utf16_correct(self):
         # Regression: offsets used to be computed via enumerate() over Python
@@ -2794,3 +4753,159 @@ class TestFindInDoc:
         assert result["match_count"] == 3
         written = json.loads(dest.read_text())
         assert len(written) == 3
+
+
+class TestFailedInsertImageRequestIndex:
+    """#510: matched against the structured response (status + JSON body's
+    error.message), not HttpError's own display formatting."""
+
+    @staticmethod
+    def _error(status: int, content: bytes) -> HttpError:
+        resp = MagicMock()
+        resp.status = status
+        resp.reason = "Bad Request"
+        return HttpError(resp=resp, content=content)
+
+    def test_extracts_index_from_json_body(self):
+        # Body shape as captured live against the real Docs API.
+        body = {
+            "error": {
+                "code": 400,
+                "message": "Invalid requests[28].insertInlineImage: There was a problem "
+                "retrieving the image.",
+                "status": "INVALID_ARGUMENT",
+            }
+        }
+        assert _failed_insert_image_request_index(self._error(400, json.dumps(body).encode())) == 28
+
+    def test_independent_of_httperror_display_format(self):
+        body = {"error": {"message": "Invalid requests[3].insertInlineImage: nope"}}
+        error = self._error(400, json.dumps(body).encode())
+        with patch.object(HttpError, "__str__", lambda self: "reformatted"):
+            assert _failed_insert_image_request_index(error) == 3
+
+    def test_non_400_status_is_none(self):
+        body = {"error": {"message": "Invalid requests[3].insertInlineImage: nope"}}
+        error = self._error(500, json.dumps(body).encode())
+        assert _failed_insert_image_request_index(error) is None
+
+    def test_other_request_kind_is_none(self):
+        body = {"error": {"message": "Invalid requests[3].insertText: bad index"}}
+        error = self._error(400, json.dumps(body).encode())
+        assert _failed_insert_image_request_index(error) is None
+
+    @pytest.mark.parametrize(
+        "content",
+        [b"not json", b"[]", b'{"error": "flat"}', b"{}"],
+    )
+    def test_malformed_body_is_none(self, content):
+        assert _failed_insert_image_request_index(self._error(400, content)) is None
+
+    def test_caller_message_drops_internal_index_and_wrapper(self):
+        body = {
+            "error": {
+                "message": "Invalid requests[2].insertInlineImage: There was a problem "
+                "retrieving the image."
+            }
+        }
+        message = _failed_insert_image_message(self._error(400, json.dumps(body).encode()))
+        assert message == "insertInlineImage: There was a problem retrieving the image."
+
+    def test_caller_message_still_rewrites_too_large(self):
+        body = {
+            "error": {
+                "message": "Invalid requests[0].insertInlineImage: The provided image is too large."
+            }
+        }
+        message = _failed_insert_image_message(self._error(400, json.dumps(body).encode()))
+        assert message.startswith("insertInlineImage: The provided image is too large.")
+        assert "25 megapixels" in message
+
+
+class TestPositionalInsertTailStart:
+    def test_ast_to_requests_puts_every_positional_insert_in_the_tail(self):
+        # The invariant _apply_doc_content's split relies on (#510 QA round 1):
+        # ast_to_requests emits nothing after its insertTable/insertInlineImage
+        # pass, so the kind-based scan finds every such request. (The retry also
+        # fails safe if this ever breaks — see
+        # test_image_outside_insert_tail_falls_back_to_whole_list_retries.)
+        md = (
+            "# H\n\n![A](https://example.com/a.png)\n\n- one\n    - two\n\n"
+            "| a | b |\n|---|---|\n| 1 | 2 |\n\n> quote ![B](https://example.com/b.png)\n\nEnd"
+        )
+        nodes = html_to_ast(_md_to_html(md))
+        uris = {id(img): img.src for img in extract_images(nodes)}
+        requests, _ = ast_to_requests(nodes, start_index=1, image_uris=uris)
+        tail_start = _positional_insert_tail_start(requests)
+        positional = [
+            i for i, r in enumerate(requests) if "insertTable" in r or "insertInlineImage" in r
+        ]
+        assert len(positional) == 3
+        assert all(i >= tail_start for i in positional)
+
+    def test_tail_of_tables_and_images(self):
+        requests = [
+            {"insertText": {}},
+            {"updateTextStyle": {}},
+            {"insertInlineImage": {}},
+            {"insertTable": {}},
+            {"insertInlineImage": {}},
+        ]
+        assert _positional_insert_tail_start(requests) == 2
+
+    @staticmethod
+    def _link(start: int) -> dict:
+        return {
+            "updateTextStyle": {
+                "range": {"startIndex": start, "endIndex": start + 1},
+                "textStyle": {"link": {"url": "https://t"}},
+                "fields": "link",
+            }
+        }
+
+    def test_image_link_request_stays_in_the_tail(self):
+        # #977: a linked image's own link request, recorded in image_links,
+        # counts as part of the tail.
+        insert = {"insertInlineImage": {"location": {"index": 5}}}
+        link = self._link(5)
+        requests = [
+            {"insertText": {}},
+            {"updateTextStyle": {}},
+            {"insertTable": {"location": {"index": 9}}},
+            insert,
+            link,
+            {"insertInlineImage": {"location": {"index": 2}}},
+        ]
+        assert _positional_insert_tail_start(requests, {id(insert): link}) == 2
+
+    def test_unrecorded_link_request_ends_the_tail(self):
+        # Matched by identity, not shape: an identical-looking link request
+        # that ast_to_requests didn't record ends the scan.
+        insert = {"insertInlineImage": {"location": {"index": 5}}}
+        recorded = self._link(5)
+        requests = [{"insertText": {}}, insert, self._link(5)]
+        assert _positional_insert_tail_start(requests, {id(insert): recorded}) == 3
+        assert _positional_insert_tail_start(requests) == 3
+
+    def test_ast_to_requests_records_each_image_link(self):
+        md = "[![A](https://x/a.png)](https://t) ![B](https://x/b.png)"
+        nodes = html_to_ast(_md_to_html(md))
+        uris = {id(img): img.src for img in extract_images(nodes)}
+        image_links: dict[int, dict] = {}
+        requests, _ = ast_to_requests(nodes, image_uris=uris, image_links=image_links)
+        inserts = {r["insertInlineImage"]["uri"]: r for r in requests if "insertInlineImage" in r}
+        assert list(image_links) == [id(inserts["https://x/a.png"])]
+        link = image_links[id(inserts["https://x/a.png"])]
+        assert any(r is link for r in requests)
+        assert _positional_insert_tail_start(requests, image_links) == requests.index(
+            min(inserts.values(), key=requests.index)
+        )
+
+    def test_no_tail(self):
+        assert _positional_insert_tail_start([{"insertText": {}}]) == 1
+
+    def test_all_tail(self):
+        assert _positional_insert_tail_start([{"insertInlineImage": {}}]) == 0
+
+    def test_empty(self):
+        assert _positional_insert_tail_start([]) == 0

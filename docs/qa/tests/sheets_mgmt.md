@@ -23,6 +23,9 @@ Tests marked **⚠️ destructive** rename or delete sheets — reset fixtures a
 **Result (2026-09-04) ✅ PASS**
 list_sheets → Sales/Empty/Notes & Misc (3 tabs), no error
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S02: Cache hit on second call
@@ -37,6 +40,9 @@ list_sheets → Sales/Empty/Notes & Misc (3 tabs), no error
 **Result (2026-09-04) ✅ PASS**
 2nd call same list; cache-hit not verifiable from QA session (no log access)
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S03: Cache invalidated after rename
@@ -50,6 +56,9 @@ list_sheets → Sales/Empty/Notes & Misc (3 tabs), no error
 
 **Result (2026-09-04) ✅ PASS**
 Empty→WasEmpty, list_sheets reflects rename immediately (mark_dirty confirmed); renamed back to Empty in teardown
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -68,6 +77,9 @@ Empty→WasEmpty, list_sheets reflects rename immediately (mark_dirty confirmed)
 **Result (2026-09-04) ✅ PASS**
 copy_sheet(dst_sheet="Sales Copy") → 'Sales Copy' created, data matches Sales 6x4 exactly, Sales unaffected
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S05: Copy to a different spreadsheet
@@ -83,6 +95,9 @@ copy_sheet(dst_sheet="Sales Copy") → 'Sales Copy' created, data matches Sales 
 **Result (2026-09-04) ✅ PASS**
 copy_sheet accepted src_spreadsheet/dst_spreadsheet as distinct params (same ID value); completed without error
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S06: Name differs from Google's auto-assigned name — rename triggered
@@ -96,6 +111,9 @@ copy_sheet accepted src_spreadsheet/dst_spreadsheet as distinct params (same ID 
 
 **Result (2026-09-04) ✅ PASS**
 copy_sheet(dst_sheet="My Custom Name") → sheet named "My Custom Name" not "Copy of Sales"; response included "rename" key confirming auto-rename triggered
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -111,6 +129,9 @@ copy_sheet(dst_sheet="My Custom Name") → sheet named "My Custom Name" not "Cop
 **Result (2026-09-04) ✅ PASS**
 copy_sheet(dst_sheet="Copy of Sales") matching Google's own default name → response has no "rename" key, confirming no extra rename API call
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S08: Source sheet not found
@@ -124,6 +145,9 @@ copy_sheet(dst_sheet="Copy of Sales") matching Google's own default name → res
 
 **Result (2026-09-04) ✅ PASS**
 copy_sheet(src_sheet="DoesNotExist") → {"error":"Source sheet 'DoesNotExist' not found"}, before API call
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -139,6 +163,9 @@ copy_sheet(src_sheet="DoesNotExist") → {"error":"Source sheet 'DoesNotExist' n
 **Result (2026-09-04) ✅ PASS**
 copy_sheet(dst_spreadsheet="invalidid123xyz") → HttpError 400 "Invalid destinationSpreadsheetId", source unaffected
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S10: Cache invalidated after copy ⚠️ destructive
@@ -152,6 +179,9 @@ copy_sheet(dst_spreadsheet="invalidid123xyz") → HttpError 400 "Invalid destina
 
 **Result (2026-09-04) ✅ PASS**
 copy_sheet(dst_sheet="PostCopyCache") then immediate list_sheets includes it — mark_dirty confirmed
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -174,6 +204,9 @@ copy_sheet(dst_sheet="PostCopyCache") then immediate list_sheets includes it —
 **Result (2026-09-04) ✅ PASS**
 duplicate_sheet(sheet="Sales") → {"sheetId","title":"Copy of Sales","index":1,"spreadsheetId"}; data matches Sales 6x4; original unchanged. Deleted after
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S52: Duplicate with a custom name ⚠️ destructive
@@ -190,6 +223,9 @@ duplicate_sheet(sheet="Sales") → {"sheetId","title":"Copy of Sales","index":1,
 
 **Result (2026-09-04) ✅ PASS**
 duplicate_sheet(new_name="Sales Duplicate") → title="Sales Duplicate" directly in response (single-call newSheetName, no follow-up rename). Deleted after
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -211,6 +247,9 @@ Re-ran after `_get_sheet_index`'s blanket `except Exception: return None` was re
 **Result (2026-09-04) ✅ PASS**
 duplicate_sheet() no insert_index → list_sheets shows "Copy of Sales" immediately after "Sales" (index 1). Deleted after
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S54: Explicit insert_index is honored ⚠️ destructive
@@ -227,6 +266,9 @@ duplicate_sheet() no insert_index → list_sheets shows "Copy of Sales" immediat
 
 **Result (2026-09-04) ✅ PASS**
 duplicate_sheet(insert_index=0) → "Copy of Sales" is first tab in list_sheets. Deleted after
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -248,6 +290,9 @@ Re-ran after `_get_sheet_id`'s blanket `except Exception: return None` was remov
 **Result (2026-09-04) ✅ PASS**
 duplicate_sheet(sheet="DoesNotExist") → {"error":"Sheet 'DoesNotExist' not found"}
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S56: Cache invalidated after duplicate ⚠️ destructive
@@ -264,6 +309,9 @@ duplicate_sheet(sheet="DoesNotExist") → {"error":"Sheet 'DoesNotExist' not fou
 
 **Result (2026-09-04) ✅ PASS**
 duplicate_sheet(new_name="PostDuplicateCache") then immediate list_sheets includes it — mark_dirty confirmed. Deleted after
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -282,6 +330,9 @@ duplicate_sheet(new_name="PostDuplicateCache") then immediate list_sheets includ
 **Result (2026-09-04) ✅ PASS**
 rename_sheet(Empty→Renamed) → no error; list_sheets shows "Renamed" not "Empty". Renamed back
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S12: Rename to the same name
@@ -296,6 +347,9 @@ rename_sheet(Empty→Renamed) → no error; list_sheets shows "Renamed" not "Emp
 
 **Result (2026-09-04) ✅ PASS**
 rename_sheet(Sales→Sales same name) → succeeds, no error, round-trips to API (not a client no-op)
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -314,6 +368,9 @@ rename_sheet(Sales→Sales same name) → succeeds, no error, round-trips to API
 **Result (2026-09-04) ✅ PASS**
 rename_sheet(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S14: Cache invalidated after rename
@@ -327,6 +384,9 @@ rename_sheet(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
 
 **Result (2026-09-04) ✅ PASS**
 rename_sheet('Notes & Misc'→'Notes') → list_sheets shows "Notes" not "Notes & Misc" — mark_dirty confirmed. Renamed back
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -345,6 +405,9 @@ rename_sheet('Notes & Misc'→'Notes') → list_sheets shows "Notes" not "Notes 
 **Result (2026-09-04) ✅ PASS**
 create_sheet(title="BrandNew") → {sheetId(int), title, index(int), spreadsheetId} all present; list_sheets reflects it
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S16: Duplicate tab title
@@ -358,6 +421,9 @@ create_sheet(title="BrandNew") → {sheetId(int), title, index(int), spreadsheet
 
 **Result (2026-09-04) ✅ PASS**
 create_sheet(title="Sales", dup) → HttpError 400 "A sheet with the name \"Sales\" already exists." — errors cleanly, no auto-suffix, no silent duplicate
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -373,6 +439,9 @@ create_sheet(title="Sales", dup) → HttpError 400 "A sheet with the name \"Sale
 **Result (2026-09-04) ✅ PASS**
 create_sheet(150-char title) → HttpError 400 "The sheet name cannot be greater than 100 characters." — clear message with actual limit (100)
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S18: Response shape
@@ -387,6 +456,9 @@ create_sheet(150-char title) → HttpError 400 "The sheet name cannot be greater
 **Result (2026-09-04) ✅ PASS**
 create_sheet(title="ShapeTest") → {sheetId(int), title(str), index(int), spreadsheetId(str)}, no missing fields
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S19: Cache updated after create
@@ -400,6 +472,41 @@ create_sheet(title="ShapeTest") → {sheetId(int), title(str), index(int), sprea
 
 **Result (2026-09-04) ✅ PASS**
 create_sheet(title="CacheNewSheet") then list_sheets includes it immediately — mark_dirty confirmed
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+## `add_rows` / `add_columns`
+
+### TC-S104: Non-positive count returns error (unit test)
+
+**Checks (unit test)**
+- `add_rows(spreadsheet_id, sheet, count=0)` → `{"error": "count must be positive, got 0"}`, no `batchUpdate` call
+- `add_rows(spreadsheet_id, sheet, count=-2)` → `{"error": "count must be positive, got -2"}`, no `batchUpdate` call
+- `add_columns(spreadsheet_id, sheet, count=0)` → `{"error": "count must be positive, got 0"}`, no `batchUpdate` call
+- `add_columns(spreadsheet_id, sheet, count=-1)` → `{"error": "count must be positive, got -1"}`, no `batchUpdate` call
+- Previously a non-positive `count` passed straight to `insertDimension` (`startIndex == endIndex` or `startIndex > endIndex`), which the Sheets API rejected with an opaque 400 rather than a clear local error (issue #323)
+- Covered by `test_zero_count_returns_error_without_api_call` / `test_negative_count_returns_error_without_api_call` in `TestAddRows`/`TestAddColumns`
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S112: add_rows / add_columns — negative start returns error (unit test)
+
+**Checks (unit test)**
+- `add_rows(spreadsheet_id, sheet, count=1, start_row=-1)` → `{"error": "start_row must be non-negative, got -1"}`, no `batchUpdate` call
+- `add_columns(spreadsheet_id, sheet, count=1, start_column=-1)` → `{"error": "start_column must be non-negative, got -1"}`, no `batchUpdate` call
+- Previously a negative `start_row`/`start_column` passed straight to `insertDimension` with a negative `startIndex`, which the Sheets API rejected with an opaque 400 rather than a clear local error (PR #734 QA round 1, issue #323)
+- Covered by `test_negative_start_row_returns_error_without_api_call` / `test_negative_start_column_returns_error_without_api_call` in `TestAddRows`/`TestAddColumns`
+
+**Result (2026-09-12) ✅** — unit tests pass (155/155). Live-verified via `mcp-gee-sweet-kit` against the QA fixture spreadsheet (`Empty` sheet): `add_rows(start_row=-1, count=1)` and `add_columns(start_column=-1, count=1)` both returned the exact documented error with no `batchUpdate` call.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -417,6 +524,9 @@ create_sheet(title="CacheNewSheet") then list_sheets includes it immediately —
 **Result (2026-09-04) ✅ PASS**
 refresh_cache(spreadsheet_id) → {"invalidated":["spreadsheet:<id>"]}, scoped correctly
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S21: Refresh by doc ID only
@@ -430,6 +540,9 @@ refresh_cache(spreadsheet_id) → {"invalidated":["spreadsheet:<id>"]}, scoped c
 
 **Result (2026-09-04) ⏭️ SKIP**
 Requires {DOC_ID} fixture — not provided to this Sheets shard (only SPREADSHEET_ID/FOLDER_ID/SHARED_DRIVE_ID given)
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -445,6 +558,9 @@ Requires {DOC_ID} fixture — not provided to this Sheets shard (only SPREADSHEE
 **Result (2026-09-04) ⏭️ SKIP**
 Requires {DOC_ID} fixture — not provided to this Sheets shard
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S23: Refresh with no arguments — clears all caches
@@ -459,6 +575,9 @@ Requires {DOC_ID} fixture — not provided to this Sheets shard
 **Result (2026-09-04) ✅ PASS**
 refresh_cache() no args → {"invalidated":"all"}
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S24: Cache re-populated after refresh
@@ -472,6 +591,9 @@ refresh_cache() no args → {"invalidated":"all"}
 
 **Result (2026-09-04) ✅ PASS**
 refresh_cache(spreadsheet_id) then get_multiple_spreadsheet_summary → correct re-fetched data including tabs created moments earlier (BrandNew/ShapeTest/CacheNewSheet), confirming no stale cache
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -493,6 +615,9 @@ refresh_cache(spreadsheet_id) then get_multiple_spreadsheet_summary → correct 
 **Result (2026-09-04) ✅ PASS**
 create TempTab, delete_sheet(TempTab) → no error; list_sheets confirms absent
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S26: Delete a non-existent sheet returns error
@@ -508,6 +633,9 @@ create TempTab, delete_sheet(TempTab) → no error; list_sheets confirms absent
 
 **Result (2026-09-04) ✅ PASS**
 delete_sheet(sheet="DoesNotExist") → {"error":"Sheet 'DoesNotExist' not found"}
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -529,6 +657,9 @@ delete_sheet(sheet="DoesNotExist") → {"error":"Sheet 'DoesNotExist' not found"
 **Result (2026-09-04) ✅ PASS**
 delete_rows(start_row=4) → Gizmo row removed; Totals (now row 5) recalculated to 350/360/415
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S28: Delete a range of rows ⚠️ destructive
@@ -545,6 +676,9 @@ delete_rows(start_row=4) → Gizmo row removed; Totals (now row 5) recalculated 
 **Result (2026-09-04) ✅ PASS**
 delete_rows(start_row=2,end_row=4) → 3 rows removed (Gadget/Donut/Totals); only header+Widget remain — confirms inclusive end_row=4 → exclusive endIndex=5
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S29: Delete rows — sheet not found returns error
@@ -559,6 +693,35 @@ delete_rows(start_row=2,end_row=4) → 3 rows removed (Gadget/Donut/Totals); onl
 
 **Result (2026-09-04) ✅ PASS**
 delete_rows(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S105: end_row before start_row returns error (unit test)
+
+**Checks (unit test)**
+- `delete_rows(spreadsheet_id, sheet, start_row=5, end_row=2)` → `{"error": "end_row (2) must be >= start_row (5)"}`, no `batchUpdate` call
+- Previously an inverted range passed straight through to `deleteDimension`'s computed (invalid) `startIndex`/`endIndex` pair, which the Sheets API rejected with an opaque 400 rather than a clear local error (issue #323)
+- Covered by `test_end_row_before_start_row_returns_error_without_api_call` in `TestDeleteRows`
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S113: delete_rows — negative start_row returns error (unit test)
+
+**Checks (unit test)**
+- `delete_rows(spreadsheet_id, sheet, start_row=-1)` → `{"error": "start_row must be non-negative, got -1"}`, no `batchUpdate` call
+- Previously a negative `start_row` passed straight through to `deleteDimension` with a negative `startIndex` (PR #734 QA round 1, issue #323)
+- Covered by `test_negative_start_row_returns_error_without_api_call` in `TestDeleteRows`
+
+**Result (2026-09-12) ✅** — unit tests pass (155/155). Live-verified via `mcp-gee-sweet-kit` against the QA fixture spreadsheet (`Empty` sheet): `delete_rows(start_row=-1)` returned the exact documented error with no `batchUpdate` call.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -580,6 +743,9 @@ delete_rows(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
 **Result (2026-09-04) ✅ PASS**
 delete_columns(start_column=1) → Q1 removed, Q2/Q3 shift left, Totals recalc 670/705
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S31: Delete a range of columns ⚠️ destructive
@@ -596,6 +762,9 @@ delete_columns(start_column=1) → Q1 removed, Q2/Q3 shift left, Totals recalc 6
 **Result (2026-09-04) ✅ PASS**
 delete_columns(start_column=2,end_column=4) on 3-col sheet → only Q3(idx2) existed in range, removed; Product/Q2 remain — clip-to-available confirmed
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S32: Delete columns — sheet not found returns error
@@ -610,6 +779,35 @@ delete_columns(start_column=2,end_column=4) on 3-col sheet → only Q3(idx2) exi
 
 **Result (2026-09-04) ✅ PASS**
 delete_columns(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S106: end_column before start_column returns error (unit test)
+
+**Checks (unit test)**
+- `delete_columns(spreadsheet_id, sheet, start_column=5, end_column=2)` → `{"error": "end_column (2) must be >= start_column (5)"}`, no `batchUpdate` call
+- Same underlying gap as TC-S105, one dimension over (issue #323)
+- Covered by `test_end_column_before_start_column_returns_error_without_api_call` in `TestDeleteColumns`
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S114: delete_columns — negative start_column returns error (unit test)
+
+**Checks (unit test)**
+- `delete_columns(spreadsheet_id, sheet, start_column=-1)` → `{"error": "start_column must be non-negative, got -1"}`, no `batchUpdate` call
+- Same underlying gap as TC-S113, one dimension over (PR #734 QA round 1, issue #323)
+- Covered by `test_negative_start_column_returns_error_without_api_call` in `TestDeleteColumns`
+
+**Result (2026-09-12) ✅** — unit tests pass (155/155). Live-verified via `mcp-gee-sweet-kit` against the QA fixture spreadsheet (`Empty` sheet): `delete_columns(start_column=-1)` returned the exact documented error with no `batchUpdate` call.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -632,6 +830,9 @@ delete_columns(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"
 **Result (2026-09-04) ✅ PASS**
 hide_rows(start_row=4) → rowMetadata[4].hiddenByUser=true (API-verified, no Playwright per shard instructions)
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S64: Hide a range of rows ⚠️ destructive
@@ -650,6 +851,9 @@ hide_rows(start_row=4) → rowMetadata[4].hiddenByUser=true (API-verified, no Pl
 **Result (2026-09-04) ✅ PASS**
 hide_rows(start_row=2,end_row=4) → rowMetadata[2,3,4] all hiddenByUser=true
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S65: Hide rows — sheet not found returns error
@@ -665,6 +869,9 @@ hide_rows(start_row=2,end_row=4) → rowMetadata[2,3,4] all hiddenByUser=true
 
 **Result (2026-09-04) ✅ PASS**
 hide_rows(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -686,6 +893,9 @@ hide_rows(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
 **Result (2026-09-04) ✅ PASS**
 unhide_rows(start_row=4) → row 4's hiddenByUser gone; rows 2,3 remained hidden (only targeted index affected)
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S67: Unhide rows — sheet not found returns error
@@ -701,6 +911,37 @@ unhide_rows(start_row=4) → row 4's hiddenByUser gone; rows 2,3 remained hidden
 
 **Result (2026-09-04) ✅ PASS**
 unhide_rows(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S107: hide_rows / unhide_rows — end_row before start_row returns error (unit test)
+
+**Checks (unit test)**
+- `hide_rows(spreadsheet_id, sheet, start_row=5, end_row=2)` → `{"error": "end_row (2) must be >= start_row (5)"}`, no `batchUpdate` call
+- `unhide_rows(spreadsheet_id, sheet, start_row=5, end_row=2)` → same error shape, no `batchUpdate` call
+- Both tools share the same underlying `_range_order_error` check (issue #323)
+- Covered by `test_end_row_before_start_row_returns_error_without_api_call` in `TestHideRows`/`TestUnhideRows`
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S115: hide_rows / unhide_rows — negative start_row returns error (unit test)
+
+**Checks (unit test)**
+- `hide_rows(spreadsheet_id, sheet, start_row=-1)` → `{"error": "start_row must be non-negative, got -1"}`, no `batchUpdate` call
+- `unhide_rows(spreadsheet_id, sheet, start_row=-1)` → same error shape, no `batchUpdate` call
+- Both tools share the same underlying `_non_negative_value_error` check (PR #734 QA round 1, issue #323)
+- Covered by `test_negative_start_row_returns_error_without_api_call` in `TestHideRows`/`TestUnhideRows`
+
+**Result (2026-09-12) ✅** — unit tests pass (155/155). Live-verified via `mcp-gee-sweet-kit` against the QA fixture spreadsheet (`Empty` sheet): `hide_rows(start_row=-1)` and `unhide_rows(start_row=-1)` both returned the exact documented error with no `batchUpdate` call.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -723,6 +964,9 @@ unhide_rows(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
 **Result (2026-09-04) ✅ PASS**
 hide_columns(start_column=1) → columnMetadata[1].hiddenByUser=true (col B)
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S69: Hide a range of columns ⚠️ destructive
@@ -741,6 +985,9 @@ hide_columns(start_column=1) → columnMetadata[1].hiddenByUser=true (col B)
 **Result (2026-09-04) ✅ PASS**
 hide_columns(start_column=2,end_column=4) → columnMetadata[2,3,4] all hiddenByUser=true (C,D,E)
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S70: Hide columns — sheet not found returns error
@@ -756,6 +1003,9 @@ hide_columns(start_column=2,end_column=4) → columnMetadata[2,3,4] all hiddenBy
 
 **Result (2026-09-04) ✅ PASS**
 hide_columns(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -777,6 +1027,9 @@ hide_columns(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
 **Result (2026-09-04) ✅ PASS**
 unhide_columns(start_column=1) → col B unhidden (verified via cleanup pass)
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S72: Unhide columns — sheet not found returns error
@@ -792,6 +1045,37 @@ unhide_columns(start_column=1) → col B unhidden (verified via cleanup pass)
 
 **Result (2026-09-04) ✅ PASS**
 unhide_columns(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S108: hide_columns / unhide_columns — end_column before start_column returns error (unit test)
+
+**Checks (unit test)**
+- `hide_columns(spreadsheet_id, sheet, start_column=5, end_column=2)` → `{"error": "end_column (2) must be >= start_column (5)"}`, no `batchUpdate` call
+- `unhide_columns(spreadsheet_id, sheet, start_column=5, end_column=2)` → same error shape, no `batchUpdate` call
+- Both tools share the same underlying `_range_order_error` check (issue #323)
+- Covered by `test_end_column_before_start_column_returns_error_without_api_call` in `TestHideColumns`/`TestUnhideColumns`
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S116: hide_columns / unhide_columns — negative start_column returns error (unit test)
+
+**Checks (unit test)**
+- `hide_columns(spreadsheet_id, sheet, start_column=-1)` → `{"error": "start_column must be non-negative, got -1"}`, no `batchUpdate` call
+- `unhide_columns(spreadsheet_id, sheet, start_column=-1)` → same error shape, no `batchUpdate` call
+- Both tools share the same underlying `_non_negative_value_error` check (PR #734 QA round 1, issue #323)
+- Covered by `test_negative_start_column_returns_error_without_api_call` in `TestHideColumns`/`TestUnhideColumns`
+
+**Result (2026-09-12) ✅** — unit tests pass (155/155). Live-verified via `mcp-gee-sweet-kit` against the QA fixture spreadsheet (`Empty` sheet): `hide_columns(start_column=-1)` and `unhide_columns(start_column=-1)` both returned the exact documented error with no `batchUpdate` call.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -813,6 +1097,9 @@ unhide_columns(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"
 **Result (2026-09-04) ✅ PASS**
 resize_rows(start_row=4,pixel_size=60) → succeeded (overwritten by TC-S74 moments later, expected)
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S74: Resize a range of rows ⚠️ destructive
@@ -829,6 +1116,9 @@ resize_rows(start_row=4,pixel_size=60) → succeeded (overwritten by TC-S74 mome
 
 **Result (2026-09-04) ✅ PASS**
 resize_rows(start_row=2,end_row=4,pixel_size=40) → rowMetadata[2,3,4] all pixelSize=40
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -849,6 +1139,9 @@ resize_rows(start_row=2,end_row=4,pixel_size=40) → rowMetadata[2,3,4] all pixe
 **Result (2026-09-04) ✅ PASS**
 resize_rows(start_row=4,auto_resize=True) → succeeded, no error
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S76: Resize rows — neither pixel_size nor auto_resize given returns error
@@ -864,6 +1157,9 @@ resize_rows(start_row=4,auto_resize=True) → succeeded, no error
 
 **Result (2026-09-04) ✅ PASS**
 resize_rows(start_row=0) no size/auto → {"error":"Specify pixel_size or set auto_resize=True"}
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -881,6 +1177,9 @@ resize_rows(start_row=0) no size/auto → {"error":"Specify pixel_size or set au
 **Result (2026-09-04) ✅ PASS**
 resize_rows(pixel_size=50,auto_resize=True) both → {"error":"Specify only one of pixel_size or auto_resize"}
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S78: Resize rows — sheet not found returns error
@@ -895,6 +1194,9 @@ resize_rows(pixel_size=50,auto_resize=True) both → {"error":"Specify only one 
 
 **Result (2026-09-04) ✅ PASS**
 resize_rows(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -914,6 +1216,9 @@ resize_rows(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
 **Result (2026-09-04) ✅ PASS**
 resize_columns(start_column=1,pixel_size=200) → columnMetadata[1].pixelSize=200
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S80: Resize a range of columns ⚠️ destructive
@@ -930,6 +1235,9 @@ resize_columns(start_column=1,pixel_size=200) → columnMetadata[1].pixelSize=20
 
 **Result (2026-09-04) ✅ PASS**
 resize_columns(start_column=2,end_column=4,pixel_size=50) → columnMetadata[2,3,4] all pixelSize=50
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -950,6 +1258,9 @@ resize_columns(start_column=2,end_column=4,pixel_size=50) → columnMetadata[2,3
 **Result (2026-09-04) ✅ PASS**
 resize_columns(start_column=1,auto_resize=True) → succeeded, no error
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S82: Resize columns — neither pixel_size nor auto_resize given returns error
@@ -965,6 +1276,9 @@ resize_columns(start_column=1,auto_resize=True) → succeeded, no error
 
 **Result (2026-09-04) ✅ PASS**
 resize_columns(start_column=0) no size/auto → {"error":"Specify pixel_size or set auto_resize=True"}
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -982,6 +1296,9 @@ resize_columns(start_column=0) no size/auto → {"error":"Specify pixel_size or 
 **Result (2026-09-04) ✅ PASS**
 resize_columns(pixel_size=100,auto_resize=True) both → {"error":"Specify only one of pixel_size or auto_resize"}
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S84: Resize columns — sheet not found returns error
@@ -996,6 +1313,62 @@ resize_columns(pixel_size=100,auto_resize=True) both → {"error":"Specify only 
 
 **Result (2026-09-04) ✅ PASS**
 resize_columns(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S109: resize_rows / resize_columns — non-positive pixel_size returns error (unit test)
+
+**Checks (unit test)**
+- `resize_rows(spreadsheet_id, sheet, start_row=0, pixel_size=0)` → `{"error": "pixel_size must be positive, got 0"}`, no `batchUpdate` call
+- `resize_columns(spreadsheet_id, sheet, start_column=0, pixel_size=-5)` → `{"error": "pixel_size must be positive, got -5"}`, no `batchUpdate` call
+- Previously a non-positive `pixel_size` passed straight to `updateDimensionProperties`, which the Sheets API either silently clamped or rejected with an opaque 400 rather than a clear local error (issue #323)
+- Covered by `test_non_positive_pixel_size_returns_error_without_api_call` in `TestResizeRows`/`TestResizeColumns`
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S110: resize_rows / resize_columns — end index before start index returns error (unit test)
+
+**Checks (unit test)**
+- `resize_rows(spreadsheet_id, sheet, start_row=5, end_row=2, pixel_size=50)` → `{"error": "end_row (2) must be >= start_row (5)"}`, no `batchUpdate` call
+- `resize_columns(spreadsheet_id, sheet, start_column=5, end_column=2, pixel_size=80)` → `{"error": "end_column (2) must be >= start_column (5)"}`, no `batchUpdate` call
+- Covered by `test_end_row_before_start_row_returns_error_without_api_call` / `test_end_column_before_start_column_returns_error_without_api_call` in `TestResizeRows`/`TestResizeColumns`
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S111: resize_rows / resize_columns — sheet lookup now precedes pixel_size/auto_resize validation (unit test)
+
+**Checks (unit test)**
+- `resize_rows(spreadsheet_id, sheet="NoSuchSheet", start_row=0)` (no `pixel_size`/`auto_resize` given) → `{"error": "Sheet 'NoSuchSheet' not found"}`, **not** `{"error": "Specify pixel_size or set auto_resize=True"}`
+- `resize_columns(spreadsheet_id, sheet="NoSuchSheet", start_column=0)` → same shape
+- Previously the mutual-exclusivity check ran before the sheet lookup, so a bad sheet name paired with missing/conflicting resize params returned the params error first, masking the more fundamental problem — now matches `format_cells`' sheet-first ordering (issue #323)
+- Covered by `test_bad_sheet_name_reported_before_missing_params` in `TestResizeRows`/`TestResizeColumns`
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S117: resize_rows / resize_columns — negative start returns error (unit test)
+
+**Checks (unit test)**
+- `resize_rows(spreadsheet_id, sheet, start_row=-1, pixel_size=50)` → `{"error": "start_row must be non-negative, got -1"}`, no `batchUpdate` call
+- `resize_columns(spreadsheet_id, sheet, start_column=-1, pixel_size=80)` → `{"error": "start_column must be non-negative, got -1"}`, no `batchUpdate` call
+- Same underlying gap as TC-S112/S113/S115, extended to resize (PR #734 QA round 1, issue #323)
+- Covered by `test_negative_start_row_returns_error_without_api_call` / `test_negative_start_column_returns_error_without_api_call` in `TestResizeRows`/`TestResizeColumns`
+
+**Result (2026-09-12) ✅** — unit tests pass (155/155). Live-verified via `mcp-gee-sweet-kit` against the QA fixture spreadsheet (`Empty` sheet): `resize_rows(start_row=-1, pixel_size=50)` and `resize_columns(start_column=-1, pixel_size=80)` both returned the exact documented error with no `batchUpdate` call.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -1018,6 +1391,9 @@ resize_columns(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"
 **Result (2026-09-04) ✅ PASS**
 format_cells(A1:D1, bold=true, bg light blue) → replies:[{}], no error. Reset bold=false/bg white/align LEFT after
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S34: Apply number format to a column ⚠️ destructive
@@ -1036,6 +1412,9 @@ format_cells(A1:D1, bold=true, bg light blue) → replies:[{}], no error. Reset 
 **Result (2026-09-04) ✅ PASS**
 format_cells(B2:B100, CURRENCY $#,##0.00) → replies:[{}], no error. Reset to NUMBER "0" after
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S35: Set horizontal alignment ⚠️ destructive
@@ -1053,6 +1432,9 @@ format_cells(B2:B100, CURRENCY $#,##0.00) → replies:[{}], no error. Reset to N
 **Result (2026-09-04) ✅ PASS**
 format_cells(A1:F1, CENTER) → replies:[{}], no error. Reset to LEFT (header) after
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S36: No formatting params returns error
@@ -1066,6 +1448,9 @@ format_cells(A1:F1, CENTER) → replies:[{}], no error. Reset to LEFT (header) a
 **Result (2026-09-04) ✅ PASS**
 format_cells(A1:D1) no formatting params → {"error":"No formatting parameters provided"}
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S37: format_cells — sheet not found returns error
@@ -1077,6 +1462,78 @@ format_cells(A1:D1) no formatting params → {"error":"No formatting parameters 
 
 **Result (2026-09-04) ✅ PASS**
 format_cells(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S123: format_cells — invalid A1 notation range returns a clean error (issue #747, unit test)
+
+**Checks (unit test)**
+- `format_cells(spreadsheet_id, sheet="Sheet1", range="Sheet1!A1", bold=True)` → `{"error": "Invalid A1 notation: Sheet1!A1"}`, not an uncaught `ValueError`
+- No `batchUpdate` API call is made
+- Covered by `test_invalid_range_returns_error_without_api_call` in `TestFormatCells`
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Error text now repr-quotes the range; TC wording stale.
+
+---
+
+### TC-S131: format_cells — unbounded or trailing-newline range is rejected without formatting anything (PR #922) ⚠️ destructive
+
+**Background:** `_parse_a1_notation` used to accept a bare `:` (every group optional, so the regex matched with no bounds) and any range with a trailing newline (`$` matches before a final `\n`). For `format_cells`, `range=":"` produced a GridRange with only a `sheetId`, so `repeatCell` formatted the entire sheet. PR #922 switched to `re.fullmatch` and requires at least one row or column bound. Partial-bound forms (`A1:`, `A:`, `:B5`, `1:B`) are tracked separately in #926.
+
+Destructive because a regressed build formats the whole sheet. Never run it against a shared fixture; use the scratch spreadsheet from Setup.
+
+**Setup:** `create_spreadsheet(title="qa-tc-s131-scratch")`, then `update_cells(spreadsheet_id=<new id>, sheet="Sheet1", range="A1:E5", data=<5×5 of any text values>)`. Keep the ID; TC-S132 reuses this spreadsheet.
+
+**Prompt**
+> "Read `get_sheet_data(spreadsheet_id=<scratch id>, sheet=\"Sheet1\", range=\"A1:F8\", include_grid_data=True)`. Then call `format_cells(spreadsheet_id=<scratch id>, sheet=\"Sheet1\", range=\":\", bold=True)`, then `format_cells(..., range=\"A1\\n\", bold=True)` (a real trailing newline). Then read A1:F8 the same way again."
+
+**Checks**
+- `range=":"` → `{"error": "Invalid A1 notation: :"}`
+- `range="A1\n"` → `{"error": "Invalid A1 notation: A1\n"}`
+- The before and after A1:F8 reads are identical, with no bold cell (no `batchUpdate` reached the API)
+
+**Teardown:** none if TC-S132 runs next (it deletes the spreadsheet); otherwise `delete_file(file_id=<scratch id>)`.
+
+**Result (2026-10-06) ✅ PASS**
+Scratch spreadsheet with values in A1:E5, no formatting. Both calls returned the expected error. A grid-data read of A1:E5 (`include_grid_data=True`) taken before and after the two calls was byte-identical, with no bold cells. `format_cells` resolves the sheet ID before it parses the range, so a nonexistent spreadsheet ID would 404 at the sheet lookup for valid and invalid ranges alike; the unchanged grid is the live evidence that no write was sent. Tested in an isolated service-account sandbox on a Shared Drive.
+
+**Result (2026-10-08, PR #929 QA re-run) ✅ PASS**
+Fresh scratch spreadsheet (`create_spreadsheet`, then `update_cells` A1:E5 with `a1`…`e5`), via `mcp-gee-sweet-kit` running code that includes #922 (`6dd5e6a`). `range=":"` → `{"error":"Invalid A1 notation: :"}`; `range="A1\n"` → `{"error":"Invalid A1 notation: A1\n"}`. No `format_cells` call preceded these two, and `update_cells` writes values only, so the new sheet started with no bold; a grid-data read of A1:F8 (`include_grid_data=True`) afterward showed no bold cells. No separate "before" read was taken, so this rests on the fresh sheet's default formatting rather than a byte-identical before/after comparison.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S132: format_cells — bounded and open-ended ranges still format exactly their target (PR #922 regression) ⚠️ destructive
+
+**Setup:** TC-S131's scratch spreadsheet (values in A1:E5, no formatting). If TC-S131 didn't run, create one the same way. Data stops at row 5 and column E, so the A1:F8 read window shows whether an open-ended range extends past the data.
+
+**Prompt**
+> "For each of `A1`, `A1:B2`, `A:A`, `1:2`, `B2:D` in turn: call `format_cells(spreadsheet_id=<scratch id>, sheet=\"Sheet1\", range=<range>, bold=True)`, read `get_sheet_data(..., range=\"A1:F8\", include_grid_data=True)` and list the bold cells, then reset with `format_cells(..., range=\"A:Z\", bold=False)` (all 26 columns of a new sheet, so `1:2`'s bold past column F is cleared too)."
+
+**Checks**
+- `A1` → only A1 is bold
+- `A1:B2` → A1, B1, A2, B2 only
+- `A:A` → all of column A, including rows past the data
+- `1:2` → all of rows 1–2, including columns past the data
+- `B2:D` → columns B–D from row 2 down, including rows past the data
+- No cell outside the target is bold, and every call returns `replies: [{}]` with no error
+
+**Teardown:** `delete_file(file_id=<scratch id>)`.
+
+**Result (2026-10-06) ✅ PASS**
+Values in A1:E5, so a read window wider than the data shows whether open-ended forms extend past it. Read A1:E5 for `A1` and `A1:B2`, and A1:F8 for the rest. Bold cells after each call: `A1` → [A1]; `A1:B2` → [A1, B1, A2, B2]; `A:A` → [A1–A8]; `1:2` → [A1–F1, A2–F2]; `B2:D` → [B2–D8]. All calls returned `replies: [{}]`. Tested in an isolated service-account sandbox on a Shared Drive.
+
+**Result (2026-10-08, PR #929 QA re-run) ✅ PASS**
+Same scratch spreadsheet as TC-S131's re-run (values in A1:E5), read A1:F8 after every call, reset with `format_cells(range="A:F", bold=False)` between ranges. Bold cells: `A1` → [A1]; `A1:B2` → [A1, B1, A2, B2]; `A:A` → [A1–A8]; `1:2` → [A1–F1, A2–F2]; `B2:D` → [B2–D8]. Every call returned `replies: [{}]`. The `A:F` reset doesn't clear the bold `1:2` applied from column G onward, and the A1:F8 window can't see past column F, so "no cell outside the target is bold" was confirmed only within A1:F8 (the 2026-10-06 run used the same window). Scratch spreadsheet trashed after both test cases.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -1098,6 +1555,9 @@ format_cells(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
 **Result (2026-09-04) ✅ PASS**
 merge_cells(Empty!E1:G2, MERGE_ALL) → replies:[{}], no error (used Empty scratch region, not Sales)
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run on the Empty sheet to avoid destroying Sales data; TC prompt says Sales.
+
 ---
 
 ### TC-S39: Merge rows independently ⚠️ destructive
@@ -1113,6 +1573,9 @@ merge_cells(Empty!E1:G2, MERGE_ALL) → replies:[{}], no error (used Empty scrat
 
 **Result (2026-09-04) ✅ PASS**
 merge_cells(Empty!H1:J3, MERGE_ROWS) → replies:[{}], no error
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run on the Empty sheet to avoid destroying Sales data; TC prompt says Sales.
 
 ---
 
@@ -1131,6 +1594,9 @@ merge_cells(Empty!H1:J3, MERGE_ROWS) → replies:[{}], no error
 **Result (2026-09-04) ✅ PASS**
 unmerge_cells(Empty!E1:G2) → replies:[{}], no error
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run on the Empty sheet to avoid destroying Sales data; TC prompt says Sales.
+
 ---
 
 ### TC-S41: merge_cells — sheet not found returns error
@@ -1142,6 +1608,22 @@ unmerge_cells(Empty!E1:G2) → replies:[{}], no error
 
 **Result (2026-09-04) ✅ PASS**
 merge_cells(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S124: merge_cells / unmerge_cells — invalid A1 notation range returns a clean error (issue #747, unit test)
+
+**Checks (unit test)**
+- `merge_cells(spreadsheet_id, sheet="Sheet1", range="Sheet1!A1")` → `{"error": "Invalid A1 notation: Sheet1!A1"}`, not an uncaught `ValueError`
+- `unmerge_cells(spreadsheet_id, sheet="Sheet1", range="Sheet1!A1")` → same error shape
+- Neither call makes a `batchUpdate` API call
+- Covered by `test_invalid_range_returns_error_without_api_call` in `TestMergeCells` and `TestUnmergeCells`
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Error text now repr-quotes the range; TC wording stale.
 
 ---
 
@@ -1164,6 +1646,9 @@ merge_cells(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
 **Result (2026-09-04) ✅ PASS**
 update_borders(A1:D5, top/bottom/left/right SOLID black) → replies:[{}], no error
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S86: Apply dashed inner gridlines inside a range ⚠️ destructive
@@ -1182,6 +1667,9 @@ update_borders(A1:D5, top/bottom/left/right SOLID black) → replies:[{}], no er
 **Result (2026-09-04) ✅ PASS**
 update_borders(A1:C3, inner_horizontal/inner_vertical DASHED) → replies:[{}], no error
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S87: Clear an existing border edge with style NONE ⚠️ destructive
@@ -1199,6 +1687,9 @@ update_borders(A1:C3, inner_horizontal/inner_vertical DASHED) → replies:[{}], 
 **Result (2026-09-04) ✅ PASS**
 update_borders(A1:D5, right=NONE) → API-verified via grid data: column D cells show no "right" border key while top/bottom perimeter borders remain — only targeted edge cleared
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S88: update_borders — no border params returns error
@@ -1212,6 +1703,9 @@ update_borders(A1:D5, right=NONE) → API-verified via grid data: column D cells
 **Result (2026-09-04) ✅ PASS**
 update_borders(A1:D1, no edge params) → {"error":"No border parameters provided"}
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S89: update_borders — border spec missing style returns error
@@ -1223,6 +1717,9 @@ update_borders(A1:D1, no edge params) → {"error":"No border parameters provide
 
 **Result (2026-09-04) ✅ PASS**
 update_borders(top={"color":{"red":0}}) missing style → {"error":"Border spec for 'top' is missing required 'style' key"}
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -1236,6 +1733,9 @@ update_borders(top={"color":{"red":0}}) missing style → {"error":"Border spec 
 **Result (2026-09-04) ✅ PASS**
 update_borders(top={"style":"SQUIGGLY"}) → {"error":"Invalid border style 'SQUIGGLY' for 'top'. Must be one of: DOTTED, DASHED, SOLID, SOLID_MEDIUM, SOLID_THICK, DOUBLE, NONE"}
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S91: update_borders — sheet not found returns error
@@ -1248,6 +1748,9 @@ update_borders(top={"style":"SQUIGGLY"}) → {"error":"Invalid border style 'SQU
 **Result (2026-09-04) ✅ PASS**
 update_borders(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S92: update_borders — non-string style value returns error, does not crash
@@ -1259,6 +1762,35 @@ update_borders(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"
 
 **Result (2026-09-04) ✅ PASS**
 update_borders(top={"style":5}) non-string → {"error":"Border spec for 'top' has a non-string 'style' value"}, no crash
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S118: update_borders — cheap param validation now runs before the sheet lookup (unit test)
+
+**Checks (unit test)**
+- `update_borders(spreadsheet_id, sheet="NoSuchSheet", range="A1", top={"style": "SQUIGGLY"})` → `{"error": "Invalid border style 'SQUIGGLY' for 'top'. Must be one of: ..."}`, **not** `{"error": "Sheet 'NoSuchSheet' not found"}` — no `spreadsheets().get()` call is made at all
+- Previously `update_borders` resolved the sheet name (a network/cache round trip) before checking whether any border params were provided or validating `style`, unlike `add_chart`/`resize_rows`/`resize_columns` which validate cheap params first — a bad sheet name paired with an invalid style masked the more fundamental problem (issue #330)
+- Covered by `test_validation_runs_before_sheet_lookup` in `TestUpdateBorders`
+
+**Result (2026-09-13) ✅** — unit tests pass (158/158). Live-verified via `mcp-gee-sweet-kit` against the QA fixture spreadsheet: `update_borders(sheet="NoSuchSheet", range="A1", top={"style": "SQUIGGLY"})` returned `{"error": "Invalid border style 'SQUIGGLY' for 'top'. Must be one of: ..."}`, not the sheet-not-found error — confirming validation still runs before the sheet lookup after PR #738 round 2's dedup fix (`_enum_value_error` now takes an explicit `context` string rather than auto-quoting).
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S125: update_borders — invalid A1 notation range returns a clean error (issue #747, unit test)
+
+**Checks (unit test)**
+- `update_borders(spreadsheet_id, sheet="Sheet1", range="Sheet1!A1", top={"style": "SOLID"})` → `{"error": "Invalid A1 notation: Sheet1!A1"}`, not an uncaught `ValueError`
+- No `batchUpdate` API call is made
+- Covered by `test_invalid_range_returns_error_without_api_call` in `TestUpdateBorders`
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Error text now repr-quotes the range; TC wording stale.
 
 ---
 
@@ -1281,6 +1813,9 @@ update_borders(top={"style":5}) non-string → {"error":"Border spec for 'top' h
 **Result (2026-09-04) ✅ PASS**
 add_data_validation(Empty!A1:A5, ONE_OF_LIST, [Yes,No,Maybe]) → succeeded; get_data_validation read back all 5 cells with matching condition.type/values (API-verified, not Playwright per shard instructions)
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run on the Empty sheet; dropdown/checkbox rendering seen, values confirmed via API read-back.
+
 ---
 
 ### TC-S94: BOOLEAN with no values renders a plain checkbox ⚠️ destructive
@@ -1297,6 +1832,9 @@ add_data_validation(Empty!A1:A5, ONE_OF_LIST, [Yes,No,Maybe]) → succeeded; get
 **Result (2026-09-04) ✅ PASS**
 add_data_validation(Empty!B1:B5, BOOLEAN, no values) → succeeded; get_data_validation confirms condition.type=BOOLEAN, no "values" key on all 5 cells
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run on the Empty sheet; dropdown/checkbox rendering seen, values confirmed via API read-back.
+
 ---
 
 ### TC-S95: NUMBER_BETWEEN with strict=False shows a warning instead of rejecting
@@ -1310,6 +1848,9 @@ add_data_validation(Empty!B1:B5, BOOLEAN, no values) → succeeded; get_data_val
 
 **Result (2026-09-04) ✅ PASS**
 add_data_validation(Empty!C1:C5, NUMBER_BETWEEN, [1,10], strict=false) → succeeded, no error
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run on the Empty sheet; dropdown/checkbox rendering seen, values confirmed via API read-back.
 
 ---
 
@@ -1327,6 +1868,9 @@ add_data_validation(Empty!C1:C5, NUMBER_BETWEEN, [1,10], strict=false) → succe
 **Result (2026-09-04) ✅ PASS**
 get_data_validation(Empty!D1:D5, no rules) → []
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S97: add_data_validation — invalid condition_type returns error (unit test)
@@ -1338,6 +1882,9 @@ get_data_validation(Empty!D1:D5, no rules) → []
 **Result (2026-09-04) ✅ PASS**
 add_data_validation(condition_type="NOT_A_REAL_TYPE") → {"error":"Invalid condition_type ... Must be one of: ..."}
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S98: add_data_validation — sheet not found returns error (unit test)
@@ -1348,6 +1895,31 @@ add_data_validation(condition_type="NOT_A_REAL_TYPE") → {"error":"Invalid cond
 
 **Result (2026-09-04) ✅ PASS**
 add_data_validation(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S122: add_data_validation — values count/shape mismatch per condition_type returns a local error (unit test)
+
+**Background:** Issue #366 — before this, a mismatched `values` count reached the real Sheets API and got a clean 400 back (e.g. `NUMBER_BETWEEN` with 1 value: `"requires exactly two ConditionValues, but 1 value was supplied"`), which was already safe, just a round-trip later than necessary. Now caught locally via `_condition_value_count_error` before any API call, covering all five value-count shapes: zero-only (`DATE_IS_VALID`, `TEXT_IS_EMAIL`, `TEXT_IS_URL`; `BLANK`/`NOT_BLANK` were removed in PR #986 as unsupported by data validation, see TC-S134), zero-or-two (`BOOLEAN`), exactly-one (`NUMBER_GREATER`, `CUSTOM_FORMULA`, `ONE_OF_RANGE`, and the other single-value TEXT_*/DATE_*/NUMBER_* types), exactly-two (`NUMBER_BETWEEN`, `NUMBER_NOT_BETWEEN`, `DATE_BETWEEN`, `DATE_NOT_BETWEEN`), and at-least-one (`ONE_OF_LIST`).
+
+**Checks (unit test)**
+- `NUMBER_BETWEEN` with 1 value → `{"error": ...}`, before any API call (the issue's own example)
+- `BOOLEAN` accepts 0 or 2 values (a plain checkbox or custom checked/unchecked labels), rejects exactly 1
+- A zero-value type (`DATE_IS_VALID`) rejects any supplied value
+- `ONE_OF_LIST` rejects an empty/omitted `values`
+- Exactly-one types (`NUMBER_GREATER`, `CUSTOM_FORMULA`, `ONE_OF_RANGE`) reject 0 or 2 values
+- Exactly-two types (`NUMBER_BETWEEN`, `DATE_BETWEEN`) reject 1 or 3 values
+- Covered by `TestAddDataValidation::test_value_count_mismatch_returns_error_without_api_call`, `test_boolean_accepts_two_custom_label_values`, `test_boolean_rejects_exactly_one_value`, `test_zero_value_condition_type_rejects_a_value`, `test_one_of_list_requires_at_least_one_value`, `test_exactly_one_value_types_reject_zero_or_two`, `test_exactly_two_value_types_reject_one_or_three`
+
+**Result (2026-09-13) ✅ PASS (live spot-check)** — ran `add_data_validation(Empty!H1:H5, NUMBER_BETWEEN, ["5"])` (the issue's own example) against the fixture spreadsheet on the running server (not just the mocked unit tests): returned `{"error": "condition_type 'NUMBER_BETWEEN' requires exactly 2 value(s), got 1"}` with no sheet mutation, confirming the local check is wired up end-to-end.
+
+**Re-verified (2026-09-13) ✅ PASS** — after PR #750's KeyError-guard fix (commit 475e420): re-ran the same `NUMBER_BETWEEN` call against the reconnected server, still returns the clean local error with no regression.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -1369,6 +1941,9 @@ Deleted and recreated the `Empty` fixture sheet to clear the test rule.
 **Result (2026-09-04) ✅ PASS**
 add_data_validation(ONE_OF_RANGE, values=["Sales!A2:A5"], no leading =) → succeeded (auto-prepend fix confirmed live, no longer the TC-S99-documented HttpError); readback shows "=Sales!$A$2:$A$5"
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S100: `get_data_validation` on a nonexistent sheet raises raw, not a clean error ❌ code review finding
@@ -1385,6 +1960,9 @@ add_data_validation(ONE_OF_RANGE, values=["Sales!A2:A5"], no leading =) → succ
 
 **Result (2026-09-04) ✅ PASS**
 get_data_validation(sheet="NonexistentSheetXYZ") → clean {"error":"Sheet 'NonexistentSheetXYZ' not found"} — confirms the documented fix is live, no raw HttpError
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Error is nested as {"result":{"error":…}} (list-typed output schema); TC says {"error"}.
 
 ---
 
@@ -1407,6 +1985,9 @@ Clear the test rule from the range used.
 **Result (2026-09-04) ✅ PASS**
 Same as TC-S99 — re-confirms auto-prepend fix (duplicate coverage in test file)
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S102: `get_data_validation` on a nonexistent sheet returns a clean error (PR #361 review fix)
@@ -1423,6 +2004,90 @@ Same as TC-S99 — re-confirms auto-prepend fix (duplicate coverage in test file
 
 **Result (2026-09-04) ✅ PASS**
 Same as TC-S100 — re-confirms clean-error fix (duplicate coverage in test file)
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Error is nested as {"result":{"error":…}} (list-typed output schema); TC says {"error"}.
+
+---
+
+### TC-S126: add_data_validation — invalid A1 notation range returns a clean error (issue #747, unit test)
+
+**Checks (unit test)**
+- `add_data_validation(spreadsheet_id, sheet="Sheet1", range="Sheet1!A1", condition_type="DATE_IS_VALID")` → `{"error": "Invalid A1 notation: Sheet1!A1"}`, not an uncaught `ValueError`
+- No `batchUpdate` API call is made
+- Covered by `test_invalid_range_returns_error_without_api_call` in `TestAddDataValidation` — exercises the shared `_apply_data_validation` helper's `_grid_range` call
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Error text now repr-quotes the range; TC wording stale.
+
+---
+
+## `clear_data_validation`
+
+### TC-S119: clear_data_validation removes an existing rule ⚠️ destructive
+
+**Background:** Issue #365 — before this tool, the only way to remove a data
+validation rule was `delete_sheet` + `create_sheet` on the whole sheet.
+`clear_data_validation` calls `setDataValidation` with no `rule`, which the
+Sheets API documents as clearing any existing rule on the range.
+
+**Prompt (direct tool call)**
+> 1. `add_data_validation(spreadsheet_id=<fixture>, sheet="Empty", range="E1:E5", condition_type="ONE_OF_LIST", values=["Yes","No","Maybe"])`
+> 2. `clear_data_validation(spreadsheet_id=<fixture>, sheet="Empty", range="E1:E5")`
+> 3. `get_data_validation(spreadsheet_id=<fixture>, sheet="Empty", range="E1:E5")`
+
+**Checks**
+- Step 1 succeeds (sets up the rule to clear)
+- Step 2 returns no error
+- Step 3 (`get_data_validation`) returns `[]` — the rule set in step 1 is gone
+
+**Result (2026-09-13) ✅ PASS**
+Ran live against the fixture spreadsheet. `add_data_validation` set the ONE_OF_LIST rule on E1:E5 with no error; `clear_data_validation` returned no error; `get_data_validation` on E1:E5 returned `[]` afterward — confirms the tool's core premise (`setDataValidation` with `rule` omitted actually clears an existing rule against the real Sheets API, not just in the mocked unit tests).
+
+**Re-verified (2026-09-13) ✅ PASS** — after PR #745's `_apply_data_validation` dedup refactor (commit 931363a): re-ran the same set/clear/confirm sequence on G1:G5 directly against the reconnected server. `add_data_validation` still sets the rule correctly, `clear_data_validation` still clears it (`get_data_validation` → `[]` afterward) — no behavior change from the extraction.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S120: clear_data_validation on a range with no existing rule is a no-op
+
+**Prompt (direct tool call)**
+> `clear_data_validation(spreadsheet_id=<fixture>, sheet="Empty", range="F1:F5")` — a range that has never had a validation rule set.
+
+**Checks**
+- Returns no error (clearing an already-clear range is not itself an error condition)
+- `get_data_validation(spreadsheet_id=<fixture>, sheet="Empty", range="F1:F5")` still returns `[]` afterward
+
+**Result (2026-09-13) ✅ PASS**
+Confirmed F1:F5 had no rule beforehand (`get_data_validation` → `[]`), then `clear_data_validation` returned no error, then `get_data_validation` still returned `[]`.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S121: clear_data_validation — sheet not found returns error (unit test)
+
+**Checks (unit test)**
+- Sheet name not in spreadsheet → `{"error": "Sheet 'X' not found"}`, before any API call
+- Covered by `TestClearDataValidation::test_returns_error_when_sheet_not_found`
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S127: clear_data_validation — invalid A1 notation range returns a clean error (issue #747, unit test)
+
+**Checks (unit test)**
+- `clear_data_validation(spreadsheet_id, sheet="Sheet1", range="Sheet1!A1")` → `{"error": "Invalid A1 notation: Sheet1!A1"}`, not an uncaught `ValueError`
+- No `batchUpdate` API call is made
+- Covered by `test_invalid_range_returns_error_without_api_call` in `TestClearDataValidation` — exercises the same shared `_apply_data_validation` helper as TC-S126
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Error text now repr-quotes the range; TC wording stale.
 
 ---
 
@@ -1444,6 +2109,9 @@ Same as TC-S100 — re-confirms clean-error fix (duplicate coverage in test file
 **Result (2026-09-04) ✅ PASS**
 freeze(rows=1) → replies:[{}], no error
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S43: Freeze first row and first column ⚠️ destructive
@@ -1460,6 +2128,9 @@ freeze(rows=1) → replies:[{}], no error
 **Result (2026-09-04) ✅ PASS**
 freeze(rows=1,columns=1) → replies:[{}], no error
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S44: Unfreeze all (rows=0, columns=0) ⚠️ destructive
@@ -1475,6 +2146,9 @@ freeze(rows=1,columns=1) → replies:[{}], no error
 **Result (2026-09-04) ✅ PASS**
 freeze(rows=0,columns=0) → replies:[{}], no error (also serves as unfreeze teardown)
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S45: freeze — sheet not found returns error
@@ -1486,6 +2160,9 @@ freeze(rows=0,columns=0) → replies:[{}], no error (also serves as unfreeze tea
 
 **Result (2026-09-04) ✅ PASS**
 freeze(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -1508,6 +2185,9 @@ freeze(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
 **Result (2026-09-04) ✅ PASS**
 update_sheet_properties(tab_color red) → replies:[{}], no error
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S57b: Clear tab color with `{}` ⚠️ destructive
@@ -1526,6 +2206,9 @@ update_sheet_properties(tab_color red) → replies:[{}], no error
 
 **Result (2026-09-04) ✅ PASS**
 update_sheet_properties(tab_color={}) → replies:[{}], no error (clears via tabColorStyle per known fix)
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -1546,6 +2229,9 @@ update_sheet_properties(tab_color={}) → replies:[{}], no error (clears via tab
 **Result (2026-09-04) ✅ PASS**
 update_sheet_properties(show_gridlines=false) → replies:[{}], no error
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S59: Set right-to-left layout ⚠️ destructive
@@ -1565,6 +2251,9 @@ update_sheet_properties(show_gridlines=false) → replies:[{}], no error
 **Result (2026-09-04) ✅ PASS**
 update_sheet_properties(right_to_left=true) → replies:[{}], no error
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S60: Combine tab color, gridlines, and right-to-left in one call ⚠️ destructive
@@ -1583,6 +2272,9 @@ update_sheet_properties(right_to_left=true) → replies:[{}], no error
 **Result (2026-09-04) ✅ PASS**
 update_sheet_properties(tab_color=blue, show_gridlines=true, right_to_left=false) single call → replies:[{}], no error
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S61: No properties provided returns error
@@ -1596,6 +2288,9 @@ update_sheet_properties(tab_color=blue, show_gridlines=true, right_to_left=false
 **Result (2026-09-04) ✅ PASS**
 update_sheet_properties(no properties) → {"error":"No properties provided to update"}
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S62: update_sheet_properties — sheet not found returns error
@@ -1608,6 +2303,9 @@ update_sheet_properties(no properties) → {"error":"No properties provided to u
 
 **Result (2026-09-04) ✅ PASS**
 update_sheet_properties(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -1628,6 +2326,9 @@ update_sheet_properties(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' n
 **Result (2026-09-04) ✅ PASS**
 sort_range(A2:D50, col0 ASCENDING) → Donut/Gadget/Gizmo/Totals/Widget alphabetical order
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S47: Sort descending by a non-first column ⚠️ destructive
@@ -1643,6 +2344,9 @@ sort_range(A2:D50, col0 ASCENDING) → Donut/Gadget/Gizmo/Totals/Widget alphabet
 
 **Result (2026-09-04) ✅ PASS**
 sort_range(A2:D50, col2 DESCENDING) → sorted by Q2 descending. FINDING (not a tool bug — genuine Sheets sort semantics): "Totals" row's SUM formulas (referencing B2:B5 etc., a range within the sorted block) turned into #REF! after the sort moved the formula row relative to its own reference range. Reproducible, expected Google Sheets behavior when sorting a range containing formulas that reference other rows inside that same range — same as a human doing Data>Sort would see. Worth a QA test-design note (exclude formula/footer rows from sort_range test ranges) but not a product defect
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -1662,6 +2366,9 @@ sort_range(A2:D50, col2 DESCENDING) → sorted by Q2 descending. FINDING (not a 
 **Result (2026-09-04) ✅ PASS**
 sort_range(A2:D50, col0 ASC + col2 DESC) → two sort specs applied correctly, primary key (Product) sorted ascending: Donut/Gadget/Gizmo/Totals/Widget
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S49: column_index offset by range start column
@@ -1674,6 +2381,9 @@ sort_range(A2:D50, col0 ASC + col2 DESC) → two sort specs applied correctly, p
 **Result (2026-09-04) ✅ PASS**
 column_index offset logic implicitly exercised/correct via TC-S46-48 (dimensionIndex correctly targeted col0/col2 within A-start range); no separate live call needed for this unit-level check
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
 ---
 
 ### TC-S50: sort_range — sheet not found returns error
@@ -1685,6 +2395,9 @@ column_index offset logic implicitly exercised/correct via TC-S46-48 (dimensionI
 
 **Result (2026-09-04) ✅ PASS**
 sort_range(sheet="NoSuchSheet") → {"error":"Sheet 'NoSuchSheet' not found"}
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
 ---
 
@@ -1719,3 +2432,150 @@ Matches `update_borders`'s validation depth (missing-key + isinstance + enum-mem
 **Result (2026-09-04) ✅ PASS**
 All 5 live sub-cases match PR #452 round-2 fix exactly: non-string order → clean error; missing column_index → clean error; non-int column_index (string "0") → clean error; bool column_index → clean error (not silently accepted as int); invalid order enum "banana" → clean error naming valid values. No batchUpdate/data mutation in any case (confirmed via post-check read)
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S128: sort_range — invalid A1 notation range returns a clean error (issue #747, unit test)
+
+**Checks (unit test)**
+- `sort_range(spreadsheet_id, sheet="Sheet1", range="Sheet1!A1")` → `{"error": "Invalid A1 notation: Sheet1!A1"}`, not an uncaught `ValueError`
+- No `batchUpdate` API call is made
+- Covered by `test_invalid_range_returns_error_without_api_call` in `TestSortRange`
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Error text now repr-quotes the range; TC wording stale.
+
+---
+
+### TC-S129: `_parse_a1_notation` rejects semantically-invalid ranges — row 0, and end-before-start ordering (issue #747 QA round 1, unit test)
+
+**Background:** TC-S123–TC-S128 and TC-W40 cover *syntactically* malformed A1 notation (e.g. `Sheet1!A1`). QA round 1 on PR #756 found `_parse_a1_notation` also accepted *syntactically*-valid-but-*semantically*-invalid strings without raising: a row of `0` (regex-matched by the bare `\d+`, but not a valid 1-based A1 row) silently computed `startRowIndex = -1`, and an inverted range like `A5:A2` produced `endRowIndex < startRowIndex` — both bypassed the try/except this PR added at every call site and would still surface as a raw Sheets API `HttpError`, the exact failure class #747 is about, just for different malformed inputs. Fixed directly in `_parse_a1_notation` (not per call site) — it now raises `ValueError` for a row below 1, or an end bound at or before its start bound, so the fix flows through the try/except infrastructure already in place everywhere.
+
+**Checks (unit test)**
+- `_parse_a1_notation("A0")` → raises `ValueError` (row 0)
+- `_parse_a1_notation("A1:A0")` → raises `ValueError` (end row 0)
+- `_parse_a1_notation("A5:A2")` → raises `ValueError` (inverted row range)
+- `_parse_a1_notation("A5:A4")` → raises `ValueError` (zero-width row range — generalized beyond the reported inverted case, since both represent "no valid rows selected")
+- `_parse_a1_notation("C1:A1")` → raises `ValueError` (inverted column range)
+- `_parse_a1_notation("B1:A1")` → raises `ValueError` (zero-width column range)
+- Every existing valid-input test in `TestParseA1Notation` still passes unchanged (no false positives on well-formed ranges, open-ended ranges, or bare column/row forms)
+- Covered by `test_row_zero_raises`, `test_end_row_zero_raises`, `test_inverted_row_range_raises`, `test_zero_width_row_range_raises`, `test_inverted_column_range_raises`, `test_zero_width_column_range_raises` in `TestParseA1Notation` (`tests/sheets/test_helpers.py`)
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S130: A1-notation error handling factored into a shared `_or_error` helper, not duplicated per call site (issue #747 QA round 1, unit test)
+
+**Background:** QA round 1 also found the `try: ... except ValueError as e: return {"error": str(e)}` block this PR added was identically duplicated at 8 call sites (2 in `data.py`, 6 in `structure.py`), instead of factored into a shared helper matching this codebase's established error-or-None convention (`_enum_value_error`, `_positive_value_error`, `_non_negative_value_error`, `_resolve_end_index_or_error`). Fixed via `_parse_a1_notation_or_error` (`helpers.py`) and `_grid_range_or_error` (`structure.py`), each returning `(error, None)` on failure or `(None, result)` on success — every call site (`add_data_validation`/`clear_data_validation` via `_apply_data_validation`, `format_cells`, `update_borders`, `merge_cells`, `unmerge_cells`, `sort_range`, `add_chart`, and both `update_cells` sites) now calls the shared helper instead of wrapping the raw `_parse_a1_notation`/`_grid_range` itself — including `add_chart`, which had its own pre-existing inline try/except predating this PR.
+
+Separately, `update_cells`'s two `_parse_a1_notation` call sites (mixed-cell branch and rich-text branch) were consolidated into one: both branches key off the same `range` string, and `rich_text_cells` being non-empty is exactly the condition under which either branch needs the parse, so it's now done once, up front, and reused — closing the "unreachable in practice" redundancy QA round 1 flagged as not blocking on its own (TC-W40's own description was updated to match).
+
+**Checks (unit test)**
+- No `try`/`except ValueError` remains anywhere in `data.py` or `structure.py` outside `_parse_a1_notation_or_error`/`_grid_range_or_error` themselves
+- All TC-S123–TC-S130/TC-W40 error-path unit tests still pass through the shared helpers
+- `uv run python -m pytest tests/sheets/` passes in full
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+
+---
+
+### TC-S133: GridRange tools reject an out-of-bounds or malformed range before any API call (issue #955)
+
+**Background:** `_parse_a1_notation` had no upper limit on column letters or row numbers, so `ZZZZZZZZ1` or `A99999999999` reached the Sheets API and came back as a raw `HttpError`, and a row string over 4300 digits made `int()` raise without the `Invalid A1 notation` prefix. Separately, `sort_range`, `merge_cells`, `unmerge_cells`, `format_cells`, `update_borders`, `add_data_validation` and `clear_data_validation` resolved the sheet ID, which is an API call on a cold cache, before parsing the range. #955 rejects columns past `ZZZ` and rows past 10,000,000 (Sheets' grid limits) locally, and parses the range before the sheet lookup. The nonexistent spreadsheet ID and sheet name below prove the ordering: a build that looks up the sheet first returns a 404 or `Sheet 'NoSuchSheet' not found`, not the A1 error.
+
+**Fixture:** none. `spreadsheet_id="tc-s133-no-such-spreadsheet"`, `sheet="NoSuchSheet"`.
+
+**Prompt**
+> "Call each of these with `spreadsheet_id=\"tc-s133-no-such-spreadsheet\"` and `sheet=\"NoSuchSheet\"`, and report each raw result:
+> 1. `sort_range(range=\"ZZZZZZZZ1\")`
+> 2. `merge_cells(range=\"A99999999999\")`
+> 3. `unmerge_cells(range=\"A1:AAAA2\")`
+> 4. `format_cells(range=\"A:5\", bold=True)`
+> 5. `update_borders(range=\"A:B5\", top={\"style\": \"SOLID\"})`
+> 6. `add_data_validation(range=\"\\u212a1\", condition_type=\"DATE_IS_VALID\")` (the Kelvin sign U+212A, then `1`)
+> 7. `clear_data_validation(range=\"A10000001\")`
+> 8. `sort_range(range=\"ZZZ10000000\")`"
+
+**Checks**
+- 1 → `{"error": "Invalid A1 notation: column is beyond ZZZ: 'ZZZZZZZZ1'"}`
+- 2 → `{"error": "Invalid A1 notation: row is beyond 10,000,000: 'A99999999999'"}`
+- 3 → `{"error": "Invalid A1 notation: column is beyond ZZZ: 'A1:AAAA2'"}`
+- 4 → `{"error": "Invalid A1 notation: 'A:5'"}`
+- 5 → `{"error": "Invalid A1 notation: 'A:B5'"}`
+- 6 → `{"error": "Invalid A1 notation: 'K1'"}` (the error repr shows the Kelvin sign, not an ASCII `K`)
+- 7 → `{"error": "Invalid A1 notation: row is beyond 10,000,000: 'A10000001'"}`
+- 8 (control: the largest valid cell) → **not** an `Invalid A1 notation` error. It reaches the sheet lookup, so it fails on the fake spreadsheet ID instead (an `HttpError` 404 or a `Sheet ... not found` error)
+- None of calls 1–7 returns a 404 or a `Sheet 'NoSuchSheet' not found` error
+
+**Unit coverage:** `TestGridRangeToolsRejectMalformedRange` (`tests/sheets/test_structure.py`) runs every malformed case against all seven tools and asserts neither `spreadsheets().get()` nor `batchUpdate()` is called. `test_column_beyond_zzz_raises`, `test_row_beyond_limit_raises`, `test_row_over_int_digit_limit_keeps_prefix` and `test_last_column_and_row_accepted` in `TestParseA1Notation` (`tests/sheets/test_helpers.py`) cover the bounds.
+
+**Result (2026-10-11, PR #986 round 1, `6d180ec`) ✅ PASS.** Live via `mcp-gee-sweet-sky` after `/mcp reconnect`:
+- 1 → `{"error":"Invalid A1 notation: column is beyond ZZZ: 'ZZZZZZZZ1'"}`
+- 2 → `{"error":"Invalid A1 notation: row is beyond 10,000,000: 'A99999999999'"}`
+- 3 → `{"error":"Invalid A1 notation: column is beyond ZZZ: 'A1:AAAA2'"}`
+- 4 → `{"error":"Invalid A1 notation: 'A:5'"}`
+- 5 → `{"error":"Invalid A1 notation: 'A:B5'"}`
+- 6 → twice returned the `HttpError 404` from the sheet lookup. The Kelvin sign didn't survive the agent's own tool-call input: the call went out as ASCII `K1`, a valid cell. A fresh interpreter on this PR's code confirms `_parse_a1_notation("K1")` raises `Invalid A1 notation: 'K1'` while ASCII `K1` parses (and `"ﬀ1"` raises). When an agent drives this case, verify step 6 that way, not through the tool call.
+- 7 → `{"error":"Invalid A1 notation: row is beyond 10,000,000: 'A10000001'"}`
+- 8 (control) → `HttpError 404` from the sheet lookup, as expected
+- None of calls 1–5 or 7 returned a 404 or `Sheet ... not found` error.
+
+**#953 checks (folded into #955's pass), same round.**
+- **Bogus-ID preflight:** `format_cells(range="A1")` → `HttpError 404` (control). `A1:`, `1:B`, `ß1`, `A١` → `{"error":"Invalid A1 notation: '<range>'"}` each, no 404.
+- **No write on a real sheet** (temporary `sky-pr986-scratch` tab in `mcp-gee-sweet-qa-fixtures`, seeded A1:B6 with unsorted values, deleted afterward): `sort_range(range="A1:")` and `merge_cells(range="5:")` each returned the A1 error; a grid-data read afterward showed the original order and no merges.
+- **`format_cells` regression** (bold applied, bold cells read back with a fresh interpreter, reset between ranges, 1000×26 grid): `A1` → A1 only; `A1:B2` → rows 1–2, cols A–B (4); `A:A` → rows 1–1000, col A; `1:2` → rows 1–2, cols A–Z; `B2:D` → rows 2–1000, cols B–D; `B2:5` → rows 2–5, cols B–Z; `b2:d3` → rows 2–3, cols B–D (6). All exact.
+- **API contract:** `get_sheet_data(range="A:B5")` is accepted by the Sheets values API, which reads it as `A5:B` (returned rows 5–6 of the seeded A:B data). The GridRange tools' rejection of `A:B5` is therefore stricter than Sheets; filed as #987.
+
+**Result (2026-10-11, PR #986 round 2, `da34415`) ✅ PASS (sent back for the BLANK/NOT_BLANK finding below).** Live via `mcp-gee-sweet-sky` after `/mcp reconnect`, verifying fix commit `da34415` (`_resolve_grid_range`):
+- TC-S133 calls 1–5, 7 → same `Invalid A1 notation` errors as round 1; `add_data_validation(range="A1:")` → `Invalid A1 notation: 'A1:'`; call 8 (control) → `HttpError 404` from the sheet lookup.
+- **sheetId lands on the named tab, not sheet 0:** on a temporary non-first tab (`sky-pr986-r2`, index 3, deleted afterward), `format_cells("B1:C2", bold)`, `merge_cells("E1:F2")`, `add_data_validation("H1:H3", ONE_OF_LIST)` and `update_borders("J1:J2", top SOLID)` each landed exactly there, and the `Sales` tab (sheet 0) showed no bold, merges, borders or validation. `unmerge_cells("E1:F2")` removed the merge; `clear_data_validation("H1:H2")` left only H3.
+- **`sort_range`'s rebuilt sort specs:** `sort_range("B1:C4", [{"column_index": 1, "order": "DESCENDING"}])` sorted by column C (`dimensionIndex` = start column B + 1), giving c/4, a/3, d/2, b/1.
+- Side note (pre-existing, sent back to the Dev in round 2): `add_data_validation` with `condition_type="BLANK"` or `"NOT_BLANK"` reaches the API and fails with `HttpError 400 … ConditionType 'NOT_BLANK' is not supported in data validation`. TC-S133 step 6 still works because the range is rejected before the request is built.
+
+**Result (2026-10-11, PR #986 round 3, `44f9360`) ✅ PASS.** Live via `mcp-gee-sweet-sky` after `/mcp reconnect`:
+- 1–5, 7 → the same `Invalid A1 notation` errors as round 1, word for word.
+- 6 (now `DATE_IS_VALID`): the Kelvin sign again can't be sent through an agent's tool call, so it was checked in a fresh interpreter: `_parse_a1_notation("K1")` raises `Invalid A1 notation: 'K1'`. Live, `add_data_validation(range="A1:", condition_type="DATE_IS_VALID")` → `{"error":"Invalid A1 notation: 'A1:'"}`, so the new condition type passes the enum check and the range is still rejected before the sheet lookup.
+- 8 (control) → `HttpError 404` from the sheet lookup.
+- None of calls 1–5 or 7 returned a 404 or `Sheet ... not found` error.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+---
+
+### TC-S134: add_data_validation rejects condition types data validation doesn't support, before any API call (PR #986 QA round 2)
+
+**Background:** `add_data_validation` accepted `BLANK`, `NOT_BLANK`, `TEXT_STARTS_WITH` and `TEXT_ENDS_WITH`, but the Sheets API supports these only for conditional formatting and filters (each one's `BooleanCondition.type` enum description in the discovery doc omits data validation). Every call came back as `HttpError 400 … ConditionType '<type>' is not supported in data validation`. A fresh-interpreter probe of `setDataValidation` confirmed all four are rejected and `ONE_OF_LIST` is accepted. All four are now removed from `_VALID_CONDITION_TYPES` and `_CONDITION_SPECS`, so `_enum_value_error` rejects them locally. The nonexistent spreadsheet ID below shows the rejection is local: a build that still accepts them fails at the sheet lookup with a 404.
+
+**Fixture:** none. `spreadsheet_id="tc-s134-no-such-spreadsheet"`, `sheet="NoSuchSheet"`, `range="A1"`.
+
+**Prompt**
+> "Call `add_data_validation(spreadsheet_id=\"tc-s134-no-such-spreadsheet\", sheet=\"NoSuchSheet\", range=\"A1\", condition_type=<type>)` for each `<type>` below, with `values=[\"ab\"]` for the two TEXT_ types and no `values` for the others, and report each raw result:
+> 1. `BLANK`
+> 2. `NOT_BLANK`
+> 3. `TEXT_STARTS_WITH`
+> 4. `TEXT_ENDS_WITH`
+> 5. `DATE_IS_VALID` (control)"
+
+**Checks**
+- 1–4 → `{"error": "Invalid condition_type '<type>'. Must be one of: …"}`, and the listed valid types don't include any of the four
+- 5 (control: a supported zero-value type) → **not** an `Invalid condition_type` error. It reaches the sheet lookup and fails on the fake spreadsheet ID (an `HttpError` 404 or a `Sheet ... not found` error)
+- None of calls 1–4 returns a 404 or a `Sheet ... not found` error
+- The `add_data_validation` tool description served by the MCP server (its `condition_type` list) no longer names any of the four types
+
+**Unit coverage:** `TestAddDataValidation::test_condition_type_unsupported_by_data_validation_rejected_locally` (`tests/sheets/test_structure.py`) asserts the local error and that neither `spreadsheets().get()` nor `batchUpdate()` is called.
+
+**Result (2026-10-11, PR #986 round 3, `44f9360`) ✅ PASS.** Live via `mcp-gee-sweet-sky` after `/mcp reconnect`:
+- 1 `BLANK`, 2 `NOT_BLANK`, 3 `TEXT_STARTS_WITH` (`values=["ab"]`), 4 `TEXT_ENDS_WITH` (`values=["ab"]`) → `{"error":"Invalid condition_type '<type>'. Must be one of: BOOLEAN, TEXT_CONTAINS, TEXT_NOT_CONTAINS, TEXT_EQ, TEXT_IS_EMAIL, TEXT_IS_URL, DATE_EQ, … ONE_OF_RANGE, ONE_OF_LIST, CUSTOM_FORMULA"}` each. The valid-type list names none of the four.
+- 5 `DATE_IS_VALID` (control) → `HttpError 404` from the sheet lookup on the fake ID.
+- None of calls 1–4 returned a 404.
+- The served `add_data_validation` description (re-fetched after the reconnect) lists `DATE_IS_VALID`, `TEXT_CONTAINS`/`TEXT_NOT_CONTAINS`/`TEXT_EQ`, `TEXT_IS_EMAIL`/`TEXT_IS_URL` and the rest, and none of the four removed types.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.

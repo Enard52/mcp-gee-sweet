@@ -5,15 +5,18 @@ Cut a stable release: merge `develop` → `main`, tag, publish to PyPI via a Git
 1. **Determine the version.** Check `docs/roadmap.md`'s Release Cadence table for the target version, and confirm it against the last tag (`git tag --sort=-creatordate | head -1`) so the bump direction (patch/minor/major) makes sense. Confirm the exact version string with the user before proceeding if there's any ambiguity.
 2. **Bump the MCP registry manifest (`server.json`) to the new version, before merging to `main`.** `pyproject.toml`'s version is dynamic (`uv-dynamic-versioning`, derived from the git tag) and needs no manual edit — `server.json` is the one file in this repo that does.
    - Branch off `develop` (e.g. `chore/release/server-json-vX.Y.Z`). Set both `version` (top-level) and `packages[].version` in `server.json` to the exact version string from step 1 — they must match each other (`tests/test_server_json.py::test_pypi_package_version_matches_top_level_version` enforces this).
-   - Open a PR, wait for "Lint and test" to pass, merge with `gh pr merge <number> --admin --squash` — `develop` requires 1 approving review a solo maintainer can't get natively, same reason step 3 below uses `--admin` for the `main` merge.
+   - Open a PR, wait for every `Lint and test (Python 3.x)` check to pass, merge with `gh pr merge <number> --admin --squash` — `develop` requires 1 approving review a solo maintainer can't get natively, same reason step 3 below uses `--admin` for the `main` merge.
    - `git checkout develop && git pull` so the local checkout has the bump before continuing.
    - This lands *before* the develop→main PR (step 3) so the version bump ships in the same release rather than trailing it.
 3. **Merge `develop` → `main`.**
    - Check for an existing PR first (`gh pr list --base main --head develop`); open one if it doesn't exist (`gh pr create --base main --head develop --title "Release vX.Y.Z" --body ...`).
-   - Wait for the "Lint and test" check to pass — do not merge on a failing or pending check.
+   - Wait for every `Lint and test (Python 3.x)` check (one per Python version in `ci.yml`'s matrix) to pass — do not merge on a failing, pending, or missing one.
    - Merge with `gh pr merge <number> --admin --merge` — a real merge commit, **not** `--squash`. This repo's existing `main` history is a chain of "Merge pull request #NNN from khuisman/develop" merge commits (see `git log origin/main`), not squashed releases; squashing here would collapse that convention. `--admin` is required the same way it is in `/merge-pr`: `main` requires 1 approving review that will never come from a solo maintainer, and `enforce_admins` is `false` specifically so this bypass is allowed — it must never be used to skip the "Lint and test" check itself.
 4. **Tag the merge commit.**
    - `git fetch origin main`
+   - **Check that every README image URL is absolute, before tagging.** `README.md` becomes the PyPI project page, which doesn't resolve repo-relative image paths the way GitHub does. A relative `src` renders as a broken image there, and a published release's README can't be changed afterward (#706; v0.9.1 shipped with the same broken logo). Run:
+     `git show origin/main:README.md | python3 -c 'import re,sys; d=sys.stdin.read(); s=[a or b for a,b in re.findall(r"<img[^>]*\ssrc=\"([^\"]+)\"|!\[[^\]]*\]\(([^)\s]+)", d)]; bad=[x for x in s if not x.startswith("https://")]; print("images:", s); sys.exit("not absolute: %s" % bad if bad else 0)'`
+     It must exit 0. On a nonzero exit, stop: don't tag. Report the listed URLs to the user, since fixing them takes a PR to `develop` and a new `develop` → `main` merge.
    - `git tag vX.Y.Z origin/main`
    - `git push origin vX.Y.Z`
 5. **Create the GitHub Release from that tag** — `gh release create vX.Y.Z --title vX.Y.Z --generate-notes` (target `main`). This is what fires `.github/workflows/release.yml`'s `pypi-publish` job.

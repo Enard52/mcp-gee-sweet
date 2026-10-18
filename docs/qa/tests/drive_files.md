@@ -20,6 +20,9 @@ Fixtures: see [`docs/qa/setup.md`](../setup.md). Substitute your `{SPREADSHEET_I
 **Result (2026-09-04) ❌ FAIL**
 Spreadsheet 'QA-Create-Test' created, appears in list_spreadsheets(default) immediately (cache mark_dirty OK). BUT create_spreadsheet response = `{spreadsheetId,title,folder}` — no web link field. Check "Response includes ... a web link" not met. Minor response-shape gap (web_link retrievable via get_file_metadata). Ticket candidate: tool response vs TC.
 
+**Result (2026-10-17) ❌ FAIL — v0.9.2 release pass**
+create_spreadsheet response has no web link ({spreadsheetId,title,folder}); deterministic over 7 calls. Known: #693 (enhancement, v0.9.3).
+
 ---
 
 ### TC-D02: Create with explicit folder ID ⚠️ requires-oauth
@@ -32,6 +35,9 @@ Spreadsheet 'QA-Create-Test' created, appears in list_spreadsheets(default) imme
 
 **Result (2026-09-04) ✅ PASS**
 Created 'QA-Create-Explicit' in FOLDER_ID; response `folder`=FOLDER_ID; appears in list_files/list_spreadsheets for that folder.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
 
 ---
 
@@ -49,6 +55,9 @@ Created 'QA-Create-Explicit' in FOLDER_ID; response `folder`=FOLDER_ID; appears 
 **Result (2026-09-04) ✅ PASS**
 Created 'QA-Create-Root' with no folder; get_file_metadata parents=["0APfXAGTeZYz3Uk9PVA"] = DRIVE_FOLDER_ID (Shared Drive root), not personal My-Drive. 🔍 unset-deployment path not testable (#680).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
 ---
 
 ### TC-D04: Service account Drive limitation
@@ -61,11 +70,14 @@ Created 'QA-Create-Root' with no folder; get_file_metadata parents=["0APfXAGTeZY
 **Setup:** `{PERSONAL_DRIVE_FOLDER_ID}` = a folder in the OAuth user's personal My Drive that the service account has no write quota for (e.g. the pre-Shared-Drive `TEST_FOLDER_ID`, or any personal-Drive folder shared to the SA). If no such folder is available this run, record SKIP(environmental) — the unit-level equivalent (`tests/drive/test_files.py::TestQuotaErrors`) still covers the error path.
 
 **Checks**
-- Call returns `{"error": ...}` containing `_SA_QUOTA_ERROR` text: "Service accounts cannot create or copy files in personal Drive (no storage quota)…"
+- Call returns `{"error": ...}` containing `_SA_QUOTA_ERROR` text: "This service account has no My Drive storage, so it can create files only in a Shared Drive…"
 - Run the same prompt with **no** folder (default → `DRIVE_FOLDER_ID` Shared Drive) and confirm it now **succeeds** for the SA — trash the result
 
 **Result (2026-09-04) ⏭️ SKIP**
 needs SA prefix + personal-Drive folder; Aziz to run. On OAuth (sky), no personal-Drive folder the SA lacks quota for is available. Unit test TestQuotaErrors covers error path.
+
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+Environmental: needs the SA identity plus a personal-Drive folder / a Content-manager SA.
 
 ---
 
@@ -80,6 +92,9 @@ needs SA prefix + personal-Drive folder; Aziz to run. On OAuth (sky), no persona
 **Result (2026-09-04) ✅ PASS**
 Created 'QA-Cache-Check' in FOLDER_ID; immediately visible in list_files(FOLDER_ID) with no manual refresh — folder cache mark_dirty confirmed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
 ---
 
 ### TC-D06: Resulting spreadsheet has expected title ⚠️ requires-oauth
@@ -91,6 +106,9 @@ Created 'QA-Cache-Check' in FOLDER_ID; immediately visible in list_files(FOLDER_
 
 **Result (2026-09-04) ✅ PASS**
 create_spreadsheet('Exact Title Test') response title exactly 'Exact Title Test', no truncation/modification.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
 
 ---
 
@@ -111,6 +129,9 @@ create_spreadsheet('Exact Title Test') response title exactly 'Exact Title Test'
 **Result (2026-09-04) ❌ FAIL**
 list_spreadsheets(default) returns a valid list, each entry has name+ID. BUT does NOT include 'mcp-gee-sweet-qa-fixtures': default folder resolves to Shared Drive root (DRIVE_FOLDER_ID) and the fixtures spreadsheet lives in the FOLDER_ID subfolder, not the root. Stale TC post-#305 Shared-Drive migration. Ticket candidate.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
 ---
 
 ### TC-D14: List from explicit folder ID
@@ -124,6 +145,9 @@ list_spreadsheets(default) returns a valid list, each entry has name+ID. BUT doe
 
 **Result (2026-09-04) ✅ PASS**
 list_spreadsheets(FOLDER_ID) returns exactly the 3 spreadsheets in that folder (fixtures + QA-Cache-Check + QA-Create-Explicit), scoped correctly.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
 
 ---
 
@@ -139,6 +163,9 @@ list_spreadsheets(FOLDER_ID) returns exactly the 3 spreadsheets in that folder (
 **Result (2026-09-04) ✅ PASS**
 🔍 list_spreadsheets() with no folder → uses configured default folder (Shared Drive root), returning files there. No separate "root" vs "all accessible" mode — folder_id=None resolves to lc.folder_id.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
 ---
 
 ### TC-D16: Empty folder
@@ -152,6 +179,9 @@ list_spreadsheets(FOLDER_ID) returns exactly the 3 spreadsheets in that folder (
 **Result (2026-09-04) ✅ PASS**
 list_spreadsheets(empty scratch folder) returned `[]`, not an error.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
 ---
 
 ### TC-D17: Pagination not implemented
@@ -160,11 +190,34 @@ list_spreadsheets(empty scratch folder) returned `[]`, not an error.
 > "List spreadsheets in {FOLDER_ID}"
 
 **Checks**
-- 🔍 **Known limitation:** if the folder has >100 spreadsheets, results are silently truncated
+- 🔍 **Known limitation:** `max_results` (added #718, default 100, max 1000) bounds a single call's `pageSize` but there's still no `nextPageToken` continuation beyond it — a folder with more matches than `max_results` is silently truncated at that cap
 - Note the count returned and whether a `nextPageToken` is visible in any debug output
 
 **Result (2026-09-04) ✅ PASS**
 🔍 list_spreadsheets(FOLDER_ID) returned 3 results; no nextPageToken/pagination field exposed in response. Known limitation acknowledged.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
+---
+
+### TC-D249: `max_results` bounds the no-folder fallback (#718)
+
+**Prompt**
+> "List all my spreadsheets, but limit results to 2"
+
+**Checks**
+- `list_spreadsheets(max_results=2)` passes `pageSize=2` to the Drive API call — confirms the previously-unbounded no-folder/no-`DRIVE_FOLDER_ID` fallback (single call, implicit ~100-result API default, no caller control) is now capped by an explicit, caller-controlled parameter
+- Omitting `max_results` still defaults to 100 (unchanged from the implicit prior behavior)
+- A `max_results` above 1000 is clamped down to 1000, matching `list_files`/`list_drives`'s own clamp convention
+- Docstring's fallback description now explicitly names both 'My Drive' AND shared drives (previously understated as 'My Drive' only) — spot-check the tool's live description text if surfaced to a caller
+
+**Result (2026-09-12) ✅ PASS** — `list_spreadsheets(max_results=2)` returned `[]`, no error (this deployment's `DRIVE_FOLDER_ID` is set, so the fallback resolves to the configured default folder rather than a true global My-Drive+shared-drives search — same caveat as TC-D27; that folder has 0 spreadsheets directly, so the returned-count check wasn't exercised by this fixture). Confirmed the tool's own live description text still shows the stale Args wording flagged by code review (`or searches 'My Drive'`) — filed as a blocking finding on the PR rather than closed here, since it's this PR's own regression, not a QA-doc issue. `pageSize`-level clamp/boundary behavior (25/1000/0→1) is exercised by `tests/drive/test_files.py::TestListSpreadsheets` (78-test suite passes) — not independently re-provable via this black-box MCP call without a fixture folder with >2 items.
+
+**Result (2026-09-13) ✅ PASS (re-verification, fix `802b799`)** — Ash's fix updates both Args lines to match the summary text ("or searches 'My Drive' and every shared drive the account can access"), confirmed via `git show` against the source. Re-ran live post-`/mcp reconnect`: `list_spreadsheets(max_results=2)` unchanged behavior (`[]`, no error) — expected, since this is a docstring-only fix with no behavioral surface. Docstring text itself isn't independently re-observable through this black-box tool call (no MCP mechanism surfaces the served description back to the caller), so verification here rests on the confirmed source diff plus the unchanged, correct runtime behavior. `tests/drive/test_files.py` (78 tests) passes.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth).
 
 ---
 
@@ -182,20 +235,29 @@ list_spreadsheets(empty scratch folder) returned `[]`, not an error.
 **Result (2026-09-04) ✅ PASS**
 list_folders(FOLDER_ID) returned `[]` — FOLDER_ID has no subfolders; no error.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
 ---
 
-### TC-D27: List from root ⚠️ known tool gap (#680 → see filed bug)
+### TC-D27: List with no parent falls back to `DRIVE_FOLDER_ID` (#689)
 
 **Prompt**
-> "List folders at the root of my Drive"
+> "List my Drive folders" (no folder specified)
 
 **Checks**
 - `list_folders(parent_folder_id=None)` returns without error
-- ⚠️ **Confirmed tool gap:** `list_folders` hardcodes `q += " and 'root' in parents"` when no parent is given (`tools/drive/files.py`) — it does **not** consult `DRIVE_FOLDER_ID`. On a Shared-Drive deployment the OAuth user's personal My-Drive root is not where fixtures live, and for a pure service account there is no personal root at all, so `list_folders(None)` returns the wrong scope or nothing. Filed as a separate product bug (link in the run file). Record the observed behavior; PASS only means "returned without crashing", not "returned the right folders".
-- Explicit-parent form (`list_folders(parent_folder_id={SHARED_DRIVE_ID})`) is the working path — covered by TC-D25/D26.
+- On this deployment `DRIVE_FOLDER_ID` is set, so the call now lists the folders **inside the configured default folder** (`{FOLDER_ID}`) — the same result as `list_folders(parent_folder_id={FOLDER_ID})` (compare against TC-D26). It no longer hardcodes `'root' in parents` / the OAuth user's personal My-Drive root.
+- Fixed in #689: `list_folders` now does `parent_folder_id or lc.folder_id`, mirroring `list_spreadsheets`. When neither is set it lists folders across 'My Drive' (no `in parents` clause).
+- Explicit-parent form (`list_folders(parent_folder_id={FOLDER_ID})`) still works — covered by TC-D26.
 
-**Result (2026-09-04) ✅ PASS**
-🔍 KNOWN TOOL GAP (#680). `list_folders(parent_folder_id=None)` returned `{"result":[]}` — no crash. On this OAuth (sky) deployment with fixtures in a Shared Drive, the hardcoded `'root' in parents` query surfaces nothing; DRIVE_FOLDER_ID is not consulted. Observed verbatim: empty result list.
+**Prior behavior (2026-09-04, pre-#689):** `list_folders(parent_folder_id=None)` returned `{"result":[]}` on this Shared-Drive OAuth deployment — the hardcoded `'root' in parents` query surfaced nothing because `DRIVE_FOLDER_ID` was not consulted. The `**Result**` line below is added by the first live re-run against the fixed code.
+
+**Result (2026-09-09) ✅ PASS**
+`list_folders(parent_folder_id=None)` returned `[{"id": "{FIXTURES_FOLDER_ID}", "name": "mcp-gee-sweet-qa-fixtures", "parent": "{DRIVE_FOLDER_ID}"}]` — no error. `list_folders(parent_folder_id={DRIVE_FOLDER_ID})` returned byte-identical output, confirming the no-parent path now resolves to `lc.folder_id` (the configured Shared-Drive root) instead of the hardcoded `'root' in parents`. Explicit-parent form still overrides the default — `list_folders(parent_folder_id={FIXTURES_FOLDER_ID})` returned `[]` (fixtures folder has no subfolders). Unit tests: `tests/drive/test_files.py::TestListFolders` 4/4 pass; full suite 1339 passed / 3 skipped.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
 
 ---
 
@@ -206,10 +268,33 @@ list_folders(FOLDER_ID) returned `[]` — FOLDER_ID has no subfolders; no error.
 
 **Checks**
 - Returns `[]` — not an error
-- 🔍 **Known limitation:** pagination not implemented — >100 subfolders would silently truncate
+- 🔍 **Known limitation:** `max_results` (added #718, default 100, max 1000) bounds a single call's `pageSize` but there's still no `nextPageToken` continuation beyond it — a folder with more subfolders than `max_results` is silently truncated at that cap
 
 **Result (2026-09-04) ✅ PASS**
 list_folders(empty scratch folder) returned `[]` — not an error.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
+---
+
+### TC-D250: `max_results` bounds the no-parent fallback (#718)
+
+**Prompt**
+> "List my Drive folders, but limit results to 2"
+
+**Checks**
+- `list_folders(max_results=2)` passes `pageSize=2` to the Drive API call — confirms the previously-unbounded no-parent/no-`DRIVE_FOLDER_ID` fallback (single call, implicit ~100-result API default, no caller control) is now capped by an explicit, caller-controlled parameter
+- Omitting `max_results` still defaults to 100 (unchanged from the implicit prior behavior)
+- A `max_results` above 1000 is clamped down to 1000, matching `list_files`/`list_drives`'s own clamp convention
+- Docstring's fallback description now explicitly names both 'My Drive' AND shared drives (previously understated as 'My Drive' only) — spot-check the tool's live description text if surfaced to a caller
+
+**Result (2026-09-12) ✅ PASS** — `list_folders(max_results=2)` returned exactly 1 folder (`mcp-gee-sweet-qa-fixtures`), no error; fallback resolves to the configured `DRIVE_FOLDER_ID` on this deployment (same caveat as TC-D27/TC-D249). Confirmed the tool's own live description text still shows the stale Args wording flagged by code review — same blocking PR finding as TC-D249, not duplicated as a separate issue. `pageSize`-level clamp/boundary behavior is exercised by `tests/drive/test_files.py::TestListFolders` (78-test suite passes).
+
+**Result (2026-09-13) ✅ PASS (re-verification, fix `802b799`)** — same fix commit as TC-D249. Re-ran live post-`/mcp reconnect`: `list_folders(max_results=2)` unchanged behavior (1 folder, no error). Verification rests on the confirmed source diff (`git show`) plus unchanged correct runtime behavior, same reasoning as TC-D249's re-verification note. `tests/drive/test_files.py` (78 tests) passes.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth).
 
 ---
 
@@ -227,6 +312,9 @@ list_folders(empty scratch folder) returned `[]` — not an error.
 **Result (2026-09-04) ✅ PASS**
 search_spreadsheets('qa-fixtures') returned 1 result: 'mcp-gee-sweet-qa-fixtures' with id + name + metadata.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
 ---
 
 ### TC-D30: Content search
@@ -241,6 +329,9 @@ search_spreadsheets('qa-fixtures') returned 1 result: 'mcp-gee-sweet-qa-fixtures
 **Result (2026-09-04) ✅ PASS**
 search_spreadsheets('Widget') returned only 'mcp-gee-sweet-qa-fixtures' (= SPREADSHEET_ID) — content match on 'Widget' in Sales!A2.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
 ---
 
 ### TC-D31: max_results respected
@@ -254,6 +345,9 @@ search_spreadsheets('Widget') returned only 'mcp-gee-sweet-qa-fixtures' (= SPREA
 
 **Result (2026-09-04) ✅ PASS**
 search_spreadsheets('test', max_results=2) returned exactly 2 results.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
 
 ---
 
@@ -270,6 +364,9 @@ search_spreadsheets('test', max_results=2) returned exactly 2 results.
 **Result (2026-09-04) ✅ PASS**
 search_spreadsheets("it's") returned `[]` cleanly — no Drive API syntax error. Single-quote injection fix confirmed.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
 ---
 
 ### TC-D33: No results
@@ -282,6 +379,9 @@ search_spreadsheets("it's") returned `[]` cleanly — no Drive API syntax error.
 
 **Result (2026-09-04) ✅ PASS**
 search_spreadsheets('ZZZAbsolutelyNoMatch12345') returned `[]` — not an error.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
 
 ---
 
@@ -297,6 +397,30 @@ search_spreadsheets('ZZZAbsolutelyNoMatch12345') returned `[]` — not an error.
 **Result (2026-09-04) ✅ PASS**
 🔍 search_spreadsheets("") returned all accessible spreadsheets (7), not an error. Behavior: empty query = list-all.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
+---
+
+### TC-D261: `search_spreadsheets` surfaces the `starred` field (issue #388)
+
+**Background:** `search_spreadsheets` is a narrower wrapper around `search_files` pre-filtered to the spreadsheet MIME type (per its own docstring); #388 added `starred` to `search_files`'s response but initially missed this sibling, silently breaking that "same as search_files" framing for the one field. Uncached (unlike `list_files`), so no `refresh_cache` step is needed here.
+
+**Setup:** star {SPREADSHEET_ID} first (`star_file`), so this test starts from a known `starred=true` state.
+
+**Prompt**
+> "Search spreadsheets for 'qa-fixtures'"
+
+**Checks**
+- Result entry for {SPREADSHEET_ID} includes `"starred": true`
+
+**Teardown:** unstar {SPREADSHEET_ID} (matches TC-D202/TC-D203's convention of restoring fixture state).
+
+**Result:** PASS (2026-09-17) — `search_spreadsheets(query="qa-fixtures")` returned the fixture entry with `"starred": true` immediately after `star_file`, no cache step needed (uncached tool, as expected). Fixture left unstarred.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth).
+
 ---
 
 ### TC-D35: API error
@@ -310,6 +434,9 @@ search_spreadsheets('ZZZAbsolutelyNoMatch12345') returned `[]` — not an error.
 
 **Result (2026-09-04) ⏭️ SKIP**
 Cannot force an auth/API error on a live OAuth session. Error-dict-not-exception path covered by unit tests (test_api_error_returns_error_dict_not_raised family).
+
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+Can't force an auth error live.
 
 ---
 
@@ -328,6 +455,9 @@ Cannot force an auth/API error on a live OAuth session. Error-dict-not-exception
 **Result (2026-09-04) ✅ PASS**
 list_files(FOLDER_ID) unfiltered returned both spreadsheets and Google Docs (qa-fixtures-doc, qa-large-doc); each entry has id, name, mime_type, web_link; no trashed items.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
 ---
 
 ### TC-D37: Filter by MIME type
@@ -341,6 +471,12 @@ list_files(FOLDER_ID) unfiltered returned both spreadsheets and Google Docs (qa-
 
 **Result (2026-09-04) ✅ PASS**
 list_files(FOLDER_ID, mime_type=document) returned only the 2 Google Docs; spreadsheets excluded.
+
+**Result (2026-09-21) ✅ PASS** — PR #780 (issue #578, dedupe refactor)
+list_files(FOLDER_ID, mime_type=document) returned only the 2 Google Docs (qa-fixtures-doc, qa-large-doc); spreadsheets excluded. Behavior unchanged after extracting the mime-type escaping into `_escape_drive_query_mime_type`.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
 
 ---
 
@@ -359,6 +495,9 @@ Two consecutive list_files(FOLDER_ID) calls returned byte-identical results (cac
 **Result (2026-09-05) ✅ PASS** — re-verified against PR #697 (issue #688)
 Caveat resolved — see TC-D40. Two consecutive list_files(FOLDER_ID) calls with no intervening small-max_results fetch still return byte-identical results.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
 ---
 
 ### TC-D39: mime_type=None cache key
@@ -372,6 +511,9 @@ Caveat resolved — see TC-D40. Two consecutive list_files(FOLDER_ID) calls with
 
 **Result (2026-09-04) ✅ PASS**
 list_files(FOLDER_ID) with mime_type=None called twice returned identical results, no KeyError / cache miss.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
 
 ---
 
@@ -390,6 +532,32 @@ On a FRESH fetch, list_files(FOLDER_ID, max_results=2) returns exactly 2 — cla
 **Result (2026-09-05) ✅ PASS** — re-verified against PR #697 (issue #688)
 Both scenarios re-tested against the real fixture folder (3 items): (1) fresh default fetch (3 items, cached), then max_results=2 -> correctly sliced to exactly 2 (not the prior bug's full 3), then default fetch again -> still 3 (no poisoning). (2) fresh max_results=1 fetch (cached), then default fetch -> correctly treated as a cache miss and returned all 3 (not truncated to 1). `DriveFolderCache` now tracks `rows_fetched` per entry and only serves a cache hit when the prior fetch size was >= the current request, mirroring `SheetDataCache`'s existing sufficiency check. 3 new unit tests added in `tests/test_cache.py`; all 84 cache tests pass.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
+---
+
+### TC-D263: A complete listing serves a later, larger `max_results` from cache (issue #698)
+
+**Background:** `list_files` now requests Drive's `nextPageToken` and `incompleteSearch`; a response with neither means the listing is complete, and the cache records it as satisfying *any* later `max_results`. Before #698 a small-`max_results` fetch of a folder with fewer items than requested still recorded only the requested count, so a later larger request always re-fetched. A response *with* a `nextPageToken` (a truncated listing) must still be treated as insufficient for a larger request — that half is TC-D40's scenario 2, re-checked here. The epoch guard (a concurrent mutation's `mark_dirty` not being overwritten by an in-flight `list_files`) and the keep-larger compare-and-set are concurrency races with no deterministic live trigger; they're covered by `tests/test_cache.py::TestSizedCacheRaces` and `tests/drive/test_files.py::TestListFiles::test_mark_dirty_during_fetch_is_not_overwritten`.
+
+**Setup:** `DEBUG_LEVEL=DEBUG` with `LOG_FILE` set on the server under test (same log-based check as TC-D38). Note the fixture folder's item count `N` from a plain `list_files(folder_id={FOLDER_ID})`; this test needs `2 <= N < 50`.
+
+**Steps / Checks**
+1. `refresh_cache(folder_id={FOLDER_ID})`, then `list_files(folder_id={FOLDER_ID}, max_results=50)` → returns all `N` items.
+2. `list_files(folder_id={FOLDER_ID}, max_results=1000)` → returns the same `N` items, byte-identical to step 1, and the log shows `Drive folder cache hit: {FOLDER_ID}` for this call (no fresh Drive `files.list`).
+3. `refresh_cache(folder_id={FOLDER_ID})`, then `list_files(folder_id={FOLDER_ID}, max_results=1)` → exactly 1 item.
+4. `list_files(folder_id={FOLDER_ID})` (default `max_results`) → all `N` items, not 1, and the log shows **no** cache hit for this call (the step-3 listing had a `nextPageToken`, so it isn't complete).
+
+**Cleanup:** none (read-only).
+
+**Result (2026-09-23, PR #788 round 1) ✅ PASS** — run against a throwaway folder (`N=2`, a spreadsheet plus a subfolder) instead of `{FOLDER_ID}`, per `run.md`'s fixture-pollution guidance. Run twice. On the second, strictly sequential run: step 1 fetched and logged `Cached 2 files`; step 2 returned the same 2 items with `Drive folder cache hit` and 0.000s; step 3 logged `Cached 1 files`; step 4 returned both items and logged `Cached 2 files` with no cache hit, so it was a fresh fetch. The first run sent some calls in parallel and they ran out of order, but it gave the same hit/miss pattern.
+
+**Result (2026-09-23, PR #788 round 2, `ba3fbb9`) ✅ PASS** — rerun sequentially on the same throwaway folder after reconnecting to the fixed code, which now also requests `incompleteSearch`. The log matched round 1: step 1 `Cached 2 files`, step 2 `Drive folder cache hit`, step 3 `Cached 1 files`, step 4 `Cached 2 files` with no hit. Also re-checked the Sheets gap bug round 1 sent back. On a sheet with data in rows 1–2 and row 10 and rows 3–9 empty, `refresh_cache` → `get_multiple_spreadsheet_summary(rows_to_fetch=5)` → `(rows_to_fetch=20)` now fetches fresh and returns the rows through `["row10a","row10b"]`, where round 1 returned a cached result that hid row 10. A repeat `rows_to_fetch=20` call logged `Sheet data cache hit`. The throwaway fixture was trashed afterwards.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth).
+
 ---
 
 ### TC-D41: Pagination limit
@@ -402,6 +570,9 @@ Both scenarios re-tested against the real fixture folder (3 items): (1) fresh de
 
 **Result (2026-09-04) ✅ PASS**
 🔍 FOLDER_ID has <1000 files (7); no truncation, no pagination token exposed. Known limitation acknowledged.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
 
 ---
 
@@ -417,6 +588,9 @@ Both scenarios re-tested against the real fixture folder (3 items): (1) fresh de
 **Result (2026-09-04) ✅ PASS**
 No trashed files appeared in any list_files(FOLDER_ID) result; trashed=false in query confirmed by absence. Re-confirmed in TC-D71.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
 ---
 
 ### TC-D43: Cache invalidated after create ⚠️ requires-oauth
@@ -429,6 +603,9 @@ No trashed files appeared in any list_files(FOLDER_ID) result; trashed=false in 
 
 **Result (2026-09-04) ✅ PASS**
 Created 'QA-ListFilesCache' in FOLDER_ID; immediately present in list_files(FOLDER_ID) with no manual refresh — folder cache mark_dirty fired after create_spreadsheet.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth), throwaway folder under the Shared Drive.
 
 ---
 
@@ -452,6 +629,9 @@ Trash `qa-236.txt` from `{FOLDER_ID}`. Remove `/tmp/qa-236.txt`.
 
 **Result (2026-09-04) ✅ PASS**
 Uploaded /tmp/qa-236.txt via upload_local_file. list_files(FOLDER_ID) shows qa-236.txt with md5_checksum "741fc6b1878e208346359af502dd11c5" (32-char hex, matches local `md5 -q`). DOC_ID fixture entry has md5_checksum: null.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth).
 
 ---
 
@@ -479,6 +659,12 @@ convention and try/except-returns-`{"error": ...}` wrapping used for TC-D155/TC-
 **Result (2026-09-04) ✅ PASS**
 list_files(FOLDER_ID, mime_type="it's a test") returned `[]` cleanly — no HttpError 400 / uncaught exception. Backslash-escape + try/except wrapping confirmed.
 
+**Result (2026-09-21) ✅ PASS** — PR #780 (issue #578, dedupe of the escaping logic into `_escape_drive_query_mime_type`)
+list_files(FOLDER_ID, mime_type="it's a test") → `[]` cleanly, no HttpError 400. Regression fix survives the extraction into a shared helper.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth).
+
 ---
 
 ## `create_folder`
@@ -498,6 +684,9 @@ list_files(FOLDER_ID, mime_type="it's a test") returned `[]` cleanly — no Http
 **Result (2026-09-04) ✅ PASS**
 create_folder('QA-Folder-Test', no parent) → `{folderId, name, parent:"0APfXAGTeZYz3Uk9PVA"}` = DRIVE_FOLDER_ID (Shared Drive root), NOT FOLDER_ID. Visible in list_files.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
+
 ---
 
 ### TC-D59: Create with no parent — falls back to the configured default folder ⚠️ requires-oauth
@@ -515,6 +704,9 @@ create_folder('QA-Folder-Test', no parent) → `{folderId, name, parent:"0APfXAG
 **Result (2026-09-04) ✅ PASS**
 create_folder('QA-Folder-Root', no parent) → parent = "0APfXAGTeZYz3Uk9PVA" = DRIVE_FOLDER_ID. Resolves to configured default, not personal My-Drive root.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
+
 ---
 
 ### TC-D60: Cache invalidated after create ⚠️ requires-oauth
@@ -528,6 +720,9 @@ create_folder('QA-Folder-Root', no parent) → parent = "0APfXAGTeZYz3Uk9PVA" = 
 
 **Result (2026-09-04) ✅ PASS**
 create_folder('QA-Folder-Cache', parent=FOLDER_ID); immediately present in list_files(FOLDER_ID, mime_type=folder) with folder mimeType, no manual refresh — cache mark_dirty fired.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
 
 ---
 
@@ -549,6 +744,9 @@ create_folder('QA-Folder-Cache', parent=FOLDER_ID); immediately present in list_
 **Result (2026-09-04) ✅ PASS**
 Created QA-Move-Src/QA-Move-Dst child folders + 'QA-Move-Test' spreadsheet in Src. move_file → response parent = QA-Move-Dst, no longer Src. list_files(Src)=[] and list_files(Dst)=[QA-Move-Test] with no manual refresh — both parent caches invalidated.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
+
 ---
 
 ### TC-D62: Move a folder
@@ -563,6 +761,9 @@ Created QA-Move-Src/QA-Move-Dst child folders + 'QA-Move-Test' spreadsheet in Sr
 **Result (2026-09-04) ✅ PASS**
 move_file(QA-Folder-Test → FOLDER_ID) → `{fileId, name:'QA-Folder-Test', mimeType:'application/vnd.google-apps.folder', parent:FOLDER_ID}`. Nested correctly; appears in list_files(FOLDER_ID).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
+
 ---
 
 ### TC-D63: Non-existent file ID
@@ -576,6 +777,9 @@ move_file(QA-Folder-Test → FOLDER_ID) → `{fileId, name:'QA-Folder-Test', mim
 
 **Result (2026-09-04) ✅ PASS**
 move_file('invalidid123xyz', FOLDER_ID) → HttpError 404 "File not found: invalidid123xyz." surfaced cleanly via tool-error channel, names the bad ID, no crash.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
 
 ---
 
@@ -598,6 +802,9 @@ move_file('invalidid123xyz', FOLDER_ID) → HttpError 404 "File not found: inval
 **Result (2026-09-04) ✅ PASS**
 Created 'QA-Rename-Test' in FOLDER_ID, rename_file → response name 'QA-Renamed-File'. list_files(FOLDER_ID) shows 'QA-Renamed-File', no stale 'QA-Rename-Test' — parent cache invalidated.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
+
 ---
 
 ### TC-D65: Rename a folder
@@ -612,6 +819,9 @@ Created 'QA-Rename-Test' in FOLDER_ID, rename_file → response name 'QA-Renamed
 **Result (2026-09-04) ✅ PASS**
 rename_file(QA-Folder-Cache → 'QA-Folder-Renamed') → response name 'QA-Folder-Renamed'; list_files reflects new name.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
+
 ---
 
 ### TC-D66: Non-existent file ID
@@ -625,11 +835,14 @@ rename_file(QA-Folder-Cache → 'QA-Folder-Renamed') → response name 'QA-Folde
 **Result (2026-09-04) ✅ PASS**
 rename_file('invalidid123xyz', 'SomeName') → HttpError 404 propagates cleanly, no crash/silent failure.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
+
 ---
 
 ## `star_file` / `unstar_file` (issue #139)
 
-**Note:** neither `get_file_metadata` nor `list_files` currently exposes a `starred` field, so verification is round-trip only — the tool's own response is the only readable signal for these checks.
+**Note:** TC-D202/TC-D203 below predate #388 — at the time they were run, neither `get_file_metadata` nor `list_files` exposed a `starred` field, so verification was round-trip only (the tool's own response was the only readable signal). #388 (TC-D260 below) fixed that; `get_file_metadata`/`list_files`/`search_files` all now surface `starred`.
 
 ### TC-D202: `star_file` marks an existing file as starred
 **Prompt**
@@ -644,6 +857,9 @@ rename_file('invalidid123xyz', 'SomeName') → HttpError 404 propagates cleanly,
 
 **Result:** PASS (2026-07-21) — `star_file` on the fixture spreadsheet returned `{"fileId": "<matches>", "name": "mcp-gee-sweet-qa-fixtures", "starred": true}`, no error.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run on a throwaway spreadsheet; starred state visible in metadata, list_files and search_files.
+
 ---
 
 ### TC-D203: `unstar_file` removes the starred marker
@@ -657,6 +873,38 @@ rename_file('invalidid123xyz', 'SomeName') → HttpError 404 propagates cleanly,
 - Response `starred` is `false`
 
 **Result:** PASS (2026-07-21) — `unstar_file` on the same fixture spreadsheet (already starred from TC-D202) returned `{"fileId": "<matches>", "name": "mcp-gee-sweet-qa-fixtures", "starred": false}`, no error. Fixture left in its normal unstarred state.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run on a throwaway spreadsheet; starred state visible in metadata, list_files and search_files.
+
+---
+
+### TC-D260: `get_file_metadata`/`list_files`/`search_files` surface the `starred` field (issue #388)
+
+**Background:** TC-D202/TC-D203 above could only verify `star_file`/`unstar_file` round-trip via the mutating tool's own response — there was no way to independently read a file's starred state. #388 adds `starred` to `get_file_metadata`'s, `list_files`'s, and `search_files`'s response fields.
+
+**Setup**
+Star {SPREADSHEET_ID} first (`star_file`), so this test starts from a known `starred=true` state. As of this issue's QA round 2 fix, `star_file`/`unstar_file` mark the file's parent folder(s) dirty in `drive_folder_cache`, so `list_files({FOLDER_ID})` reflects the new state immediately with no manual cache step (confirmed live 2026-09-17, both directions). The explicit `refresh_cache(folder_id={FOLDER_ID})` step below is kept anyway — harmless once the fix is in, and it's what round 1's QA pass used to catch the gap before the fix landed.
+
+**Prompt**
+> "Get metadata for {SPREADSHEET_ID}, then refresh the folder cache for {FOLDER_ID}, then list files in {FOLDER_ID}, then search for it by name"
+
+**Checks**
+- `get_file_metadata({SPREADSHEET_ID})` response includes `"starred": true`
+- `refresh_cache(folder_id={FOLDER_ID})` before the next check
+- `list_files({FOLDER_ID})` includes an entry for {SPREADSHEET_ID} with `"starred": true`
+- `search_files` (matching the fixture's name) includes an entry for {SPREADSHEET_ID} with `"starred": true` (uncached, so no refresh needed here)
+- Unstar {SPREADSHEET_ID} (`unstar_file`), then re-run `get_file_metadata` — `"starred": false`
+
+**Teardown**
+Ensure {SPREADSHEET_ID} ends unstarred (matches TC-D202/TC-D203's own convention of restoring fixture state).
+
+**Result:** PASS (round 1, 2026-09-17, with the `refresh_cache` step above included). `get_file_metadata` → `starred: true`; `refresh_cache(folder_id=...)`; `list_files` → `starred: true` for the fixture entry; `search_files` → `starred: true` for the fixture entry; `unstar_file` → `starred: false`; `get_file_metadata` re-check → `starred: false`. Round 1 separately confirmed the underlying gap this step existed for: repeating the same sequence *without* `refresh_cache` reproduced a stale `list_files` result (`starred: false`) immediately after starring, while `get_file_metadata` on the same file correctly showed `starred: true`. Sent back to the Dev as a blocking finding (PR #760 comment).
+
+**Result:** PASS (round 2, 2026-09-17, commit `6bad917`) — re-ran the round-1 gap repro *without* any manual `refresh_cache` call: `list_files({FOLDER_ID})` warmed cold, `star_file`, then `list_files({FOLDER_ID})` again with no cache call in between → correctly returned `starred: true` for the fixture entry. Repeated for `unstar_file` → correctly returned `starred: false`, no manual cache call either time. The fix (`star_file`/`unstar_file` now fetch `parents` and call `drive_folder_cache.mark_dirty()` per parent) works as intended. Fixture left unstarred.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run on a throwaway spreadsheet; starred state visible in metadata, list_files and search_files.
 
 ---
 
@@ -674,6 +922,9 @@ rename_file('invalidid123xyz', 'SomeName') → HttpError 404 propagates cleanly,
 **Result (2026-09-04) ✅ PASS**
 copy_file(SPREADSHEET_ID) no name → new fileId, name 'Copy of mcp-gee-sweet-qa-fixtures', web_link present and different from original. Parent defaults to source folder (FOLDER_ID).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
+
 ---
 
 ### TC-D68: Copy with explicit name and destination folder ⚠️ requires-oauth
@@ -687,6 +938,9 @@ copy_file(SPREADSHEET_ID) no name → new fileId, name 'Copy of mcp-gee-sweet-qa
 
 **Result (2026-09-04) ✅ PASS**
 copy_file(SPREADSHEET_ID → FOLDER_ID, 'QA-Copy-Explicit') → appears in list_files(FOLDER_ID) with no manual refresh (dest cache invalidated). Original SPREADSHEET_ID metadata unchanged (name, trashed=false).
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
 
 ---
 
@@ -702,6 +956,9 @@ copy_file(SPREADSHEET_ID → FOLDER_ID, 'QA-Copy-Explicit') → appears in list_
 **Result (2026-09-04) ✅ PASS**
 copy_file(DOC_ID, 'QA-Doc-Copy') → new independent fileId, mimeType application/vnd.google-apps.document.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
+
 ---
 
 ### TC-D70: Attempt to copy a folder ⚠️ requires-oauth
@@ -715,6 +972,9 @@ copy_file(DOC_ID, 'QA-Doc-Copy') → new independent fileId, mimeType applicatio
 
 **Result (2026-09-04) ✅ PASS**
 🔍 copy_file on folder 'QA-Folder-Renamed' → HttpError 403 "This file cannot be copied by the user." (reason cannotCopyFile) — clean API error, no crash. Known Drive API limitation confirmed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
 
 ---
 
@@ -733,6 +993,9 @@ copy_file(DOC_ID, 'QA-Doc-Copy') → new independent fileId, mimeType applicatio
 **Result (2026-09-04) ✅ PASS**
 delete_file('QA-Renamed-File', permanent=False) → `{fileId, action:"trashed"}`. No longer in list_files(FOLDER_ID) (trashed excluded). Recoverable from Trash. Re-confirms TC-D42.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
+
 ---
 
 ### TC-D72: Permanently delete a file ⚠️ requires-oauth ⚠️ destructive
@@ -750,6 +1013,9 @@ delete_file('QA-Renamed-File', permanent=False) → `{fileId, action:"trashed"}`
 **Result (2026-09-04) ✅ PASS**
 Created 'QA-Delete-Permanent' in FOLDER_ID; delete_file(permanent=True) → `{fileId, action:"deleted"}`. Absent from list_files afterward — folder cache invalidated.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
+
 ---
 
 ### TC-D73: Trash a folder ⚠️ destructive
@@ -763,6 +1029,9 @@ Created 'QA-Delete-Permanent' in FOLDER_ID; delete_file(permanent=True) → `{fi
 
 **Result (2026-09-04) ✅ PASS**
 delete_file('QA-Folder-Renamed', permanent=False) → `{fileId, action:"trashed"}`. list_folders(FOLDER_ID) no longer lists it (only QA-Folder-Test, QA-Move-Src, QA-Move-Dst remain).
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
 
 ---
 
@@ -778,11 +1047,45 @@ delete_file('QA-Folder-Renamed', permanent=False) → `{fileId, action:"trashed"
 **Result (2026-09-04) ✅ PASS**
 delete_file('invalidid123xyz') → HttpError 404 propagates cleanly, no crash. No cache mutation (parents fetch fails before any mutation).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
+
+---
+
+### TC-D280: Permanent delete without permanent-delete permission — clear error, file kept (issue #876) ⚠️ destructive
+
+**Requires:** an identity with the **Content manager** role (not Manager) on the `mcp-gee-sweet-shared` Shared Drive. The QA service account is added at exactly that role (`setup.md` Step 1), so run this on a service-account server (`mcp-gee-sweet-sa`, or the lane's own server relaunched with `AUTH_METHOD=service_account`). An OAuth identity that manages the Shared Drive gets `canDelete: true` and can't reproduce this.
+
+**Setup:** `upload_file(name="QA-876-Delete-Denied.txt", content="x", folder_id={FOLDER_ID})` as the Content-manager identity. Note the returned file ID.
+
+**Steps**
+1. `delete_file(file_id=<id>, permanent=True)`
+2. `get_file_metadata(file_id=<id>)`
+3. `delete_file(file_id=<id>, permanent=False)`
+
+**Checks**
+- Step 1 fails with a `ValueError` saying the identity lacks permanent-delete permission, noting that on a Shared Drive this usually requires the Manager role, and suggesting `permanent=False`. It is **not** Drive's `HttpError 404 "File not found"`.
+- Step 2 returns the file with `trashed: false`: nothing was deleted.
+- Step 3 returns `{"fileId": <id>, "action": "trashed"}`.
+
+**Cleanup:** step 3 leaves the file in the Shared Drive's trash. Purge it with `delete_file(file_id=<id>, permanent=True)` from an identity with the Manager role (e.g. the lane's OAuth server), or leave it for a later `empty_trash(drive_id={SHARED_DRIVE_ID})` run.
+
+**Result (2026-10-04) ✅ PASS**
+Run as the QA service account (Content manager) from a fresh interpreter in the kit worktree driving PR #888's `delete_file` (kit's server is OAuth/Manager). Pre-check: `capabilities={canDelete: false, canTrash: true}`, file on the Shared Drive. Step 1 raised `ValueError` naming missing permanent-delete permission + `permanent=False` hint; no `files().delete` sent. Step 2 `trashed: false`. Baseline: a raw `files().delete` as the same SA still returns Drive's `404 "File not found"`, so the pre-flight check is what fixes it. Step 3 `{"action": "trashed"}`, then `trashed: true`. Cleanup: `delete_file(permanent=True)` via kit's OAuth (Manager) server returned `{"action": "deleted"}`, which also covers the `canDelete: true` path live.
+
+**Result (2026-10-04, round 2) ✅ PASS**
+Re-run the same way against `255512b` (Shared Drive note scoped to `driveId`). Step 1's `ValueError` now reads "...lacks permanent-delete permission on it. On a Shared Drive this usually requires the Manager role. Use permanent=False to move it to the trash instead." Steps 2–3 and the raw-delete 404 baseline as in round 1. Cleanup via kit's reconnected OAuth server: `{"action": "deleted"}`. The My Drive (no `driveId`) wording isn't live-tested: it needs a file owned by someone else, where a wrong result would be a real permanent delete. Unit test `test_delete_file_permanent_without_can_delete_on_my_drive_omits_shared_drive_note` covers it.
+
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+Environmental: needs the SA identity plus a personal-Drive folder / a Content-manager SA.
+
 ---
 
 ## `restore_file`
 
-### TC-D202: Restore a trashed file ⚠️ destructive
+### TC-D269: Restore a trashed file ⚠️ destructive
+
+*Formerly TC-D202, which collided with `star_file`'s own TC-D202 above; renumbered per #590.*
 
 **Setup:** Create a throwaway spreadsheet in {FOLDER_ID}, then trash it (`delete_file` with `permanent=False`).
 
@@ -796,9 +1099,14 @@ delete_file('invalidid123xyz') → HttpError 404 propagates cleanly, no crash. N
 
 **Result (2026-07-21) ✅** — Created "QA-Restore-Test" in {FOLDER_ID}, trashed it, then `restore_file` returned `{"fileId": "12GPwkr-...", "action": "restored"}`. Follow-up `list_files` on {FOLDER_ID} showed the file present with no manual `refresh_cache` needed, confirming the parent-folder cache was invalidated by the tool itself. Cleaned up (permanently deleted) after the test.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+restore_file restored; bad ID gives 404.
+
 ---
 
-### TC-D203: Restore a non-existent file ID
+### TC-D270: Restore a non-existent file ID
+
+*Formerly TC-D203, which collided with `unstar_file`'s own TC-D203 above; renumbered per #590.*
 
 **Prompt**
 > "Restore file 'invalidid123xyz'"
@@ -810,6 +1118,9 @@ delete_file('invalidid123xyz') → HttpError 404 propagates cleanly, no crash. N
 **Result (2026-07-21) ✅ (behavior) / ⚠️ docstring gap** — Returned `HttpError 404: "File not found: invalidid123xyz."` — propagates cleanly, no crash. This also live-confirms a code-review finding: the tool's own docstring says it "has no effect on a file that was permanently deleted," which reads as a silent no-op, but the actual behavior for any non-existent file_id (including a permanently-deleted one) is this same 404 error, not a no-op. See PR comment.
 
 **Update (2026-07-21, post-fix):** docstring corrected (123884a) to state the API-error behavior explicitly instead of "has no effect." Behavior itself was already correct pre-fix (this was a documentation-only gap) — no re-run needed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+restore_file restored; bad ID gives 404.
 
 ---
 
@@ -837,6 +1148,9 @@ delete_file('invalidid123xyz') → HttpError 404 propagates cleanly, no crash. N
 **Result (2026-09-04) ⏭️ SKIP**
 destructive — `empty_trash()` (no drive_id) permanently empties the OAuth user's ENTIRE personal My Drive trash (kevin.huisman@gmail.com), far beyond the QA fixture set. TC itself mandates operator confirmation; historic runs skipped by operator decision. Unit tests (test_empty_trash_defaults_to_my_drive_no_drive_id, test_empty_trash_api_error_propagates) cover the path. NON-PRE-APPROVED SKIP — operator decision needed.
 
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+empty_trash on a whole trash; not run during a shared pass.
+
 ---
 
 ### TC-D205: Empty trash scoped to a specific Shared Drive ⚠️ destructive
@@ -862,6 +1176,9 @@ destructive — `empty_trash()` (no drive_id) permanently empties the OAuth user
 **Result (2026-09-04) ⏭️ SKIP**
 `empty_trash(drive_id=SHARED_DRIVE_ID)` was BLOCKED by the Claude Code auto-mode permission classifier (not a tool error — harness-level denial of the destructive action). Could not execute or work around. Setup (create+trash 'QA-D205-trash-victim' in Shared Drive) completed, then the victim was cleaned up via delete_file(permanent=True). NON-PRE-APPROVED SKIP — needs operator to permit empty_trash or run it manually. Also note: with parallel shards active, an unscoped Shared-Drive trash purge would also drop other shards' pending-verification trashed fixtures.
 
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+empty_trash on a whole trash; not run during a shared pass.
+
 ---
 
 ## `search_files`
@@ -878,6 +1195,9 @@ destructive — `empty_trash()` (no drive_id) permanently empties the OAuth user
 **Result (2026-09-04) ✅ PASS**
 search_files('QA') no filter → mix of spreadsheets, docs, folders, text/plain; each entry has id, name, mimeType, modified_time, web_link (also owners=[], parent).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
+
 ---
 
 ### TC-D76: Search with MIME type filter
@@ -891,6 +1211,12 @@ search_files('QA') no filter → mix of spreadsheets, docs, folders, text/plain;
 
 **Result (2026-09-04) ✅ PASS**
 search_files('QA', mime_type=document) → all results mimeType application/vnd.google-apps.document; no spreadsheets/folders.
+
+**Result (2026-09-21) ✅ PASS** — PR #780 (issue #578, dedupe refactor)
+search_files('QA', mime_type=document) → all 20 results mimeType application/vnd.google-apps.document; no spreadsheets/folders. Behavior unchanged after switching this call site to the shared `_escape_drive_query_mime_type` helper.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
 
 ---
 
@@ -906,6 +1232,9 @@ search_files('QA', mime_type=document) → all results mimeType application/vnd.
 **Result (2026-09-04) ✅ PASS**
 search_files('QA', folder_id=FOLDER_ID) → every result has parent = FOLDER_ID; files from other folders excluded.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
+
 ---
 
 ### TC-D78: Query with single quote
@@ -919,6 +1248,9 @@ search_files('QA', folder_id=FOLDER_ID) → every result has parent = FOLDER_ID;
 
 **Result (2026-09-04) ✅ PASS**
 search_files("it's a test") → `[]` cleanly, no Drive API syntax error. Single-quote escaped.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
 
 ---
 
@@ -938,6 +1270,9 @@ search_files("it's a test") → `[]` cleanly, no Drive API syntax error. Single-
 **Result (2026-09-04) ✅ PASS**
 get_file_metadata(SPREADSHEET_ID): mimeType spreadsheet; name/parents/created_time/modified_time/owners/web_link all present; no `size` key; trashed=false. Note: owners=[] (Shared Drive files report no owners) — key present, empty list.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
+
 ---
 
 ### TC-D80: Metadata for a Google Doc
@@ -951,6 +1286,9 @@ get_file_metadata(SPREADSHEET_ID): mimeType spreadsheet; name/parents/created_ti
 
 **Result (2026-09-04) ✅ PASS**
 get_file_metadata(DOC_ID): mimeType application/vnd.google-apps.document; web_link present.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
 
 ---
 
@@ -966,6 +1304,9 @@ get_file_metadata(DOC_ID): mimeType application/vnd.google-apps.document; web_li
 **Result (2026-09-04) ✅ PASS**
 get_file_metadata(FOLDER_ID): mimeType application/vnd.google-apps.folder; web_link present (Drive folder URL).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
+
 ---
 
 ### TC-D82: Non-existent file ID
@@ -978,6 +1319,9 @@ get_file_metadata(FOLDER_ID): mimeType application/vnd.google-apps.folder; web_l
 
 **Result (2026-09-04) ✅ PASS**
 get_file_metadata('invalidid123xyz') → HttpError 404 propagates cleanly — not a silent empty result or crash.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
 
 ---
 
@@ -998,6 +1342,9 @@ get_file_metadata('invalidid123xyz') → HttpError 404 propagates cleanly — no
 **Result (2026-09-04) ✅ PASS**
 Substituted qa-236.txt (text/plain, no persistent PNG in FOLDER_ID). get_file_metadata: md5_checksum "741fc6b1878e208346359af502dd11c5" present (32-char hex), also size "9"; matches list_files value (TC-D236). get_file_metadata(SPREADSHEET_ID): md5_checksum null (Workspace file).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth).
+
 ---
 
 ## `list_drives`
@@ -1014,6 +1361,9 @@ Substituted qa-236.txt (text/plain, no persistent PNG in FOLDER_ID). get_file_me
 
 **Result (2026-09-04) ✅ PASS**
 list_drives() → 1 drive 'mcp-gee-sweet-shared' (id 0APfXAGTeZYz3Uk9PVA = SHARED_DRIVE_ID) with id, name, created_time, and non-empty capabilities dict (canAddChildren:true present).
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth).
 
 ---
 
@@ -1037,6 +1387,9 @@ fixture drive.
 **Result (2026-09-04) ✅ PASS**
 list_drives(query='name contains "Marketing"') → `[]`; list_drives(query='name contains "mcp-gee"') → exactly the SHARED_DRIVE_ID fixture drive.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Filter correct; "exactly one drive" wording is stale (a second mcp-gee* drive exists).
+
 ---
 
 ### TC-D122: max_results clamping
@@ -1058,6 +1411,9 @@ clamp-to-200 ceiling can't be exercised live with one drive; the clamp is inline
 **Result (2026-09-04) ✅ PASS**
 list_drives(max_results=0) → 1 drive (clamp-to-1, not []); list_drives(max_results=300) → 1 drive (clamp-to-200 ceiling not observable with a single drive — matches TC note).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth).
+
 ---
 
 ### TC-D123: Pagination across multiple pages — ⏭️ permanently skipped
@@ -1072,6 +1428,9 @@ run — it is a standing decision, not a transient gap.
 
 **Result (2026-09-04) ⏭️ SKIP**
 env — TEST_FOLDER_2_ID retired per #305. Standing decision (not a transient gap); pagination covered by unit test TestListDrives::test_follows_next_page_token_across_pages.
+
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+Standing unit-test-only (docs/qa/runs/README.md pre-approved list).
 
 ---
 
@@ -1093,6 +1452,9 @@ env — TEST_FOLDER_2_ID retired per #305. Standing decision (not a transient ga
 **Result (2026-09-04) ✅ PASS**
 list_shared_with_me() → `[]` cleanly, no error. The OAuth identity here is a Workspace-org QA account (kevin@mcpsuite.io, per get_storage_quota), which has no files shared directly with it — [] is a valid result, not a tool fault. Field/ordering checks vacuous. Aziz may want to seed a shared file to exercise the non-empty path.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth).
+
 ---
 
 ### TC-D153: Filter shared files by MIME type
@@ -1110,6 +1472,9 @@ list_shared_with_me() → `[]` cleanly, no error. The OAuth identity here is a W
 **Result (2026-09-04) ✅ PASS**
 list_shared_with_me(mime_type=spreadsheet) → `[]` cleanly. Same env characteristic as TC-D152.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth).
+
 ---
 
 ### TC-D154: Limit shared files with max_results
@@ -1126,6 +1491,9 @@ list_shared_with_me(mime_type=spreadsheet) → `[]` cleanly. Same env characteri
 
 **Result (2026-09-04) ✅ PASS**
 list_shared_with_me(max_results=3) → `[]` cleanly (≤3 trivially). Same env characteristic as TC-D152.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth).
 
 ---
 
@@ -1153,6 +1521,12 @@ call in the same try/except-returns-`{"error": ...}` pattern those tools already
 **Result (2026-09-04) ✅ PASS**
 list_shared_with_me(mime_type="it's a test") → `[]` cleanly, no HttpError 400. Backslash-escape + try/except regression fix (#494) confirmed.
 
+**Result (2026-09-21) ✅ PASS** — PR #780 (issue #578, extracted into shared `_list_drive_files` helper)
+list_shared_with_me(mime_type="it's a test") → `[]` cleanly, no HttpError 400. Regression fix survives the extraction.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth).
+
 ---
 
 ## `list_recent_files`
@@ -1172,6 +1546,9 @@ list_shared_with_me(mime_type="it's a test") → `[]` cleanly, no HttpError 400.
 **Result (2026-09-04) ✅ PASS**
 list_recent_files(max_results=10) → 10 items ordered by modified_time desc; each has id, name, mime_type, modified_time, web_link. Includes Shared Drive items.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth).
+
 ---
 
 ### TC-D157: Filter by days
@@ -1187,6 +1564,9 @@ list_recent_files(max_results=10) → 10 items ordered by modified_time desc; ea
 
 **Result (2026-09-04) ✅ PASS**
 list_recent_files(days=7) → all results modified 2026-09-04 (within 7 days), ordered desc.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth).
 
 ---
 
@@ -1204,6 +1584,9 @@ list_recent_files(days=7) → all results modified 2026-09-04 (within 7 days), o
 **Result (2026-09-04) ✅ PASS**
 list_recent_files(days=14, mime_type=spreadsheet) → all 10 results are application/vnd.google-apps.spreadsheet, all modified within 14 days.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth).
+
 ---
 
 ### TC-D159: max_results capped at 100
@@ -1215,6 +1598,9 @@ list_recent_files(days=14, mime_type=spreadsheet) → all 10 results are applica
 
 **Result (2026-09-04) ⏭️ SKIP**
 unit-test-only ("Checks (unit test)"): max_results=500 → pageSize=100. Covered by tests/drive/test_files.py; not live-runnable.
+
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+Standing unit-test-only (docs/qa/runs/README.md pre-approved list).
 
 ---
 
@@ -1240,6 +1626,12 @@ try/except-returns-`{"error": ...}` wrapping.
 **Result (2026-09-04) ✅ PASS**
 list_recent_files(mime_type="it's a test") → `[]` cleanly, no HttpError 400. Backslash-escape + try/except regression fix (#494 sibling) confirmed.
 
+**Result (2026-09-21) ✅ PASS** — PR #780 (issue #578, extracted into shared `_list_drive_files` helper)
+list_recent_files(mime_type="it's a test") → `[]` cleanly, no HttpError 400. Regression fix survives the extraction.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth).
+
 ---
 
 ## `get_storage_quota`
@@ -1260,6 +1652,9 @@ list_recent_files(mime_type="it's a test") → `[]` cleanly, no HttpError 400. B
 **Result (2026-09-04) ✅ PASS**
 get_storage_quota() → email "kevin@mcpsuite.io", display_name "Kevin Huisman", limit_bytes 32212254720 (int), usage_bytes 103061 (int), usage_in_drive_bytes 0 (int), usage_in_trash_bytes 0 (int). All byte fields integers; all keys present.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth).
+
 ---
 
 ### TC-D161: Fields requested include storageQuota and user
@@ -1273,6 +1668,9 @@ get_storage_quota() → email "kevin@mcpsuite.io", display_name "Kevin Huisman",
 **Result (2026-09-04) ⏭️ SKIP**
 unit-test-only ("Checks (unit test)"): fields arg includes storageQuota + user. Covered by unit test.
 
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+Standing unit-test-only (docs/qa/runs/README.md pre-approved list).
+
 ---
 
 ### TC-D162: Byte values are integers not strings
@@ -1285,6 +1683,9 @@ unit-test-only ("Checks (unit test)"): fields arg includes storageQuota + user. 
 
 **Result (2026-09-04) ⏭️ SKIP**
 unit-test-only ("Checks (unit test)"): byte values cast to int. Covered by unit test (and observed incidentally in TC-D160).
+
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+Standing unit-test-only (docs/qa/runs/README.md pre-approved list).
 
 ---
 
@@ -1304,6 +1705,9 @@ unit-test-only ("Checks (unit test)"): byte values cast to int. Covered by unit 
 **Result (2026-09-04) ✅ PASS**
 import_csv_to_sheet(/tmp/qa-import.csv → 'QA-CSV-Import' in FOLDER_ID) → spreadsheetId, exact title, web_link, rows_written=4. get_sheet_data returned `[["name","age"],["Alice","30"],["Bob","25"],["Carol","42"]]` — exact. Appears in list_files(FOLDER_ID) with no manual refresh — folder cache invalidated.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+import_csv_to_sheet; 12k-row import verified at every chunk boundary.
+
 ---
 
 ### TC-D170: Custom sheet_name renames the default sheet ⚠️ requires-oauth ⚠️ local-filesystem
@@ -1318,6 +1722,9 @@ import_csv_to_sheet(/tmp/qa-import.csv → 'QA-CSV-Import' in FOLDER_ID) → spr
 
 **Result (2026-09-04) ✅ PASS**
 import_csv_to_sheet(..., sheet_name="Imported Data") → list_sheets returned exactly `["Imported Data"]` — default 'Sheet1' renamed, not a 2nd sheet. Data present (rows_written=4).
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+import_csv_to_sheet; 12k-row import verified at every chunk boundary.
 
 ---
 
@@ -1335,6 +1742,9 @@ import_csv_to_sheet(..., sheet_name="Imported Data") → list_sheets returned ex
 **Result (2026-09-04) ✅ PASS**
 import_csv_to_sheet(1501-row CSV → 'QA-CSV-Large') → rows_written=1501, no grid-limit error. A1499:B1501 → rows 1498/1499/1500 present with correct labels; final data row (1500) not truncated at the 1000-row boundary.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+import_csv_to_sheet; 12k-row import verified at every chunk boundary.
+
 ---
 
 ### TC-D172: Ragged rows padded to a common width ⚠️ requires-oauth ⚠️ local-filesystem
@@ -1350,6 +1760,9 @@ import_csv_to_sheet(1501-row CSV → 'QA-CSV-Large') → rows_written=1501, no g
 **Result (2026-09-04) ✅ PASS**
 import_csv_to_sheet(ragged CSV a,b,c / 1,2 / 4,5,6) → rows_written=3. get_sheet_data `[["a","b","c"],["1","2"],["4","5","6"]]` — short middle row landed under a/b with no shift; third row not dropped.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+import_csv_to_sheet; 12k-row import verified at every chunk boundary.
+
 ---
 
 ### TC-D173: Non-existent local path (unit test)
@@ -1362,6 +1775,9 @@ import_csv_to_sheet(ragged CSV a,b,c / 1,2 / 4,5,6) → rows_written=3. get_shee
 **Result (2026-09-04) ✅ PASS**
 import_csv_to_sheet('/tmp/does-not-exist-qa.csv') → `{"error":"File not found: /tmp/does-not-exist-qa.csv"}` — mentions the path, returns before any Drive API call. (Ran live; unit-test equivalent test_file_not_found_returns_error.)
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+import_csv_to_sheet; 12k-row import verified at every chunk boundary.
+
 ---
 
 ### TC-D174: Non-.csv extension rejected (unit test)
@@ -1373,6 +1789,9 @@ import_csv_to_sheet('/tmp/does-not-exist-qa.csv') → `{"error":"File not found:
 
 **Result (2026-09-04) ✅ PASS**
 import_csv_to_sheet('/tmp/qa-not-csv.txt') → `{"error":"Unsupported file extension '.txt'. Use .csv"}` — mentions .csv, no Drive API call. (Ran live; unit-test equivalent test_unsupported_extension_returns_error.)
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+import_csv_to_sheet; 12k-row import verified at every chunk boundary.
 
 ---
 
@@ -1393,6 +1812,9 @@ import_csv_to_sheet('/tmp/qa-not-csv.txt') → `{"error":"Unsupported file exten
 
 **Result (2026-09-04) ⏭️ SKIP**
 needs SA prefix + personal-Drive destination folder; Aziz to run. On OAuth (sky) with no personal-Drive folder the SA lacks quota for. Unit test test_storage_quota_error_returns_helpful_message covers the error path.
+
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+Environmental: needs the SA identity plus a personal-Drive folder / a Content-manager SA.
 
 ---
 
@@ -1416,6 +1838,30 @@ Delete the `QA-CSV-Concurrent-183` spreadsheet.
 
 **Result (2026-09-04) ✅ PASS**
 import_csv_to_sheet(12001-row CSV → 'QA-CSV-Concurrent-183') → rows_written=12001, no error. Boundary spot-checks: A2=row-1; A5000..A5003=row-4999/5000/5001/5002; A10000..A10003=row-9999/10000/10001/10002; A12001=row-12000. Every marker matches its expected row number — no chunk landed at a wrong offset, no overlap, no gaps across the 3 concurrent 5000/5000/2000-row chunks.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+import_csv_to_sheet; 12k-row import verified at every chunk boundary.
+
+---
+
+### TC-D257: `import_csv_to_sheet` emits `notifications/progress` updates as each row chunk completes ⚠️ requires-oauth ⚠️ local-filesystem (issue #355)
+
+**Background:** #355 extends #316/#319's per-item `ctx.report_progress()` pattern (originally added to `download_folder`/`sync_folder` — see TC-D199) to `import_csv_to_sheet`'s concurrent chunk writes (the same concurrent loop TC-D179 stress-tests for correctness): `ctx.report_progress(completed, total_chunks, f"rows {start}-{end}: {outcome}")` fires from inside each chunk's own coroutine as its write finishes, wrapped in try/except so a broken notification channel can't demote an already-successful write. Unit-tested against a mocked `ctx` in `tests/drive/test_files.py::TestImportCsvToSheet::test_reports_progress_per_chunk`/`test_report_progress_failure_does_not_demote_a_successful_chunk`.
+
+**Note:** Same protocol-level caveat as TC-D199 — `notifications/progress` isn't part of the tool's JSON response, so visibility depends on whether this QA client sets a `progressToken`. If it doesn't, this check can only confirm the call still completes normally with the new `ctx.report_progress(...)` call path in place.
+
+**Prompt**
+> "Import `/tmp/qa-import-355.csv` into a new spreadsheet called 'QA-CSV-Progress-355'" *(a small CSV, e.g. header + 3 rows, is enough — this checks that progress reporting doesn't break the call, not chunk-boundary correctness, already covered by TC-D179)*
+
+**Checks**
+- Call completes normally, `rows_written` matches the CSV's row count, no error
+- If progress notifications are visible in the client: at least one discrete update appears per chunk written
+
+**Teardown**
+Delete the `QA-CSV-Progress-355` spreadsheet.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 1 (kai-oauth).
 
 ---
 
@@ -1442,6 +1888,9 @@ import_csv_to_sheet(12001-row CSV → 'QA-CSV-Concurrent-183') → rows_written=
 **Result (2026-09-04) ✅ PASS**
 Created 'QA-Shortcut-Target' spreadsheet in FOLDER_ID; create_shortcut('QA-Shortcut-Explicit', folder=FOLDER_ID) → `{shortcutId, name:'QA-Shortcut-Explicit', parent:FOLDER_ID, targetId matches target, targetMimeType:'application/vnd.google-apps.spreadsheet'}`, no error. list_files(FOLDER_ID, mime_type=shortcut) shows it.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+create_shortcut cases matched.
+
 ---
 
 ### TC-D207: Omitted name defaults to the target file's own name ⚠️ requires-oauth ⚠️ destructive
@@ -1462,6 +1911,9 @@ Created 'QA-Shortcut-Target' spreadsheet in FOLDER_ID; create_shortcut('QA-Short
 
 **Result (2026-09-04) ✅ PASS**
 create_shortcut(target='QA-Shortcut-NameSource', no name) → `{name:'QA-Shortcut-NameSource', targetId matches, ...}` — defaults to the target's own name, not 'Untitled'/blank.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+create_shortcut cases matched.
 
 ---
 
@@ -1484,6 +1936,9 @@ create_shortcut(target='QA-Shortcut-NameSource', no name) → `{name:'QA-Shortcu
 **Result (2026-09-04) ✅ PASS**
 create_shortcut(target in FOLDER_ID, no folder_id) → `{parent:"0APfXAGTeZYz3Uk9PVA", ...}` = DRIVE_FOLDER_ID (Shared Drive root) = the server's actual configured default folder. TC parenthetical "({FOLDER_ID} in this fixture setup)" is stale post-#680/#305 — behavior is correct and consistent with create_folder/create_spreadsheet (TC-D58/D59). Shortcut is in the root, not FOLDER_ID.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Parent is DRIVE_FOLDER_ID; the "({FOLDER_ID})" parenthetical is stale.
+
 ---
 
 ### TC-D209: Non-existent target file ID
@@ -1500,5 +1955,8 @@ create_shortcut(target in FOLDER_ID, no folder_id) → `{parent:"0APfXAGTeZYz3Uk
 
 **Result (2026-09-04) ✅ PASS**
 create_shortcut(target='invalidid123xyz', folder=FOLDER_ID, name='QA-Shortcut-Bad') → HttpError 404 "File not found: invalidid123xyz." propagates cleanly, names the bad ID, no crash. list_files(FOLDER_ID, mime_type=shortcut) shows no 'QA-Shortcut-Bad' — nothing left behind.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+create_shortcut cases matched.
 
 ---

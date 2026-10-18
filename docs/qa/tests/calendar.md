@@ -25,6 +25,9 @@ Fixtures: see [`docs/qa/setup.md`](../setup.md). Substitute your `{CALENDAR_ID}`
 **Result (2026-09-04) ✅ PASS**
 list_calendars returned [] initially (SA has zero subscriptions); after create_calendar it returns 1 entry with id/summary/time_zone/access_role/primary. Fixture {CALENDAR_ID} not shared with SA so used SA-owned cal.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL02: primary flag
@@ -40,6 +43,9 @@ list_calendars returned [] initially (SA has zero subscriptions); after create_c
 **Result (2026-09-04) ✅ PASS**
 No calendar has primary:true; SACAL primary:false. Matches 🔍 SA note "service accounts may have no primary calendar".
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL03: Cache hit on second call
@@ -53,6 +59,9 @@ No calendar has primary:true; SACAL primary:false. Matches 🔍 SA note "service
 
 **Result (2026-09-04) ✅ PASS**
 Two list_calendars calls returned byte-identical results. Cache-hit log not observable from this harness.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -69,6 +78,9 @@ Two list_calendars calls returned byte-identical results. Cache-hit log not obse
 
 **Result (2026-09-04) ✅ PASS**
 First-ever list_calendars (before any subscription) returned {"result":[]} — empty list, not an error. Matches TC-CAL04 (normally hard to test).
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -87,6 +99,9 @@ First-ever list_calendars (before any subscription) returned {"result":[]} — e
 **Result (2026-09-04) ✅ PASS**
 No (shape matches)
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL06: calendar_id='primary'
@@ -100,6 +115,9 @@ No (shape matches)
 
 **Result (2026-09-04) ✅ PASS**
 get_calendar('primary') -> {"error":"HttpError 404 ... notFound"}. Matches 🔍 SA note "service accounts may not have a primary calendar; expect error".
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -115,6 +133,9 @@ get_calendar('primary') -> {"error":"HttpError 404 ... notFound"}. Matches 🔍 
 **Result (2026-09-04) ✅ PASS**
 Two get_calendar calls on SACAL returned identical results. Cache-hit log not observable. Fixture-ID variant 404s under SA.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL08: Non-existent calendar ID
@@ -128,6 +149,9 @@ Two get_calendar calls on SACAL returned identical results. Cache-hit log not ob
 
 **Result (2026-09-04) ✅ PASS**
 get_calendar('totally-invalid-cal-id@example.com') -> {"error":"<HttpError 404 ... 'reason': 'notFound' ...>"}, not a top-level exception.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -149,6 +173,9 @@ get_calendar('totally-invalid-cal-id@example.com') -> {"error":"<HttpError 404 .
 **Result (2026-09-04) ✅ PASS**
 create_calendar -> id, summary=mcp-gee-sweet-qa-lifecycle-test, description="QA scratch calendar", time_zone=America/Los_Angeles. Appeared in follow-up list_calendars (cache invalidated). SA CAN own calendars. SACAL id b9e74820...a4313@group.calendar.google.com
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL45: Create with only summary
@@ -165,6 +192,9 @@ create_calendar -> id, summary=mcp-gee-sweet-qa-lifecycle-test, description="QA 
 
 **Result (2026-09-04) ✅ PASS**
 create_calendar summary-only -> id, summary=mcp-gee-sweet-qa-minimal, description=null, time_zone="UTC" (account default). MINCAL id 41a5983c...30c1@group.calendar.google.com
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -188,6 +218,9 @@ create_calendar summary-only -> id, summary=mcp-gee-sweet-qa-minimal, descriptio
 **Result (2026-09-04) ✅ PASS**
 update_calendar summary+timezone on SACAL -> summary=mcp-gee-sweet-qa-renamed, time_zone=America/New_York, description unchanged. get_calendar confirms new values.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL47: Change color only ⚠️ destructive
@@ -207,6 +240,9 @@ update_calendar summary+timezone on SACAL -> summary=mcp-gee-sweet-qa-renamed, t
 **Result (2026-09-04) ✅ PASS**
 update_calendar color_id="5" only -> response color_id="5"; summary/description/time_zone unchanged from CAL46. Color routed via calendarList().patch().
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL48: No fields provided
@@ -224,6 +260,9 @@ update_calendar color_id="5" only -> response color_id="5"; summary/description/
 **Result (2026-09-04) ✅ PASS**
 update_calendar with no fields on SACAL -> current metadata unchanged, color_id=null (no-op path uses calendars().get(), no patch), no API error.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL49: Non-existent calendar ID
@@ -238,6 +277,9 @@ update_calendar with no fields on SACAL -> current metadata unchanged, color_id=
 
 **Result (2026-09-04) ✅ PASS**
 update_calendar on invalid ID -> {"error":"<HttpError 404 ... notFound ...>"}, no top-level exception.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -260,6 +302,9 @@ update_calendar on invalid ID -> {"error":"<HttpError 404 ... notFound ...>"}, n
 **Result (2026-09-04) ✅ PASS**
 delete_calendar SACAL -> {"calendar_id":...,"action":"deleted"}. Absent from follow-up list_calendars (now []). get_calendar on deleted ID -> HttpError 404 notFound.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL51: Delete the minimal test calendar ⚠️ destructive
@@ -278,6 +323,9 @@ delete_calendar SACAL -> {"calendar_id":...,"action":"deleted"}. Absent from fol
 **Result (2026-09-04) ✅ PASS**
 delete_calendar MINCAL -> {"calendar_id":...,"action":"deleted"}. list_calendars now [] — fixture cleaned up.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL52: Non-existent calendar ID
@@ -293,6 +341,9 @@ delete_calendar MINCAL -> {"calendar_id":...,"action":"deleted"}. list_calendars
 
 **Result (2026-09-04) ✅ PASS**
 delete_calendar 'totally-invalid-cal-id@example.com' -> {"error":"<HttpError 404 ... notFound ...>"}, not a top-level exception, no side effects.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -316,6 +367,9 @@ delete_calendar 'totally-invalid-cal-id@example.com' -> {"error":"<HttpError 404
 **Result (2026-09-04) ✅ PASS**
 add_calendar_to_list en.japanese#holiday -> id/summary="Holidays in Japan"/time_zone/access_role="reader"/primary=false/color_id="8". Present in follow-up list_calendars.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL54: Subscribe with a color ⚠️ destructive
@@ -334,6 +388,9 @@ add_calendar_to_list en.japanese#holiday -> id/summary="Holidays in Japan"/time_
 **Result (2026-09-04) ✅ PASS**
 add_calendar_to_list en.canadian#holiday color_id="7" -> color_id="7", summary="Holidays in Canada". Present in list_calendars.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL55: Non-existent calendar ID
@@ -349,6 +406,9 @@ add_calendar_to_list en.canadian#holiday color_id="7" -> color_id="7", summary="
 
 **Result (2026-09-04) ✅ PASS**
 add_calendar_to_list invalid ID -> {"error":"<HttpError 404 ... notFound ...>"}, no top-level exception; no entry added.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -370,6 +430,9 @@ add_calendar_to_list invalid ID -> {"error":"<HttpError 404 ... notFound ...>"},
 **Result (2026-09-04) ✅ PASS**
 remove_calendar_from_list en.japanese#holiday -> {"calendar_id":...,"action":"removed_from_list"}. Absent from follow-up list_calendars; Canada subscription retained.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL57: Unsubscribing does not delete the calendar ⚠️ destructive
@@ -388,6 +451,9 @@ remove_calendar_from_list en.japanese#holiday -> {"calendar_id":...,"action":"re
 **Result (2026-09-04) ✅ PASS**
 Re-subscribed to en.japanese#holiday -> identical summary "Holidays in Japan". Confirms remove_calendar_from_list left calendar resource untouched.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL58: Non-existent calendar ID
@@ -404,6 +470,9 @@ Re-subscribed to en.japanese#holiday -> identical summary "Holidays in Japan". C
 **Result (2026-09-04) ✅ PASS**
 remove_calendar_from_list invalid ID -> {"error":"<HttpError 404 ... notFound ...>"}, no top-level exception, no side effects.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL59: Cannot unsubscribe from a calendar you own
@@ -419,8 +488,15 @@ remove_calendar_from_list invalid ID -> {"error":"<HttpError 404 ... notFound ..
 
 **Result (2026-07-05) ✅** — First pass (before the friendly-message special-case was added) returned the raw passthrough: `{"error": "<HttpError 403 ... 'reason': 'cannotUnsubscribeFromOwnedCalendar', 'message': 'The data owner of a calendar cannot remove such a calendar from their calendar list.' ...>"}`. After adding the special-case (reviewer feedback on #269), re-ran against a freshly created owned calendar and got `{"error": "Google does not allow removing a calendar you own from your own calendar list (reason: cannotUnsubscribeFromOwnedCalendar). Use delete_calendar instead to permanently delete it."}` — confirms the friendlier message is live and correctly names the fix.
 
+**Result (2026-10-05) ✅ PASS** (PR #912 round 2, Kit). Regression check after `remove_calendar_from_list` moved onto the shared `_http_error_has_reason`, which matches the quoted reason. On a freshly created owned calendar it still returns the `cannotUnsubscribeFromOwnedCalendar` message naming `delete_calendar`.
+
 **Result (2026-09-04) ✅ PASS**
 remove_calendar_from_list on SA-owned MINCAL -> {"error":"Google does not allow removing a calendar you own from your own calendar list (reason: cannotUnsubscribeFromOwnedCalendar). Use delete_calendar instead to permanently delete it."} — friendly, actionable, names delete_calendar.
+
+**Result (2026-10-12) ✅ PASS** (PR #1011 round 1, Sky, against `1a8053e` after a fresh reconnect). Regression check after `remove_calendar_from_list` moved onto the shared `http_error_has_reason` in `tools/http_errors.py` (#916). On a freshly created owned calendar it still returns the `cannotUnsubscribeFromOwnedCalendar` message naming `delete_calendar`.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -440,6 +516,9 @@ remove_calendar_from_list on SA-owned MINCAL -> {"error":"Google does not allow 
 **Result (2026-09-04) ✅ PASS**
 No (same shape, different rule count since real fixture is narrowly shared)
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL61: Non-existent calendar ID
@@ -454,6 +533,9 @@ No (same shape, different rule count since real fixture is narrowly shared)
 
 **Result (2026-09-04) ✅ PASS**
 list_calendar_acl(invalid id) -> [{"error":"<HttpError 404 ... notFound ...>"}], not a top-level exception.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -473,6 +555,9 @@ list_calendar_acl(invalid id) -> [{"error":"<HttpError 404 ... notFound ...>"}],
 
 **Result (2026-09-04) ⏭️ SKIP**
 No calendar in reach has 100+ ACL rules (SA owns 2 fresh calendars only). Covered by unit test test_calendar.py::TestListCalendarAcl::test_follows_next_page_token_across_pages. Same as prior runs.
+
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+No calendar with 100+ ACL rules; the unit test passes.
 
 ---
 
@@ -496,6 +581,9 @@ No calendar in reach has 100+ ACL rules (SA owns 2 fresh calendars only). Covere
 **Result (2026-09-04) ✅ PASS**
 No
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL63: Add a public (default-scope) rule ⚠️ destructive
@@ -515,6 +603,9 @@ No
 **Result (2026-09-04) ✅ PASS**
 add_calendar_acl freeBusyReader/default, no scope_value on SACAL -> id="default", role=freeBusyReader, scope_type=default, scope_value="__public_principal__@public.calendar.google.com" (documented API sentinel; matches corrected expectation). Rule removed in cleanup.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL77: scope_value rejected when scope_type is 'default' (issue #458)
@@ -532,6 +623,9 @@ add_calendar_acl freeBusyReader/default, no scope_value on SACAL -> id="default"
 **Result (2026-09-04) ✅ PASS**
 add_calendar_acl default + scope_value="someone@example.com" -> {"error":"scope_value must not be set when scope_type is 'default'."} Names scope_value and 'default'. No rule added (validation short-circuits before API).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL64: Invalid role rejected without calling the API
@@ -547,6 +641,9 @@ add_calendar_acl default + scope_value="someone@example.com" -> {"error":"scope_
 
 **Result (2026-09-04) ✅ PASS**
 add_calendar_acl role="admin" -> {"error":"Invalid role 'admin'. Must be one of: reader, writer, owner, freeBusyReader"} — names invalid role + lists valid ones. No rule added (confirmed via later list_calendar_acl).
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -564,6 +661,9 @@ add_calendar_acl role="admin" -> {"error":"Invalid role 'admin'. Must be one of:
 **Result (2026-09-04) ✅ PASS**
 add_calendar_acl scope_type="user", no scope_value -> {"error":"scope_value is required when scope_type is 'user'."} No rule added.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL66: Non-existent calendar ID
@@ -578,6 +678,9 @@ add_calendar_acl scope_type="user", no scope_value -> {"error":"scope_value is r
 
 **Result (2026-09-04) ✅ PASS**
 add_calendar_acl on invalid calendar ID -> {"error":"<HttpError 404 ... notFound ...>"}, not a top-level exception.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -599,6 +702,9 @@ add_calendar_acl on invalid calendar ID -> {"error":"<HttpError 404 ... notFound
 **Result (2026-09-04) ✅ PASS**
 No
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL68: Non-existent rule ID
@@ -613,6 +719,9 @@ No
 
 **Result (2026-09-04) ✅ PASS**
 remove_calendar_acl rule_id="totally-invalid-rule-id" -> {"error":"<HttpError 400 ... 'Invalid resource id value.' ...>"}, not a top-level exception.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -631,6 +740,9 @@ remove_calendar_acl rule_id="totally-invalid-rule-id" -> {"error":"<HttpError 40
 **Result (2026-09-04) ✅ PASS**
 list_events no time filter on SACAL -> {"result":[]} (all seeded events are before "now" 2026-09-04, correctly excluded — confirms default time_min=now, no past events). Field/ordering checks validated via July-windowed call: 3 events correctly ordered by start, each with id/summary/start/end/status.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL10: time_min + time_max window
@@ -646,6 +758,9 @@ list_events no time filter on SACAL -> {"result":[]} (all seeded events are befo
 **Result (2026-09-04) ✅ PASS**
 list_events 2026-06-01..2026-06-30 window -> {"result":[]} — July events absent, empty not an error.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL11: query string search
@@ -660,6 +775,9 @@ list_events 2026-06-01..2026-06-30 window -> {"result":[]} — July events absen
 
 **Result (2026-09-04) ✅ PASS**
 list_events query="dinner" -> {"result":[]} — no matches, empty not an error.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -677,6 +795,9 @@ list_events query="dinner" -> {"result":[]} — no matches, empty not an error.
 **Result (2026-09-04) ✅ PASS**
 QA-AllDay-Test in list_events: start="2026-07-02", end="2026-07-03" — date strings, no "T"/offset. Confirms date field used.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL13: Timed event format
@@ -690,6 +811,9 @@ QA-AllDay-Test in list_events: start="2026-07-02", end="2026-07-03" — date str
 
 **Result (2026-09-04) ✅ PASS**
 QA-Timed-Test in list_events: start="2026-07-01T13:00:00-04:00" — contains "T", has timezone offset.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -705,6 +829,9 @@ QA-Timed-Test in list_events: start="2026-07-01T13:00:00-04:00" — contains "T"
 **Result (2026-09-04) ✅ PASS**
 max_results=0 -> exactly 1 event returned (clamped to 1). max_results=3000 -> all 3 events, no error (<=2500; exact 2500 cap not reproducible w/o 2500+ events).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL15: Non-existent calendar ID
@@ -718,6 +845,9 @@ max_results=0 -> exactly 1 event returned (clamped to 1). max_results=3000 -> al
 
 **Result (2026-09-04) ✅ PASS**
 list_events on 'invalid-cal-id@example.com' -> [{"error":"<HttpError 404 ... notFound ...>"}], not a top-level exception, message from Calendar API.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -738,6 +868,9 @@ list_events on 'invalid-cal-id@example.com' -> [{"error":"<HttpError 404 ... not
 **Result (2026-09-04) ✅ PASS**
 No — confirms same organizer-is-calendar-ID finding on the real fixture
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL17: Attendees populated
@@ -753,6 +886,9 @@ No — confirms same organizer-is-calendar-ID finding on the real fixture
 
 **Result (2026-09-04) ✅ PASS**
 **YES** — SA SKIPped (couldn't invite attendees); OAuth succeeds cleanly
+
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+create_event with attendees gives 403 forbiddenForServiceAccounts under SA.
 
 ---
 
@@ -770,6 +906,9 @@ No — confirms same organizer-is-calendar-ID finding on the real fixture
 **Result (2026-09-04) ✅ PASS**
 Instance get_event (dmp5oe7...q_20260713T160000Z) -> recurrence: null. Master get_event -> recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=MO"] (non-null list). One-off QA-OneOff -> recurrence: null.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL19: Non-existent event ID
@@ -783,6 +922,9 @@ Instance get_event (dmp5oe7...q_20260713T160000Z) -> recurrence: null. Master ge
 
 **Result (2026-09-04) ✅ PASS**
 get_event event_id='invalidEventId999xyz' -> {"error":"<HttpError 404 ... notFound ...>"}, not a top-level exception; URL/message references the bad event ID.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -804,6 +946,9 @@ get_event event_id='invalidEventId999xyz' -> {"error":"<HttpError 404 ... notFou
 **Result (2026-09-04) ✅ PASS**
 create_event timed on SACAL -> id, start/end RFC3339 w/ offset (2026-07-01T13:00:00-04:00, rendered in cal tz America/New_York = 10-11am PT), html_link present, status=confirmed, recurrence=null. Follow-up windowed list_events re-fetched and showed it (mark_dirty proxy). Playwright: OAuth-logged-in browser cannot see SA-owned-calendar events (cal not shared to/listed by OAuth user) — API used per shard fallback. EVENT_TIMED=dcfqjj57pv7kb1tpee7e61v65c
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+API checks pass; the Playwright step was skipped (the fixture-owner browser can't see SA-owned calendars).
+
 ---
 
 ### TC-CAL21: All-day event ⚠️ destructive
@@ -819,6 +964,9 @@ create_event timed on SACAL -> id, start/end RFC3339 w/ offset (2026-07-01T13:00
 
 **Result (2026-09-04) ✅ PASS**
 create_event all-day -> start="2026-07-02", end="2026-07-03", no "T" (date fields). Appears in windowed list_events for that day. EVENT_ALLDAY=9m4dfmdjnjl9742ui2hnt7oqm8
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+API checks pass; the Playwright step was skipped (the fixture-owner browser can't see SA-owned calendars).
 
 ---
 
@@ -837,6 +985,9 @@ create_event all-day -> start="2026-07-02", end="2026-07-03", no "T" (date field
 **Result (2026-09-04) ✅ PASS**
 **YES** — SA got `403 forbiddenForServiceAccounts`; OAuth succeeds cleanly, verified live + Playwright
 
+**Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
+create_event with attendees gives 403 forbiddenForServiceAccounts under SA.
+
 ---
 
 ### TC-CAL23: Invalid calendar ID
@@ -850,6 +1001,9 @@ create_event all-day -> start="2026-07-02", end="2026-07-03", no "T" (date field
 
 **Result (2026-09-04) ✅ PASS**
 create_event on 'invalid-cal@example.com' -> {"error":"<HttpError 404 ... notFound ...>"}, no event created.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+API checks pass; the Playwright step was skipped (the fixture-owner browser can't see SA-owned calendars).
 
 ---
 
@@ -869,6 +1023,9 @@ create_event on 'invalid-cal@example.com' -> {"error":"<HttpError 404 ... notFou
 **Result (2026-09-04) ✅ PASS**
 update_event summary -> "QA-Timed-Updated"; start/end unchanged (13:00-14:00-04:00); location/description still null.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+API checks pass; the Playwright step was skipped (the fixture-owner browser can't see SA-owned calendars).
+
 ---
 
 ### TC-CAL25: Update start and end ⚠️ destructive
@@ -883,6 +1040,9 @@ update_event summary -> "QA-Timed-Updated"; start/end unchanged (13:00-14:00-04:
 
 **Result (2026-09-04) ✅ PASS**
 update_event start/end -> 17:00-18:00-04:00 (2pm-3pm PT); summary unchanged.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+API checks pass; the Playwright step was skipped (the fixture-owner browser can't see SA-owned calendars).
 
 ---
 
@@ -900,6 +1060,9 @@ update_event start/end -> 17:00-18:00-04:00 (2pm-3pm PT); summary unchanged.
 **Result (2026-09-04) ✅ PASS**
 update_event description="Updated desc", location="Room B". get_event confirms both; summary ("QA-Full-Test") and attendees ([]) unchanged.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+API checks pass; the Playwright step was skipped (the fixture-owner browser can't see SA-owned calendars).
+
 ---
 
 ### TC-CAL27: Non-existent event ID
@@ -912,6 +1075,9 @@ update_event description="Updated desc", location="Room B". get_event confirms b
 
 **Result (2026-09-04) ✅ PASS**
 update_event on 'invalidEventId999xyz' -> {"error":"<HttpError 404 ... notFound ...>"}, not a top-level exception.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+API checks pass; the Playwright step was skipped (the fixture-owner browser can't see SA-owned calendars).
 
 ---
 
@@ -931,6 +1097,9 @@ update_event on 'invalidEventId999xyz' -> {"error":"<HttpError 404 ... notFound 
 **Result (2026-09-04) ✅ PASS**
 delete_event -> {"calendar_id":...,"event_id":"9m4dfmdjnjl9742ui2hnt7oqm8","action":"deleted"}. Absent from follow-up windowed list_events (empty).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+API checks pass; the Playwright step was skipped (the fixture-owner browser can't see SA-owned calendars).
+
 ---
 
 ### TC-CAL29: Non-existent event ID
@@ -944,6 +1113,9 @@ delete_event -> {"calendar_id":...,"event_id":"9m4dfmdjnjl9742ui2hnt7oqm8","acti
 
 **Result (2026-09-04) ✅ PASS**
 delete_event on 'invalidEventId999xyz' -> {"error":"<HttpError 404 ... notFound ...>"}, not a top-level exception, no side effects.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+API checks pass; the Playwright step was skipped (the fixture-owner browser can't see SA-owned calendars).
 
 ---
 
@@ -961,6 +1133,9 @@ delete_event on 'invalidEventId999xyz' -> {"error":"<HttpError 404 ... notFound 
 **Result (2026-09-04) ✅ PASS**
 find_free_slots SACAL 2026-07-04 full-day, no events -> busy[SACAL]=[], free_slots=[{2026-07-04T00:00:00Z .. 2026-07-04T23:59:59Z}] (whole window one slot).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL31: Single calendar — events in window
@@ -975,6 +1150,9 @@ find_free_slots SACAL 2026-07-04 full-day, no events -> busy[SACAL]=[], free_slo
 
 **Result (2026-09-04) ✅ PASS**
 find_free_slots SACAL 2026-07-01 16:00-00:00Z (9am-5pm PT) -> busy[SACAL]=[{21:00:00Z..22:00:00Z}] (the CAL25 event); free_slots gaps before {16:00-21:00Z} and after {22:00-00:00Z}, all RFC3339.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -993,20 +1171,29 @@ find_free_slots SACAL 2026-07-01 16:00-00:00Z (9am-5pm PT) -> busy[SACAL]=[{21:0
 **Result (2026-09-04) ✅ PASS**
 find_free_slots [SACAL, MINCAL] same window -> busy has a key per calendar; MINCAL busy=[] (no events, no error); free_slots = union (only SACAL busy considered).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
-### TC-CAL33: Invalid calendar ID in list
+### TC-CAL33: Invalid calendar ID in list (issue #691: error shape aligned with list_all_events)
+
+**Background:** originally `busy["invalid-cal@example.com"]` was a bare `[{"error": "notFound"}]` — just the freebusy API's `reason` string, no `calendar_id`/`calendar_summary`, unlike `list_all_events`'s per-calendar error entry for the identical failure (`{calendar_id, calendar_summary, error}`). Fixed by aligning the shape: `calendar_id` and `calendar_summary` (falling back to the id when the calendar isn't in the user's calendar list) are now included, and `error` also folds in the API's `domain` when present (`"<reason> (<domain>)"`).
 
 **Prompt**
 > "Find free slots for calendars [{CALENDAR_ID}, 'invalid-cal@example.com'] for the next hour"
 
 **Checks**
-- `busy["invalid-cal@example.com"]` contains an `error` entry (Calendar API errors-per-calendar)
+- `busy["invalid-cal@example.com"]` is `[{"calendar_id": "invalid-cal@example.com", "calendar_summary": "invalid-cal@example.com", "error": "notFound"}]` (or `"notFound (<domain>)"` if the API includes a domain) — not a bare `{"error": "notFound"}`
 - `busy[{CALENDAR_ID}]` is still populated correctly
 - Top-level response is not an error — partial results returned
 
-**Result (2026-09-04) ✅ PASS**
-find_free_slots [SACAL, 'invalid-cal@example.com'] -> busy["invalid-cal@example.com"]=[{"error":"notFound"}], busy[SACAL] still populated, top-level not an error (partial results).
+**Result (2026-09-10) ✅ PASS (re-verified under #691's richer error shape)** — verified live via `mcp-gee-sweet-kit`: `find_free_slots([{qa-cal}, "invalid-cal@example.com"], next hour)` → `busy["invalid-cal@example.com"] == [{"calendar_id": "invalid-cal@example.com", "calendar_summary": "invalid-cal@example.com", "error": "notFound (global)"}]` (id-fallback summary, since the invalid id is never in the calendar list — matches `list_all_events`' behavior for a not-in-list calendar); `busy[{qa-cal}] == []` (correctly populated, empty); top-level response not an error, `free_slots` covers the full window (partial results).
+
+_Prior run (2026-09-04), before the fix:_ find_free_slots [SACAL, 'invalid-cal@example.com'] -> busy["invalid-cal@example.com"]=[{"error":"notFound"}], busy[SACAL] still populated, top-level not an error (partial results).
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -1021,6 +1208,9 @@ find_free_slots [SACAL, 'invalid-cal@example.com'] -> busy["invalid-cal@example.
 
 **Result (2026-09-04) ✅ PASS**
 find_free_slots SACAL 2026-07-10T00:00:00Z..01:00:00Z, no events -> free_slots exactly [{"start":"2026-07-10T00:00:00Z","end":"2026-07-10T01:00:00Z"}].
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -1038,6 +1228,155 @@ find_free_slots SACAL 2026-07-10T00:00:00Z..01:00:00Z, no events -> free_slots e
 
 **Result (2026-09-04) ✅ PASS**
 Two adjacent events (14:00-15:00Z, 15:00-16:00Z) -> busy merged to single {14:00:00Z..16:00:00Z}; free_slots {13:00-14:00Z} and {16:00-17:00Z}, no zero/negative gap between. Interval-merge confirmed. (adjacent events cleaned up)
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
+---
+
+### TC-CAL78: find_free_slots error shape — summary fallback and no extra API call on the happy path (issue #691) (unit test)
+
+**Background:** two invariants of the #691 fix (TC-CAL33 covers the headline shape change) that aren't reliably distinguishable live: (1) `calendar_summary` in the error entry comes from the user's own `calendar_cache`-backed calendar list, falling back to the bare `calendar_id` only when that calendar isn't in the list — TC-CAL33's `invalid-cal@example.com` is never in the list either way, so it can't tell "summary looked up and happened to equal the id" apart from "lookup never ran"; and (2) the summary lookup is gated on at least one calendar actually erroring, so an all-readable `find_free_slots` call costs exactly one API call (the freebusy query), same as before the fix — not reliably forceable against the live API without mocking the calendar-list call to prove it was (or wasn't) made. Verified by unit test instead.
+
+**Checks (unit test)**
+- `tests/test_calendar.py::TestFindFreeSlots::test_unreadable_calendar_reports_full_error_shape` — a calendar list containing the erroring id's real summary ("Team Cal") produces `busy["cal-2"] == [{"calendar_id": "cal-2", "calendar_summary": "Team Cal", "error": "notFound (global)"}]` — the summary is genuinely looked up, not just echoing the id.
+- `tests/test_calendar.py::TestFindFreeSlots::test_error_shape_summary_falls_back_to_id_when_calendar_not_in_list` — the same failure with the erroring id absent from the calendar list falls back to `calendar_summary == "cal-2"`.
+- `tests/test_calendar.py::TestFindFreeSlots::test_summary_fetch_failure_does_not_break_find_free_slots` — a calendar-list fetch that itself raises still returns the error entry (id-fallback summary), proving the best-effort lookup can never turn a working `find_free_slots` call into a failing one.
+- `tests/test_calendar.py::TestFindFreeSlots::test_all_readable_path_never_fetches_the_calendar_list` — with every calendar readable, `calendar_cache.get_list` and `calendarList().list()` are both asserted not called — the happy path stays a single API call.
+
+**Result (2026-09-10) ✅ PASS** — `tests/test_calendar.py -k TestFindFreeSlots` — 9 passed, including all 4 cited cases. `/code-review high origin/develop...HEAD` surfaced 2 non-blocking findings, neither exercised by these invariants: `summary_by_id`'s `c.get("summary") or c["id"]` (this fix) falls back to the id on a falsy *or empty-string* summary, while `list_all_events`' equivalent (`calendar.py:981`) only falls back on a *missing* key — a calendar with a genuinely empty-string `summary` would report differently between the two tools, contradicting the docstring's "same shape" claim for that edge case; and the id→summary lookup is duplicated rather than shared between the two tools. Neither affects correctness for a real (non-empty-string) summary. Filed as follow-up #726.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
+---
+
+### TC-CAL79: Changing or removing either unchangeable ACL rule returns an actionable error (issue #459) ⚠️ destructive
+
+**Background:** a secondary calendar's ACL holds two `owner` rules that no one can change. Any `acl().delete()` or `acl().insert()` touching them returns a 403, even a no-op re-grant of `owner`; both were confirmed live on 2026-10-05.
+- The primary-owner rule, `user:<calendar_id>`, returns `cannotChangeOwnerAcl` ("Cannot change the access level of calendars primary owner.").
+- The authenticated account's own rule, `user:<account email>`, returns `cannotChangeOwnAcl` ("Cannot change your own access level.").
+
+Before #459 both tools returned the raw `HttpError` string; they now return a message naming the restriction, like `remove_calendar_from_list`'s `cannotUnsubscribeFromOwnedCalendar` handling (TC-CAL59). Only `remove_calendar_acl`'s primary-owner message points at `delete_calendar`. An insert that tried to change a grant is never told to delete the calendar (PR #912 QA round 1).
+
+**Setup:** create a disposable calendar with `create_calendar(summary="QA-OwnerAcl")`; call it `{OWNER_TEST_CAL}`. Call `list_calendar_acl(calendar_id="{OWNER_TEST_CAL}")`. It shows two `role: "owner"`, `scope_type: "user"` rules:
+- `{PRIMARY_OWNER_RULE_ID}`: the one whose `scope_value` equals `{OWNER_TEST_CAL}`, so its id is `user:{OWNER_TEST_CAL}`.
+- `{ACCOUNT_RULE_ID}`: the one whose `scope_value` is the authenticated account. Call that `scope_value` `{ACCOUNT_EMAIL}`.
+
+**Checks: primary-owner rule (`cannotChangeOwnerAcl`)**
+- `remove_calendar_acl(calendar_id="{OWNER_TEST_CAL}", rule_id="{PRIMARY_OWNER_RULE_ID}")` returns `{"error": "Google does not allow removing the access rule of a calendar's primary owner (reason: cannotChangeOwnerAcl). Use delete_calendar instead to permanently delete a calendar you own."}`, not a raw `<HttpError 403 ...>` string
+- `add_calendar_acl(calendar_id="{OWNER_TEST_CAL}", role="reader", scope_type="user", scope_value="{OWNER_TEST_CAL}", send_notifications=false)` returns `{"error": "Google does not allow changing the access level of a calendar's primary owner (reason: cannotChangeOwnerAcl); that rule always stays 'owner'."}`, with no mention of `delete_calendar`
+
+**Checks: account's own rule (`cannotChangeOwnAcl`)**
+- `remove_calendar_acl(calendar_id="{OWNER_TEST_CAL}", rule_id="{ACCOUNT_RULE_ID}")` returns `{"error": "Google does not allow changing or removing your own access rule on a calendar (reason: cannotChangeOwnAcl)."}`
+- `add_calendar_acl(calendar_id="{OWNER_TEST_CAL}", role="reader", scope_type="user", scope_value="{ACCOUNT_EMAIL}", send_notifications=false)` returns the same `cannotChangeOwnAcl` message
+
+**Checks: unchanged state and raw fallthrough**
+- A follow-up `list_calendar_acl(calendar_id="{OWNER_TEST_CAL}")` still shows both rules with `role: "owner"`
+- A different failure still passes through raw: `remove_calendar_acl(calendar_id="{OWNER_TEST_CAL}", rule_id="totally-invalid-rule-id")` returns `{"error": "<HttpError 400 ...>"}` with neither message (same as TC-CAL68)
+
+**Cleanup:** `delete_calendar(calendar_id="{OWNER_TEST_CAL}")`.
+
+**Result (2026-10-05) ❌ FAIL** (PR #912 round 1, Kit). The setup's `{OWNER_RULE_ID}` (the authenticated account's `user:<email>` rule) isn't the primary owner on a secondary calendar. Removing it, or `add_calendar_acl(role="reader")` for that email, returns Google's raw `403 cannotChangeOwnAcl` ("Cannot change your own access level."), which the PR doesn't map. Both checks pass against the calendar's own-id rule (`user:<calendar_id>`): each returns the mapped `cannotChangeOwnerAcl` message, and a later `list_calendar_acl` still shows that rule as `owner`. The invalid-rule-id check passes (raw `HttpError 400`). Cleanup done.
+
+**Result (2026-10-05) ✅ PASS** (PR #912 round 2, Kit, against `9a85809` after a fresh reconnect). Every check passes against a fresh `QA-OwnerAcl` calendar, with exactly the strings documented:
+- Primary-owner rule: remove returns the `cannotChangeOwnerAcl` message, which names `delete_calendar`. Add returns the change message, without `delete_calendar`.
+- Account's own rule: both remove and add return the `cannotChangeOwnAcl` message.
+- A follow-up `list_calendar_acl` still shows both rules as `owner`.
+- An invalid rule id still passes through as raw `HttpError 400`.
+
+Cleanup done.
+
+**Result (2026-10-12) ✅ PASS** (PR #1011 round 1, Sky, against `1a8053e` after a fresh reconnect). Regression check after the reason check moved to the shared `tools/http_errors.py` (#916). On a fresh `QA-OwnerAcl` calendar every check returns exactly the documented string: primary-owner remove (`cannotChangeOwnerAcl`, names `delete_calendar`) and add (change message, no `delete_calendar`); own-rule remove and add (`cannotChangeOwnAcl`); a follow-up `list_calendar_acl` still shows both rules as `owner`; `totally-invalid-rule-id` passes through as raw `HttpError 400`. Cleanup done.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
+---
+
+### TC-CAL80: `list_calendar_acl` returns a complete list with no partial marker on a normal calendar (issue #615)
+
+**Background:** #615 moved `list_calendar_acl` onto the shared `iter_pages` helper (`tools/pagination.py`), with 250 rules per page, a 100-page bound, a `{"error": ..., "partial": true}` entry when a later page fails or the bound is hit, and the shared response-size cap. This is the live regression check that the normal path is unchanged.
+
+**Checks**
+- Call `list_calendar_acl(calendar_id="{CALENDAR_ID}")`
+- Returns the same rules as TC-CAL60 (each with `id`, `role`, `scope_type`, `scope_value`)
+- No entry has an `error` or `partial` key
+
+**Result (2026-10-05) ✅ PASS** (PR #912 round 1, Kit). The fixture calendar returned its 2 rules (its own-id owner rule and the account's owner rule), each with `id`/`role`/`scope_type`/`scope_value`, and no `error` or `partial` key.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
+---
+
+### TC-CAL81: `list_calendar_acl` partial failure, page bound, and size cap (issue #615) (unit test)
+
+**Background:** a page-2 failure, a never-ending `nextPageToken`, and a response over `MAX_TOOL_RESPONSE_CHARS` can't be forced against the live API (no fixture calendar has more than one page of rules; see TC-CAL76). Verified by unit test instead.
+
+**Checks (unit test)**
+- `tests/test_calendar.py::TestListCalendarAcl::test_later_page_failure_keeps_earlier_rules_and_flags_partial`: page 1's rules are kept, followed by one `{"error": ..., "partial": True}` entry naming the page count, the rule count, and the API error.
+- `tests/test_calendar.py::TestListCalendarAcl::test_never_ending_page_token_is_bounded_and_flagged_partial`: the loop stops at the page bound and flags the list as partial instead of hanging.
+- `tests/test_calendar.py::TestListCalendarAcl::test_oversized_response_raises_size_cap_error`: an oversized result raises the shared `ValueError` naming `list_calendar_acl`.
+- `tests/test_calendar.py::TestListCalendarAcl::test_requests_the_max_page_size`: `maxResults=250` is sent.
+- `tests/test_calendar.py::TestListCalendarAcl::test_api_error_returns_error_list`: a first-page failure still returns plain `[{"error": ...}]`, with no `partial` key.
+- `tests/drive/test_files.py::TestListDrives::test_never_ending_page_token_is_bounded`: the same helper bounds `list_drives`.
+
+**Result (2026-10-05) ✅ PASS** (PR #912 round 1, Kit). Every named unit test passes.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
+---
+
+### TC-CAL82: `get_event` shape unchanged after sharing `_shape_event` (issue #627)
+
+**Background:** #627 made `get_event` call `_shape_event` (shared with `list_events`/`list_all_events`) instead of its own copy, and made the shared helper tolerate explicit `null` for `start`/`end`/`organizer`/`attendees`. This is the live regression check on the shape.
+
+**Setup:** any event in `{CALENDAR_ID}`, e.g. from `list_events(calendar_id="{CALENDAR_ID}")`; call its `id` `{EVENT_ID}`.
+
+**Checks**
+- Call `get_event(calendar_id="{CALENDAR_ID}", event_id="{EVENT_ID}")`
+- Returns exactly these keys: `id`, `summary`, `start`, `end`, `location`, `description`, `organizer`, `attendees`, `recurrence`, `html_link`, `status`, `created`, `updated`
+- `created` and `updated` are RFC 3339 timestamps, not `null`
+- `start`/`end`/`organizer`/`attendees` match the same event's entry in `list_events(calendar_id="{CALENDAR_ID}")` (fields both tools return)
+
+**Result (2026-10-05) ✅ PASS** (PR #912 round 1, Kit). `get_event` on the `QA Test Event` fixture returned exactly the 13 listed keys, with `created`/`updated` as RFC 3339 timestamps. `start`/`end`/`organizer`/`attendees` match its `list_events` entry.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
+---
+
+### TC-CAL83: `_shape_event` null guards and collision guard (issue #627) (unit test)
+
+**Background:** the Calendar API doesn't reliably produce an explicit `null` for these fields on demand, so the null handling is verified by unit test.
+
+**Checks (unit test)**
+- `tests/test_calendar.py::TestShapeEvent::test_explicit_nulls_do_not_crash`: `start`/`end`/`organizer` set to `None` shape to `None`, and `attendees: None` shapes to `[]`, with no `AttributeError`.
+- `tests/test_calendar.py::TestShapeEvent::test_extra_key_colliding_with_a_shaped_field_raises`: an `extra` kwarg that collides with a shaped field raises `ValueError` instead of silently overwriting it.
+- `tests/test_calendar.py::TestGetEvent::test_null_organizer_does_not_crash` and `tests/test_calendar.py::TestCreateUpdateEventNullTimes`: `get_event`, `create_event`, and `update_event` all survive a `null` start or organizer.
+
+**Result (2026-10-05) ✅ PASS** (PR #912 round 1, Kit). Every named unit test passes.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
+---
+
+### TC-CAL84: `list_all_events` fan-out cap is process-wide and configurable; calendar summaries match `find_free_slots` (issues #626, #726) (unit test)
+
+**Background:** whether two overlapping calls share one concurrency budget isn't observable from a live response, and an empty-string calendar summary can't be set through the Calendar UI. Verified by unit test instead.
+
+**Checks (unit test)**
+- `tests/test_calendar.py::TestListAllEvents::test_fan_out_cap_is_shared_across_concurrent_invocations`: two overlapping `list_all_events` calls never exceed one cap of in-flight `events().list()` calls in total. A per-call semaphore fails this test; that was confirmed with a mutation check before the PR was opened.
+- `tests/test_calendar.py::TestListAllEventsConcurrencyEnv`: `LIST_ALL_EVENTS_MAX_CONCURRENCY` defaults to 20, overrides the cap when set, and is floored at 1.
+- `tests/test_calendar.py::TestFindFreeSlots::test_empty_string_summary_matches_list_all_events`: a calendar whose `summary` is `""` reports `calendar_summary: ""` from both tools; only a calendar missing from the user's list falls back to its id.
+
+**Result (2026-10-05) ✅ PASS** (PR #912 round 1, Kit). Every named unit test passes. Live spot check: `list_all_events` and `find_free_slots` over the fixture calendar plus a nonexistent id both report `calendar_summary: "mcp-gee-sweet-qa"` for the real calendar and fall back to the bare id for the missing one.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -1061,6 +1400,9 @@ Two adjacent events (14:00-15:00Z, 15:00-16:00Z) -> busy merged to single {14:00
 **Result (2026-09-04) ✅ PASS**
 create_event recurring weekly -> id dmp5oe7qd342n5odt7a0hqmnhk (no date suffix), recurrence ["RRULE:FREQ=WEEKLY;BYDAY=MO"], status confirmed, html_link present. get_event(master) recurrence non-null. list_events(expand=True) Jul7-28 -> 4 instances (Jul 7 [DTSTART], 13, 20, 27).
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+API checks pass; the Playwright step was skipped (the fixture-owner browser can't see SA-owned calendars).
+
 ---
 
 ### TC-CAL37: Create a daily recurring event with COUNT limit ⚠️ destructive
@@ -1079,6 +1421,9 @@ create_event recurring weekly -> id dmp5oe7qd342n5odt7a0hqmnhk (no date suffix),
 **Result (2026-09-04) ✅ PASS**
 create_event daily COUNT=5 -> recurrence ["RRULE:FREQ=DAILY;COUNT=5"]. list_events(expand=True) Jul14-25 -> exactly 5 instances (Jul 14-18), none after. Each instance recurrence: null.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+API checks pass; the Playwright step was skipped (the fixture-owner browser can't see SA-owned calendars).
+
 ---
 
 ### TC-CAL38: Recurrence absent when not provided
@@ -1096,6 +1441,9 @@ create_event daily COUNT=5 -> recurrence ["RRULE:FREQ=DAILY;COUNT=5"]. list_even
 
 **Result (2026-09-04) ✅ PASS**
 create_event one-off QA-OneOff -> recurrence: null. list_events(expand_recurring=False) shows it with recurrence: null, single entry (not a series).
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+API checks pass; the Playwright step was skipped (the fixture-owner browser can't see SA-owned calendars).
 
 ---
 
@@ -1120,6 +1468,9 @@ create_event one-off QA-OneOff -> recurrence: null. list_events(expand_recurring
 **Result (2026-09-04) ✅ PASS**
 list_events(expand_recurring=False, query="QA-") -> masters QA-Weekly-Standup (WEEKLY/MO), QA-Daily-5x (DAILY/COUNT=5), QA-OneOff (null), plus non-recurring QA-Timed-Updated & QA-Full-Test. All master IDs suffix-free; no instance IDs present.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+API checks pass; the Playwright step was skipped (the fixture-owner browser can't see SA-owned calendars).
+
 ---
 
 ### TC-CAL40: expand_recurring=True (default) expands instances
@@ -1139,6 +1490,9 @@ list_events(expand_recurring=False, query="QA-") -> masters QA-Weekly-Standup (W
 
 **Result (2026-09-04) ✅ PASS**
 list_events(expand_recurring=True default) Jul7-28 for QA-Weekly-Standup -> 4 individual instances, each id ends `_YYYYMMDDTHHMMSSZ`, recurrence: null on each.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+API checks pass; the Playwright step was skipped (the fixture-owner browser can't see SA-owned calendars).
 
 ---
 
@@ -1161,6 +1515,9 @@ list_events(expand_recurring=True default) Jul7-28 for QA-Weekly-Standup -> 4 in
 **Result (2026-09-04) ✅ PASS**
 update_event(master, recurrence=["RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO"]) -> response echoes new RRULE. list_events(expand=True) Jul7-28 -> 2 instances (Jul 7, Jul 20) vs 4 before. summary/start/end unchanged.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+API checks pass; the Playwright step was skipped (the fixture-owner browser can't see SA-owned calendars).
+
 ---
 
 ### TC-CAL42: Remove recurrence by passing an empty list ⚠️ destructive
@@ -1179,6 +1536,9 @@ update_event(master, recurrence=["RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO"]) -> re
 
 **Result (2026-09-04) ✅ PASS**
 update_event(master, recurrence=[]) -> response recurrence: null. list_events(expand_recurring=False) -> QA-Weekly-Standup single entry, recurrence: null, no series. Only Jul 7 occurrence remains.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+API checks pass; the Playwright step was skipped (the fixture-owner browser can't see SA-owned calendars).
 
 ---
 
@@ -1199,6 +1559,9 @@ update_event(master, recurrence=[]) -> response recurrence: null. list_events(ex
 
 **Result (2026-09-04) ✅ PASS**
 update_event(instance jkk1ai0c..._20260714T150000Z, summary="QA-Daily-5x (Modified)") -> that instance renamed; Jul 15-18 instances still "QA-Daily-5x"; get_event(master jkk1ai0cv78e92jdf3qa6ts130) summary "QA-Daily-5x", recurrence ["RRULE:FREQ=DAILY;COUNT=5"] unchanged. Instance-level exception override confirmed.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+API checks pass; the Playwright step was skipped (the fixture-owner browser can't see SA-owned calendars).
 
 ---
 
@@ -1222,6 +1585,9 @@ update_event(instance jkk1ai0c..._20260714T150000Z, summary="QA-Daily-5x (Modifi
 **Result (2026-09-04) ✅ PASS**
 list_all_events no calendar_ids, 2026-07-01..02 -> flat list; QA-Timed-Updated present with calendar_id=SACAL, calendar_summary="mcp-gee-sweet-qa-renamed" (SACAL's real summary); every event has both fields; fanned out across full list_calendars (MINCAL empty in window, correctly absent). (Event is the CAL24/25-renamed 'QA-Timed-Test'.)
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL70: Explicit calendar_ids restricts the fan-out
@@ -1237,6 +1603,9 @@ list_all_events no calendar_ids, 2026-07-01..02 -> flat list; QA-Timed-Updated p
 
 **Result (2026-09-04) ✅ PASS**
 list_all_events calendar_ids=[SACAL] -> only SACAL's event; QA-MinCal-Event (on MINCAL, same window) absent. Fan-out restricted.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -1260,6 +1629,9 @@ list_all_events calendar_ids=[SACAL] -> only SACAL's event; QA-MinCal-Event (on 
 **Result (2026-09-04) ✅ PASS**
 group_by_calendar=true, [SACAL, MINCAL] -> dict keyed by summary ("mcp-gee-sweet-qa-renamed", "mcp-gee-sweet-qa-minimal"); each key holds only that calendar's events; events' calendar_id/summary match their key. Duplicate-summary disambiguation not reproducible (no colliding pair) — covered by unit test, matches prior runs.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL72: One invalid calendar_id does not abort the batch (flat list)
@@ -1277,6 +1649,9 @@ group_by_calendar=true, [SACAL, MINCAL] -> dict keyed by summary ("mcp-gee-sweet
 
 **Result (2026-09-04) ✅ PASS**
 [SACAL, invalid-cal@example.com] flat -> flat list; exactly one entry {calendar_id:"invalid-cal@example.com", calendar_summary:"invalid-cal@example.com", error:"<HttpError 404 notFound>"} with no event fields; SACAL event still present; no top-level error.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 
@@ -1298,6 +1673,9 @@ group_by_calendar=true, [SACAL, MINCAL] -> dict keyed by summary ("mcp-gee-sweet
 **Result (2026-09-04) ✅ PASS**
 [SACAL, invalid-cal@example.com] group_by_calendar=true -> result["invalid-cal@example.com"] = {"error":"<HttpError 404 notFound>", "calendar_id":"invalid-cal@example.com"} (calendar_id present — round-2 fix). SACAL summary key -> normal event list, unaffected.
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL74: query is forwarded to every calendar in the fan-out
@@ -1316,6 +1694,9 @@ group_by_calendar=true, [SACAL, MINCAL] -> dict keyed by summary ("mcp-gee-sweet
 **Result (2026-09-04) ✅ PASS**
 [SACAL, MINCAL], full-year window, query="QA-Timed-Updated" -> event returned from SACAL only; nothing from MINCAL. Confirms query forwarded as q to every calendar. (Used renamed event name; fixture 'QA-Timed-Test' n/a under SA.)
 
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
+
 ---
 
 ### TC-CAL75: expand_recurring=False returns master events across every queried calendar
@@ -1333,6 +1714,9 @@ group_by_calendar=true, [SACAL, MINCAL] -> dict keyed by summary ("mcp-gee-sweet
 
 **Result (2026-09-04) ✅ PASS**
 [SACAL], expand_recurring=false, query="QA-" -> QA-Daily-5x once as master (recurrence ["RRULE:FREQ=DAILY;COUNT=5"] populated), not expanded to 5. NOTE: CAL43's instance-override singleton also listed (expected). QA-Weekly-Standup recurrence:null (removed in CAL42). Confirms expand_recurring=False per-calendar in fan-out.
+
+**Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
+Run 2 (kai-sa) on SA-owned scratch calendars (TEST_CALENDAR_ID returns 404 to the SA).
 
 ---
 

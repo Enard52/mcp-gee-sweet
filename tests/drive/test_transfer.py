@@ -4,6 +4,7 @@ import io
 import json
 import os
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -12,15 +13,22 @@ import openpyxl
 import pytest
 from googleapiclient.errors import HttpError
 
-from mcp_gee_sweet.tools import response_limits
+from mcp_gee_sweet.tools import atomic_write, response_limits
+from mcp_gee_sweet.tools.drive import _SA_QUOTA_ERROR, _USER_QUOTA_ERROR
 from mcp_gee_sweet.tools.drive import transfer as transfer_module
-from mcp_gee_sweet.tools.drive.transfer import _upload_local_file, _xlsx_range_values
+from mcp_gee_sweet.tools.drive.transfer import (
+    _should_skip_existing_upload,
+    _upload_local_file,
+    _xlsx_range_values,
+)
+
+from ..fakes import as_service_account
 
 
 def _make_tool_registry():
     captured = {}
 
-    def tool(annotations=None):
+    def tool(annotations=None, local_only=False):
         def decorator(func):
             captured[func.__name__] = func
             return func
@@ -79,13 +87,13 @@ class TestUploadFile:
 
     async def test_quota_exceeded_returns_friendly_error_dict(self):
         """upload_file must return {"error": ...} on storageQuotaExceeded, not raise."""
-        mock = MagicMock()
+        mock = as_service_account(MagicMock())
         mock.files.return_value.create.return_value.execute.side_effect = self._quota_err()
         ctx = _make_ctx(drive_service=mock, drive_folder_cache=MagicMock(), folder_id=None)
         result = await _transfer_tools["upload_file"](name="test.txt", content="hello", ctx=ctx)
         assert "error" in result
         assert "storageQuotaExceeded" not in result["error"]  # raw message replaced
-        assert "Service accounts" in result["error"]
+        assert "This service account has no My Drive storage" in result["error"]
         assert "server://auth-status" in result["error"]
 
     async def test_with_folder_marks_folder_cache_dirty(self):
@@ -101,6 +109,45 @@ class TestUploadFile:
             name="doc.txt", content="hello", folder_id="target_folder", ctx=ctx
         )
         folder_cache.mark_dirty.assert_called_once_with("target_folder")
+
+
+class TestShouldSkipExistingUpload:
+    """Direct tests for _should_skip_existing_upload — the skip-decision helper
+    shared by _upload_local_file's own skip_if_exists check and
+    upload_local_folder's bulk one (#514, extracted after PR #505's review of
+    #411 found the two independently duplicating this same comparison)."""
+
+    def test_no_existing_entries_never_skips(self):
+        assert _should_skip_existing_upload(None, []) is False
+        assert (
+            _should_skip_existing_upload(
+                ("text/csv", "application/vnd.google-apps.spreadsheet"), []
+            )
+            is False
+        )
+
+    def test_no_convert_skips_on_any_existing_entry(self):
+        assert _should_skip_existing_upload(None, ["text/plain"]) is True
+
+    def test_convert_skips_only_when_target_mimetype_present(self):
+        convert_mime = ("text/csv", "application/vnd.google-apps.spreadsheet")
+        assert _should_skip_existing_upload(convert_mime, ["text/csv"]) is False
+        assert (
+            _should_skip_existing_upload(convert_mime, ["application/vnd.google-apps.spreadsheet"])
+            is True
+        )
+
+    def test_convert_skips_when_target_mimetype_present_among_several(self):
+        """Multiple existing entries (e.g. two Drive files sharing a name) —
+        skip as soon as any one of them is already in the target format,
+        regardless of position."""
+        convert_mime = ("text/csv", "application/vnd.google-apps.spreadsheet")
+        assert (
+            _should_skip_existing_upload(
+                convert_mime, ["text/csv", "application/vnd.google-apps.spreadsheet"]
+            )
+            is True
+        )
 
 
 class TestUploadLocalFileCore:
@@ -144,6 +191,76 @@ class TestUploadLocalFileCore:
         # #274 PR #472 review, finding #2: a plain (non-convert) upload now stamps
         # modifiedTime from the local file's mtime too, not just the convert branch.
         assert "modifiedTime" in body
+        assert "webContentLink" in create_kwargs["fields"]
+
+    @pytest.mark.parametrize(
+        ("filename", "expected"),
+        [
+            ("report.csv.gz", "application/gzip"),
+            ("dump.sql.bz2", "application/x-bzip2"),
+            ("report.csv", "text/csv"),
+            ("scratch_tmpfile", "application/octet-stream"),
+        ],
+    )
+    async def test_upload_mimetype_reflects_compression(self, tmp_path, filename, expected):
+        # #930: guess_type("report.csv.gz") is ("text/csv", "gzip"); the bytes are
+        # gzip, so the upload must not claim text/csv.
+        local_file = tmp_path / filename
+        local_file.write_bytes(b"\x1f\x8b fake")
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.list.return_value.execute.return_value = {"files": []}
+        drive_svc.files.return_value.create.return_value.execute.return_value = {
+            "id": "fid1",
+            "name": filename,
+            "webViewLink": "https://example.com",
+        }
+
+        result = await _upload_local_file(drive_svc, str(local_file), "folder1")
+
+        assert "error" not in result
+        create_kwargs = drive_svc.files.return_value.create.call_args.kwargs
+        assert create_kwargs["media_body"].mimetype() == expected
+        assert "mimeType" not in create_kwargs["body"]
+
+    async def test_upload_mimetype_comes_from_local_path_not_name_override(self, tmp_path):
+        # The bytes are the local file's, so a name= override doesn't change the
+        # guessed type.
+        local_file = tmp_path / "report.csv.gz"
+        local_file.write_bytes(b"\x1f\x8b fake")
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.list.return_value.execute.return_value = {"files": []}
+        drive_svc.files.return_value.create.return_value.execute.return_value = {
+            "id": "fid1",
+            "name": "Quarterly report",
+            "webViewLink": "https://example.com",
+        }
+
+        result = await _upload_local_file(
+            drive_svc, str(local_file), "folder1", name="Quarterly report"
+        )
+
+        assert "error" not in result
+        create_kwargs = drive_svc.files.return_value.create.call_args.kwargs
+        assert create_kwargs["body"]["name"] == "Quarterly report"
+        assert create_kwargs["media_body"].mimetype() == "application/gzip"
+
+    async def test_returns_web_content_link_when_drive_provides_it(self, tmp_path):
+        # #511: an image-embedding caller uses this link directly instead of a
+        # follow-up files().get().
+        local_file = tmp_path / "pic.png"
+        local_file.write_bytes(b"fake-bytes")
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.list.return_value.execute.return_value = {"files": []}
+        drive_svc.files.return_value.create.return_value.execute.return_value = {
+            "id": "fid1",
+            "name": "pic.png",
+            "webViewLink": "https://example.com/pic",
+            "webContentLink": "https://drive.google.com/uc?id=fid1",
+        }
+
+        result = await _upload_local_file(drive_svc, str(local_file), "folder1")
+
+        assert result["web_content_link"] == "https://drive.google.com/uc?id=fid1"
 
     async def test_skip_if_exists_returns_existing_file_without_uploading(self, tmp_path):
         local_file = tmp_path / "pic.png"
@@ -201,14 +318,26 @@ class TestUploadLocalFileCore:
     async def test_quota_exceeded_returns_friendly_error_dict(self, tmp_path):
         local_file = tmp_path / "pic.png"
         local_file.write_bytes(b"fake-bytes")
-        drive_svc = MagicMock()
+        drive_svc = as_service_account(MagicMock())
         drive_svc.files.return_value.list.return_value.execute.return_value = {"files": []}
         drive_svc.files.return_value.create.return_value.execute.side_effect = self._quota_err()
 
         result = await _upload_local_file(drive_svc, str(local_file), "folder1")
 
         assert "error" in result
-        assert "Service accounts" in result["error"]
+        assert "This service account has no My Drive storage" in result["error"]
+
+    async def test_quota_exceeded_for_user_identity_says_storage_is_full(self, tmp_path):
+        # A user whose own Drive is full must not be told to switch to OAuth (#1009).
+        local_file = tmp_path / "pic.png"
+        local_file.write_bytes(b"fake-bytes")
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.list.return_value.execute.return_value = {"files": []}
+        drive_svc.files.return_value.create.return_value.execute.side_effect = self._quota_err()
+
+        result = await _upload_local_file(drive_svc, str(local_file), "folder1")
+
+        assert result == {"error": _USER_QUOTA_ERROR}
 
     async def test_custom_name_used_instead_of_filename(self, tmp_path):
         local_file = tmp_path / "pic.png"
@@ -292,12 +421,41 @@ class TestUploadLocalFileConvert:
 
         assert "error" not in result
         create_kwargs = drive_svc.files.return_value.create.call_args.kwargs
-        assert create_kwargs["body"]["properties"] == {
-            transfer_module._CONVERT_MARKDOWN_SOURCE_PROP: "notes.md"
+        props = dict(create_kwargs["body"]["properties"])
+        _pop_uploaded_at(props)
+        assert props == {
+            transfer_module._CONVERT_MARKDOWN_SOURCE_PROP: "notes.md",
+            transfer_module._CONVERT_SOURCE_PROP: "notes.md",
+            # #814: sync_folder's local-side reference for this Doc, exact to
+            # the microsecond (PR #854 QA round 1).
+            transfer_module._CONVERTED_MD_SOURCE_MTIME_PROP: _precise_mtime(local_file),
         }
 
+    async def test_convert_non_md_does_not_stamp_source_mtime(self, tmp_path):
+        """#814's source-mtime property is only for .md → Doc, the one
+        conversion sync_folder tracks through properties; other types (#818)
+        stay on the modifiedTime comparison."""
+        local_file = tmp_path / "data.csv"
+        local_file.write_text("a,b\n1,2\n")
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.create.return_value.execute.return_value = {"id": "fid1"}
+
+        await _upload_local_file(
+            drive_svc, str(local_file), "folder1", skip_if_exists=False, convert=True
+        )
+
+        body = drive_svc.files.return_value.create.call_args.kwargs["body"]
+        assert transfer_module._CONVERTED_MD_SOURCE_MTIME_PROP not in body["properties"]
+
+    @pytest.mark.parametrize(
+        ("file_name", "target_mime"),
+        [
+            ("notes.md", "application/vnd.google-apps.document"),
+            ("data.csv", "application/vnd.google-apps.spreadsheet"),
+        ],
+    )
     async def test_convert_stamps_modified_time_from_local_mtime_and_restamps_after_create(
-        self, tmp_path
+        self, tmp_path, file_name, target_mime
     ):
         """#422 finding #2: _upload_local_file never set modifiedTime on a converted
         Doc, so it got Drive's own creation timestamp instead of the local file's
@@ -305,9 +463,13 @@ class TestUploadLocalFileConvert:
         nearly every first sync_folder call afterward, since nothing tied the two
         timestamps together. A metadata-only follow-up update() re-stamps it after
         Drive's native import overwrites the create() request, the same way
-        _sync_level's own convert_markdown upload path already does (TC-D218)."""
-        local_file = tmp_path / "notes.md"
-        local_file.write_text("# Heading")
+        _sync_level's own convert_markdown upload path already does (TC-D218).
+
+        The .csv case guards #435's declined .md-only gate: sync_folder matches a
+        converted Sheet back to its local .csv via export_format's suffix scheme
+        and compares mtimes, so every conversion type must restamp."""
+        local_file = tmp_path / file_name
+        local_file.write_text("a,b\n1,2\n")
         expected_mtime = datetime.fromtimestamp(
             local_file.stat().st_mtime, tz=timezone.utc
         ).strftime("%Y-%m-%dT%H:%M:%S.000Z")
@@ -327,11 +489,33 @@ class TestUploadLocalFileConvert:
         assert "error" not in result
         create_kwargs = drive_svc.files.return_value.create.call_args.kwargs
         assert create_kwargs["body"]["modifiedTime"] == expected_mtime
+        assert create_kwargs["body"]["mimeType"] == target_mime
 
         update_kwargs = drive_svc.files.return_value.update.call_args.kwargs
         assert update_kwargs["fileId"] == "fid1"
         assert update_kwargs["body"] == {"modifiedTime": expected_mtime}
         assert "media_body" not in update_kwargs
+
+    async def test_unreadable_mtime_returns_error_instead_of_raising(self, tmp_path, monkeypatch):
+        """PR #817 QA round 1: the local mtime used to be read before the create()
+        try, so a file that vanished or became unreadable after the is_file()
+        check raised out of the upload_local_file tool instead of returning
+        {"error": ...}. Nothing is created in Drive."""
+        local_file = tmp_path / "notes.txt"
+        local_file.write_text("x")
+
+        def _boom(_path, _st=None):
+            raise FileNotFoundError("gone")
+
+        monkeypatch.setattr(transfer_module, "_local_mtime_dt", _boom)
+        drive_svc = MagicMock()
+
+        result = await _upload_local_file(
+            drive_svc, str(local_file), "folder1", skip_if_exists=False
+        )
+
+        assert result == {"error": "gone"}
+        drive_svc.files.return_value.create.assert_not_called()
 
     async def test_convert_modified_time_restamp_failure_returns_clean_error_not_raise(
         self, tmp_path
@@ -378,7 +562,7 @@ class TestUploadLocalFileConvert:
         _SA_QUOTA_ERROR text while still carrying the created file's fileId."""
         local_file = tmp_path / "notes.md"
         local_file.write_text("# Heading")
-        drive_svc = MagicMock()
+        drive_svc = as_service_account(MagicMock())
         drive_svc.files.return_value.list.return_value.execute.return_value = {"files": []}
         drive_svc.files.return_value.create.return_value.execute.return_value = {
             "id": "fid1",
@@ -393,7 +577,7 @@ class TestUploadLocalFileConvert:
 
         assert result["fileId"] == "fid1"
         assert "storageQuotaExceeded" not in result["error"]  # raw message replaced
-        assert transfer_module._SA_QUOTA_ERROR in result["error"]
+        assert _SA_QUOTA_ERROR in result["error"]
 
     async def test_create_failure_returns_error_with_no_fileId(self, tmp_path):
         """#420: distinct from the restamp-failure case above — when create()
@@ -415,7 +599,10 @@ class TestUploadLocalFileConvert:
         assert "create failed" in result["error"]
         assert "fileId" not in result
 
-    async def test_convert_non_md_extension_does_not_stamp_source_property(self, tmp_path):
+    async def test_convert_non_md_extension_stamps_only_generic_source_property(self, tmp_path):
+        """A non-.md conversion gets the generic _CONVERT_SOURCE_PROP marker
+        (#769) but never _CONVERT_MARKDOWN_SOURCE_PROP — sync_folder reads the
+        latter on any Doc as "converted from a local .md", which this isn't."""
         local_file = tmp_path / "data.csv"
         local_file.write_text("a,b\n1,2")
         drive_svc = MagicMock()
@@ -428,6 +615,27 @@ class TestUploadLocalFileConvert:
 
         result = await _upload_local_file(
             drive_svc, str(local_file), "folder1", skip_if_exists=False, convert=True
+        )
+
+        assert "error" not in result
+        create_kwargs = drive_svc.files.return_value.create.call_args.kwargs
+        assert create_kwargs["body"]["properties"] == {
+            transfer_module._CONVERT_SOURCE_PROP: "data.csv"
+        }
+
+    async def test_non_convert_upload_stamps_no_properties(self, tmp_path):
+        """The marker records a conversion's source; a plain upload has none."""
+        local_file = tmp_path / "data.csv"
+        local_file.write_text("a,b\n1,2")
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.create.return_value.execute.return_value = {
+            "id": "fid1",
+            "name": "data.csv",
+            "webViewLink": "https://example.com",
+        }
+
+        result = await _upload_local_file(
+            drive_svc, str(local_file), "folder1", skip_if_exists=False
         )
 
         assert "error" not in result
@@ -577,6 +785,319 @@ class TestUploadLocalFileConvert:
         }
         drive_svc.files.return_value.create.assert_not_called()
 
+    async def test_skip_if_exists_picks_the_converted_hit_among_several_same_named(self, tmp_path):
+        """#514 QA round 1 (PR #767): _upload_local_file's own existence check
+        used to query with pageSize=1, so it could never see more than one
+        Drive entry sharing the destination name even though Drive allows
+        it — the multi-hit case _should_skip_existing_upload exists to
+        handle was only actually reachable via upload_local_folder's bulk
+        path. Here the raw duplicate is listed *first* and the
+        already-converted one *second* — the ordering under which the old
+        hits[0]-only code would have picked the raw file, seen no mimeType
+        match, and re-converted a duplicate instead of skipping."""
+        local_file = tmp_path / "a.csv"
+        local_file.write_text("a,b\n1,2")
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.list.return_value.execute.return_value = {
+            "files": [
+                {
+                    "id": "existing-raw",
+                    "name": "a.csv",
+                    "webViewLink": "https://x/raw",
+                    "mimeType": "text/csv",
+                },
+                {
+                    "id": "existing-converted",
+                    "name": "a.csv",
+                    "webViewLink": "https://x/converted",
+                    "mimeType": "application/vnd.google-apps.spreadsheet",
+                },
+            ]
+        }
+
+        result = await _upload_local_file(drive_svc, str(local_file), "folder1", convert=True)
+
+        assert result == {
+            "fileId": "existing-converted",
+            "name": "a.csv",
+            "web_link": "https://x/converted",
+            "skipped": True,
+        }
+        drive_svc.files.return_value.create.assert_not_called()
+        list_kwargs = drive_svc.files.return_value.list.call_args.kwargs
+        assert "pageSize" not in list_kwargs
+
+
+class TestConvertSourceMarker:
+    """#769 marker encoding + PR #800 QA round 1: Drive caps a custom
+    property's key + value at 124 UTF-8 bytes, and a create() over the cap
+    fails with 403 propertyLengthLimitExceeded while still creating the file
+    (an orphan). Every stamped property must stay within the cap."""
+
+    def test_property_fits_at_exact_byte_boundary(self):
+        key = "k" * 24
+        assert transfer_module._property_fits(key, "v" * 100)  # 124 bytes
+        assert not transfer_module._property_fits(key, "v" * 101)  # 125 bytes
+
+    def test_property_fits_counts_utf8_bytes_not_characters(self):
+        key = "k" * 4
+        # 40 CJK characters = 120 UTF-8 bytes; + 4-byte key = 124 fits, one more doesn't.
+        assert transfer_module._property_fits(key, "報" * 40)
+        assert not transfer_module._property_fits(key, "報" * 41)
+
+    def test_short_name_marker_is_the_raw_name(self):
+        assert transfer_module._convert_source_marker("report.csv") == "report.csv"
+
+    def test_marker_at_cap_stays_raw_one_byte_over_is_digested(self):
+        key_len = len(transfer_module._CONVERT_SOURCE_PROP.encode("utf-8"))
+        room = transfer_module._DRIVE_PROPERTY_MAX_BYTES - key_len
+        at_cap = "a" * (room - 4) + ".csv"
+        over = "a" * (room - 3) + ".csv"
+        assert transfer_module._convert_source_marker(at_cap) == at_cap
+        assert transfer_module._convert_source_marker(over).startswith("sha256:")
+
+    @pytest.mark.parametrize(
+        "file_name",
+        ["q" * 114 + ".csv", "四半期売上レポート" * 5 + ".csv", "長い" * 30 + ".md"],
+    )
+    def test_every_stamped_property_fits_the_cap(self, file_name):
+        props = transfer_module._convert_properties(file_name)
+        assert transfer_module._CONVERT_SOURCE_PROP in props
+        for key, value in props.items():
+            assert transfer_module._property_fits(key, value), (key, value)
+
+    def test_long_md_name_omits_markdown_key_rather_than_digesting_it(self):
+        """sync_folder reads _CONVERT_MARKDOWN_SOURCE_PROP back verbatim as the
+        local filename, so a digest there would match nothing; the key is
+        dropped instead, and the generic marker (digested) still verifies."""
+        name = "n" * 120 + ".md"
+        props = transfer_module._convert_properties(name)
+        assert transfer_module._CONVERT_MARKDOWN_SOURCE_PROP not in props
+        assert transfer_module._marker_names_source({"properties": props}, name)
+
+    def test_short_md_name_gets_both_keys(self):
+        props = transfer_module._convert_properties("notes.md")
+        assert props == {
+            transfer_module._CONVERT_SOURCE_PROP: "notes.md",
+            transfer_module._CONVERT_MARKDOWN_SOURCE_PROP: "notes.md",
+        }
+
+    def test_digested_marker_verifies_only_its_own_source(self):
+        name = "x" * 120 + ".csv"
+        f = {"properties": transfer_module._convert_properties(name)}
+        assert transfer_module._marker_names_source(f, name)
+        assert not transfer_module._marker_names_source(f, "y" * 120 + ".csv")
+
+    def test_empty_string_marker_does_not_fall_through_to_the_other_key(self):
+        """An empty generic marker is still a marker (so not "unmarked"), and
+        must not be skipped over in favor of the markdown key — each key is
+        checked explicitly with `is not None` (PR #800 QA round 1, item 5)."""
+        f = {
+            "properties": {
+                transfer_module._CONVERT_SOURCE_PROP: "",
+                transfer_module._CONVERT_MARKDOWN_SOURCE_PROP: "",
+            }
+        }
+        assert transfer_module._has_convert_marker(f)
+        assert not transfer_module._marker_names_source(f, "notes.md")
+
+    async def test_long_name_upload_stamps_within_cap(self, tmp_path):
+        """The live repro: a 118-byte .csv name used to send a 139-byte
+        property and fail with 403 after Drive had already created the Sheet."""
+        name = "r" * 114 + ".csv"
+        local_file = tmp_path / "data.csv"
+        local_file.write_text("a,b\n1,2")
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.create.return_value.execute.return_value = {
+            "id": "fid1",
+            "name": name[:-4],
+            "webViewLink": "https://example.com",
+        }
+
+        result = await _upload_local_file(
+            drive_svc, str(local_file), "folder1", name=name, skip_if_exists=False, convert=True
+        )
+
+        assert "error" not in result
+        props = drive_svc.files.return_value.create.call_args.kwargs["body"]["properties"]
+        for key, value in props.items():
+            assert transfer_module._property_fits(key, value)
+
+
+class TestConvertedMdSourceName:
+    """#805: sync_folder recognizes a convert_markdown Doc through either
+    marker key — the legacy markdown key (every pre-#805 Doc) or the generic
+    one, whose digest form is resolved against the Doc's own display name."""
+
+    _DOC = "application/vnd.google-apps.document"
+
+    def _doc(self, name, props):
+        return {"name": name, "mimeType": self._DOC, "properties": props}
+
+    def test_legacy_markdown_key_alone_is_recognized(self):
+        f = self._doc(
+            "renamed in drive", {transfer_module._CONVERT_MARKDOWN_SOURCE_PROP: "notes.md"}
+        )
+        assert transfer_module._converted_md_source_name(f) == "notes.md"
+
+    def test_raw_generic_marker_names_the_source_even_after_rename(self):
+        f = self._doc("renamed in drive", {transfer_module._CONVERT_SOURCE_PROP: "notes.md"})
+        assert transfer_module._converted_md_source_name(f) == "notes.md"
+
+    def test_digest_marker_resolves_to_the_docs_own_name(self):
+        name = "n" * 120 + ".md"
+        f = self._doc(name, transfer_module._convert_properties(name))
+        assert transfer_module._CONVERT_MARKDOWN_SOURCE_PROP not in f["properties"]
+        assert transfer_module._converted_md_source_name(f) == name
+
+    def test_digest_marker_on_a_renamed_doc_is_not_recognized(self):
+        name = "n" * 120 + ".md"
+        f = self._doc("m" * 120 + ".md", transfer_module._convert_properties(name))
+        assert transfer_module._converted_md_source_name(f) is None
+
+    @pytest.mark.parametrize("source", ["report.docx", "page.html", "x" * 120 + ".html"])
+    def test_non_md_conversion_is_not_a_convert_markdown_doc(self, source):
+        f = self._doc(source, transfer_module._convert_properties(source))
+        assert transfer_module._converted_md_source_name(f) is None
+
+    def test_non_doc_mimetype_is_never_recognized(self):
+        f = {
+            "name": "notes.md",
+            "mimeType": "text/markdown",
+            "properties": {transfer_module._CONVERT_SOURCE_PROP: "notes.md"},
+        }
+        assert transfer_module._converted_md_source_name(f) is None
+
+    def test_unmarked_doc_is_not_recognized(self):
+        assert transfer_module._converted_md_source_name(self._doc("notes.md", {})) is None
+        f = {"name": "notes.md", "mimeType": self._DOC}
+        assert transfer_module._converted_md_source_name(f) is None
+
+
+class TestUploadLocalFileStemMatch:
+    """PR #800 QA round 1, item 2: _upload_local_file's own skip_if_exists
+    check only queried the full name, so upload_local_file(convert=True)
+    re-converted a duplicate of a file whose converted copy Drive had
+    extension-stripped — even when that copy carried the marker naming it.
+    It now shares _find_existing_upload with upload_local_folder."""
+
+    SHEET = "application/vnd.google-apps.spreadsheet"
+
+    def _svc(self, files):
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.list.return_value.execute.return_value = {"files": files}
+        drive_svc.files.return_value.create.return_value.execute.return_value = {
+            "id": "fid-new",
+            "name": "fresh",
+            "webViewLink": "https://example.com/new",
+        }
+        return drive_svc
+
+    async def test_marked_stem_match_is_a_verified_skip(self, tmp_path):
+        local_file = tmp_path / "fresh.csv"
+        local_file.write_text("a,b\n1,2")
+        drive_svc = self._svc(
+            [
+                {
+                    "id": "existing",
+                    "name": "fresh",
+                    "webViewLink": "https://x/existing",
+                    "mimeType": self.SHEET,
+                    "properties": {transfer_module._CONVERT_SOURCE_PROP: "fresh.csv"},
+                }
+            ]
+        )
+
+        result = await _upload_local_file(drive_svc, str(local_file), "folder1", convert=True)
+
+        assert result == {
+            "fileId": "existing",
+            "name": "fresh",
+            "web_link": "https://x/existing",
+            "skipped": True,
+        }
+        drive_svc.files.return_value.create.assert_not_called()
+        list_kwargs = drive_svc.files.return_value.list.call_args.kwargs
+        assert "name='fresh.csv' or name='fresh'" in list_kwargs["q"]
+        assert "properties" in list_kwargs["fields"]
+
+    async def test_unmarked_stem_match_is_an_unverified_skip(self, tmp_path):
+        local_file = tmp_path / "report.csv"
+        local_file.write_text("a,b\n1,2")
+        drive_svc = self._svc(
+            [
+                {
+                    "id": "unrelated",
+                    "name": "report",
+                    "webViewLink": "https://x/unrelated",
+                    "mimeType": self.SHEET,
+                }
+            ]
+        )
+
+        result = await _upload_local_file(drive_svc, str(local_file), "folder1", convert=True)
+
+        assert result["skipped"] is True
+        assert result["skipped_unverified"] is True
+        assert result["fileId"] == "unrelated"
+        assert "unverified" in result["reason"]
+        drive_svc.files.return_value.create.assert_not_called()
+
+    async def test_stem_match_marked_with_other_source_uploads(self, tmp_path):
+        local_file = tmp_path / "report.csv"
+        local_file.write_text("a,b\n1,2")
+        drive_svc = self._svc(
+            [
+                {
+                    "id": "other",
+                    "name": "report",
+                    "webViewLink": "https://x/other",
+                    "mimeType": self.SHEET,
+                    "properties": {transfer_module._CONVERT_SOURCE_PROP: "report.xlsx"},
+                }
+            ]
+        )
+
+        result = await _upload_local_file(drive_svc, str(local_file), "folder1", convert=True)
+
+        assert result["skipped"] is False
+        assert result["fileId"] == "fid-new"
+
+    async def test_stem_query_escapes_quotes_in_both_names(self, tmp_path):
+        local_file = tmp_path / "it's.csv"
+        local_file.write_text("a,b\n1,2")
+        drive_svc = self._svc([])
+
+        await _upload_local_file(drive_svc, str(local_file), "folder1", convert=True)
+
+        q = drive_svc.files.return_value.list.call_args.kwargs["q"]
+        assert "name='it\\'s.csv' or name='it\\'s'" in q
+
+    async def test_non_convert_check_queries_full_name_only_without_properties(self, tmp_path):
+        local_file = tmp_path / "data.csv"
+        local_file.write_text("a,b\n1,2")
+        drive_svc = self._svc([])
+
+        await _upload_local_file(drive_svc, str(local_file), "folder1")
+
+        list_kwargs = drive_svc.files.return_value.list.call_args.kwargs
+        assert "name='data.csv')" in list_kwargs["q"]
+        assert " or " not in list_kwargs["q"]
+        assert "properties" not in list_kwargs["fields"]
+
+    async def test_non_convert_ignores_a_same_stem_entry(self, tmp_path):
+        """Without convert there's no extension stripping, so a "data" entry
+        is just a different name — no skip."""
+        local_file = tmp_path / "data.csv"
+        local_file.write_text("a,b\n1,2")
+        drive_svc = self._svc(
+            [{"id": "d", "name": "data", "webViewLink": "https://x/d", "mimeType": self.SHEET}]
+        )
+
+        result = await _upload_local_file(drive_svc, str(local_file), "folder1")
+
+        assert result["skipped"] is False
+
 
 class TestUploadLocalFileToolCacheInvalidation:
     """upload_local_file tool wrapper: drive_folder_cache.mark_dirty gate.
@@ -693,6 +1214,43 @@ class TestUploadLocalFolder:
             "folder1"
         )
 
+    async def test_compressed_file_uploads_with_compression_mimetype(self, tmp_path):
+        # #930: not the inner file's text/csv.
+        (tmp_path / "report.csv.gz").write_bytes(b"\x1f\x8b fake")
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.list.return_value.execute.return_value = {"files": []}
+        drive_svc.files.return_value.create.return_value.execute.return_value = {
+            "id": "fid",
+            "name": "report.csv.gz",
+            "webViewLink": "https://example.com",
+        }
+
+        result = await self._tool()(str(tmp_path), "folder1", ctx=self._ctx(drive_svc))
+
+        assert result["uploaded"] == ["report.csv.gz"]
+        create_kwargs = drive_svc.files.return_value.create.call_args.kwargs
+        assert create_kwargs["media_body"].mimetype() == "application/gzip"
+
+    async def test_leftover_partial_listed_as_skipped_not_uploaded(self, tmp_path):
+        """#887: a download's leftover temp file is never uploaded, but it's
+        reported rather than silently ignored."""
+        (tmp_path / "a.txt").write_text("a")
+        leftover = tmp_path / (atomic_write._PARTIAL_DOWNLOAD_PREFIX + "0123456789abcdef")
+        leftover.write_bytes(b"half a file")
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.list.return_value.execute.return_value = {"files": []}
+        drive_svc.files.return_value.create.return_value.execute.return_value = {
+            "id": "fid",
+            "name": "a.txt",
+            "webViewLink": "https://example.com",
+        }
+
+        result = await self._tool()(str(tmp_path), "folder1", ctx=self._ctx(drive_svc))
+
+        assert result["uploaded"] == ["a.txt"]
+        assert result["skipped"] == [leftover.name]
+        assert drive_svc.files.return_value.create.call_count == 1
+
     async def test_restamp_failure_orphan_still_marks_folder_cache_dirty(self, tmp_path):
         """#420 QA round 1 (PR #645): a single-item folder where create()
         succeeds but the convert restamp then fails never lands in `uploaded`
@@ -795,6 +1353,34 @@ class TestUploadLocalFolder:
         assert ".zip" in result["failed"][0]["error"]
         drive_svc.files.return_value.create.assert_not_called()
 
+    async def test_convert_unsupported_extension_still_reported_failed_despite_name_collision(
+        self, tmp_path
+    ):
+        """#514 QA round 1 (PR #767): unifying both skip branches through
+        _should_skip_existing_upload must not treat convert=True's
+        unsupported-extension case (target_mime is None) the same as the
+        not-converting case (convert_mime is None means "any existing entry
+        matches") — that would silently skip an unsupported file merely
+        because Drive happens to already have some unrelated entry sharing
+        its name, instead of surfacing the "not supported" error the way
+        test_convert_unsupported_extension_reported_as_failed_not_uploaded
+        above confirms for the no-collision case."""
+        (tmp_path / "archive.zip").write_bytes(b"fake")
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.list.return_value.execute.return_value = {
+            "files": [{"name": "archive.zip", "mimeType": "application/zip"}]
+        }
+
+        result = await self._tool()(
+            str(tmp_path), "folder1", convert=True, ctx=self._ctx(drive_svc)
+        )
+
+        assert result["skipped"] == []
+        assert result["uploaded"] == []
+        assert len(result["failed"]) == 1
+        assert result["failed"][0]["name"] == "archive.zip"
+        assert ".zip" in result["failed"][0]["error"]
+
     async def test_convert_skips_when_existing_file_already_in_target_mimetype(self, tmp_path):
         (tmp_path / "data.csv").write_text("a,b\n1,2")
         drive_svc = MagicMock()
@@ -847,7 +1433,13 @@ class TestUploadLocalFolder:
         (tmp_path / "data.csv").write_text("a,b\n1,2")
         drive_svc = MagicMock()
         drive_svc.files.return_value.list.return_value.execute.return_value = {
-            "files": [{"name": "data", "mimeType": "application/vnd.google-apps.spreadsheet"}]
+            "files": [
+                {
+                    "name": "data",
+                    "mimeType": "application/vnd.google-apps.spreadsheet",
+                    "properties": {transfer_module._CONVERT_SOURCE_PROP: "data.csv"},
+                }
+            ]
         }
 
         result = await self._tool()(
@@ -855,7 +1447,168 @@ class TestUploadLocalFolder:
         )
 
         assert result["skipped"] == ["data.csv"]
+        assert result["skipped_unverified"] == []
         assert result["uploaded"] == []
+        drive_svc.files.return_value.create.assert_not_called()
+
+    async def test_convert_unrelated_stem_match_is_reported_unverified(self, tmp_path):
+        """#769's repro: an unrelated Sheet literally named "report" (no
+        conversion marker) must not be passed off as report.csv's converted
+        duplicate. Per the maintainer decision it's still skipped — it could
+        equally be a conversion from before the marker existed, and uploading
+        would duplicate those — but reported under skipped_unverified, not
+        skipped, so the ambiguity is visible."""
+        (tmp_path / "report.csv").write_text("a,b\n1,2")
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.list.return_value.execute.return_value = {
+            "files": [{"name": "report", "mimeType": "application/vnd.google-apps.spreadsheet"}]
+        }
+
+        result = await self._tool()(
+            str(tmp_path), "folder1", convert=True, ctx=self._ctx(drive_svc)
+        )
+
+        assert result["skipped"] == []
+        assert result["uploaded"] == []
+        assert len(result["skipped_unverified"]) == 1
+        entry = result["skipped_unverified"][0]
+        assert entry["name"] == "report.csv"
+        assert entry["matched_name"] == "report"
+        assert "unverified" in entry["reason"]
+        drive_svc.files.return_value.create.assert_not_called()
+        # The marker can only be read back if the bulk list() asks for it.
+        list_kwargs = drive_svc.files.return_value.list.call_args.kwargs
+        assert "properties" in list_kwargs["fields"]
+
+    async def test_convert_stem_match_marked_with_other_source_uploads(self, tmp_path):
+        """A stem match whose marker names a *different* source file (here a
+        "report" Sheet this tool converted from report.xlsx) is provably not
+        report.csv's duplicate, so report.csv uploads rather than being
+        skipped either way (#769)."""
+        (tmp_path / "report.csv").write_text("a,b\n1,2")
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.list.return_value.execute.return_value = {
+            "files": [
+                {
+                    "name": "report",
+                    "mimeType": "application/vnd.google-apps.spreadsheet",
+                    "properties": {transfer_module._CONVERT_SOURCE_PROP: "report.xlsx"},
+                }
+            ]
+        }
+        drive_svc.files.return_value.create.return_value.execute.return_value = {
+            "id": "fid1",
+            "name": "report",
+            "webViewLink": "https://example.com",
+        }
+
+        result = await self._tool()(
+            str(tmp_path), "folder1", convert=True, ctx=self._ctx(drive_svc)
+        )
+
+        assert result["uploaded"] == ["report.csv"]
+        assert result["skipped"] == []
+        assert result["skipped_unverified"] == []
+
+    async def test_convert_marked_match_wins_over_unmarked_same_stem_entry(self, tmp_path):
+        """With both an unrelated unmarked "data" Sheet and this tool's own
+        marked conversion present, the file is provably already converted —
+        a plain skip, not an unverified one, regardless of listing order."""
+        (tmp_path / "data.csv").write_text("a,b\n1,2")
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.list.return_value.execute.return_value = {
+            "files": [
+                {"name": "data", "mimeType": "application/vnd.google-apps.spreadsheet"},
+                {
+                    "name": "data",
+                    "mimeType": "application/vnd.google-apps.spreadsheet",
+                    "properties": {transfer_module._CONVERT_SOURCE_PROP: "data.csv"},
+                },
+            ]
+        }
+
+        result = await self._tool()(
+            str(tmp_path), "folder1", convert=True, ctx=self._ctx(drive_svc)
+        )
+
+        assert result["skipped"] == ["data.csv"]
+        assert result["skipped_unverified"] == []
+
+    async def test_convert_stem_match_recognizes_markdown_only_marker(self, tmp_path):
+        """A Doc converted by sync_folder's convert_markdown path carries only
+        _CONVERT_MARKDOWN_SOURCE_PROP, never the generic marker — it's still
+        this tool's own conversion and must count as verified (#769)."""
+        (tmp_path / "notes.md").write_text("# Heading")
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.list.return_value.execute.return_value = {
+            "files": [
+                {
+                    "name": "notes",
+                    "mimeType": "application/vnd.google-apps.document",
+                    "properties": {transfer_module._CONVERT_MARKDOWN_SOURCE_PROP: "notes.md"},
+                }
+            ]
+        }
+
+        result = await self._tool()(
+            str(tmp_path), "folder1", convert=True, ctx=self._ctx(drive_svc)
+        )
+
+        assert result["skipped"] == ["notes.md"]
+        assert result["skipped_unverified"] == []
+
+    async def test_full_name_match_stays_unconditional_without_marker(self, tmp_path):
+        """Only the stem lookup needs the marker (#769) — an unmarked entry
+        matching the full local name in the target format is still a plain skip."""
+        (tmp_path / "notes.md").write_text("# Heading")
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.list.return_value.execute.return_value = {
+            "files": [{"name": "notes.md", "mimeType": "application/vnd.google-apps.document"}]
+        }
+
+        result = await self._tool()(
+            str(tmp_path), "folder1", convert=True, ctx=self._ctx(drive_svc)
+        )
+
+        assert result["skipped"] == ["notes.md"]
+        assert result["skipped_unverified"] == []
+
+    async def test_non_convert_bulk_list_does_not_fetch_properties(self, tmp_path):
+        """Only the convert stem check reads the marker (PR #800 QA round 1, item 4)."""
+        (tmp_path / "a.txt").write_text("a")
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.list.return_value.execute.return_value = {
+            "files": [{"name": "a.txt", "mimeType": "text/plain"}]
+        }
+
+        result = await self._tool()(str(tmp_path), "folder1", ctx=self._ctx(drive_svc))
+
+        assert result["skipped"] == ["a.txt"]
+        list_kwargs = drive_svc.files.return_value.list.call_args.kwargs
+        assert "properties" not in list_kwargs["fields"]
+
+    async def test_convert_long_name_digested_marker_is_recognized(self, tmp_path):
+        """A name too long for a raw marker gets a digest; the rerun must still
+        read it back as verified (PR #800 QA round 1, item 1)."""
+        name = "L" * 114 + ".csv"
+        (tmp_path / name).write_text("a,b\n1,2")
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.list.return_value.execute.return_value = {
+            "files": [
+                {
+                    "name": name[:-4],
+                    "mimeType": "application/vnd.google-apps.spreadsheet",
+                    "properties": transfer_module._convert_properties(name),
+                }
+            ]
+        }
+
+        result = await self._tool()(
+            str(tmp_path), "folder1", convert=True, ctx=self._ctx(drive_svc)
+        )
+
+        assert result["skipped"] == [name]
+        assert result["skipped_unverified"] == []
         drive_svc.files.return_value.create.assert_not_called()
 
     async def test_convert_skips_when_both_raw_and_converted_duplicates_exist(self, tmp_path):
@@ -870,7 +1623,11 @@ class TestUploadLocalFolder:
         drive_svc.files.return_value.list.return_value.execute.return_value = {
             "files": [
                 {"name": "data.csv", "mimeType": "text/csv"},
-                {"name": "data", "mimeType": "application/vnd.google-apps.spreadsheet"},
+                {
+                    "name": "data",
+                    "mimeType": "application/vnd.google-apps.spreadsheet",
+                    "properties": {transfer_module._CONVERT_SOURCE_PROP: "data.csv"},
+                },
             ]
         }
 
@@ -881,6 +1638,57 @@ class TestUploadLocalFolder:
         assert result["skipped"] == ["data.csv"]
         assert result["uploaded"] == []
         drive_svc.files.return_value.create.assert_not_called()
+
+    async def test_convert_recognizes_already_converted_when_two_drive_files_share_a_name(
+        self, tmp_path
+    ):
+        """#514 (surfaced during PR #505's review of #411): Drive allows more
+        than one file to share a literal name. The old existing_by_name dict
+        comprehension kept only the *last*-iterated entry for a given name,
+        so whichever of the raw/converted duplicates Drive happened to list
+        last decided the (wrong, order-dependent) skip outcome. Here both
+        entries are literally named "data.csv" — the raw one listed *after*
+        the already-converted one, the ordering under which the old
+        last-write-wins dict would have silently lost the converted
+        classification and reconverted a duplicate."""
+        (tmp_path / "data.csv").write_text("a,b\n1,2")
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.list.return_value.execute.return_value = {
+            "files": [
+                {"name": "data.csv", "mimeType": "application/vnd.google-apps.spreadsheet"},
+                {"name": "data.csv", "mimeType": "text/csv"},
+            ]
+        }
+
+        result = await self._tool()(
+            str(tmp_path), "folder1", convert=True, ctx=self._ctx(drive_svc)
+        )
+
+        assert result["skipped"] == ["data.csv"]
+        assert result["uploaded"] == []
+        drive_svc.files.return_value.create.assert_not_called()
+
+    async def test_skip_if_exists_false_uploads_despite_colliding_existing_files(self, tmp_path):
+        """#514: the per-candidate skip check is gated explicitly on
+        skip_if_exists rather than relying on existing_by_name being empty
+        when it's False, so a future change that populates existing_by_name
+        for an unrelated reason can't silently reintroduce skip behavior a
+        caller explicitly opted out of."""
+        (tmp_path / "data.csv").write_text("a,b\n1,2")
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.create.return_value.execute.return_value = {
+            "id": "fid1",
+            "name": "data.csv",
+            "webViewLink": "https://example.com",
+        }
+
+        result = await self._tool()(
+            str(tmp_path), "folder1", skip_if_exists=False, ctx=self._ctx(drive_svc)
+        )
+
+        assert result["uploaded"] == ["data.csv"]
+        assert result["skipped"] == []
+        drive_svc.files.return_value.list.assert_not_called()
 
     async def test_file_deleted_mid_loop_reported_as_failed_not_raised(self, tmp_path, monkeypatch):
         """_upload_local_file raises ValueError uncaught if the local file is
@@ -1034,7 +1842,9 @@ class TestExportFile:
 
 class _FakeDriveFS:
     """Fakes the slice of the Drive API sync_folder needs: per-folder `files().list`,
-    plus `files().create`/`files().update` that record what would have been written."""
+    plus `files().create`/`files().update` that record what would have been written,
+    and `revisions().list` (#814) serving `revisions[file_id]` (default ["1"]) as
+    a single page, or raising `revision_errors[file_id]` if set."""
 
     def __init__(self, children: dict[str, list[dict]]):
         self.children = children  # folder_id -> Drive API file/folder dicts
@@ -1042,11 +1852,26 @@ class _FakeDriveFS:
         self.created_folders: list[dict] = []
         self.created_files: list[dict] = []
         self.updated_files: list[dict] = []
+        self.revisions: dict[str, list[str]] = {}
+        self.revision_errors: dict[str, Exception] = {}
+        self.revision_list_calls: list[str] = []
 
         self.svc = MagicMock()
         self.svc.files.return_value.list.side_effect = self._list
         self.svc.files.return_value.create.side_effect = self._create
         self.svc.files.return_value.update.side_effect = self._update
+        self.svc.revisions.return_value.list.side_effect = self._list_revisions
+
+    def _list_revisions(self, **kwargs):
+        file_id = kwargs["fileId"]
+        self.revision_list_calls.append(file_id)
+        resp = MagicMock()
+        if file_id in self.revision_errors:
+            resp.execute.side_effect = self.revision_errors[file_id]
+        else:
+            ids = self.revisions.get(file_id, ["1"])
+            resp.execute.return_value = {"revisions": [{"id": i} for i in ids]}
+        return resp
 
     def _list(self, **kwargs):
         folder_id = kwargs["q"].split("'")[1]
@@ -1097,13 +1922,31 @@ def _drive_file(
     mime="text/plain",
     properties=None,
     md5=None,
+    size=None,
 ):
     f = {"id": file_id, "name": name, "mimeType": mime, "modifiedTime": mtime}
     if properties is not None:
         f["properties"] = properties
     if md5 is not None:
         f["md5Checksum"] = md5
+    if size is not None:
+        f["size"] = str(size)  # Drive returns size as a string
     return f
+
+
+def _precise_mtime(path: Path) -> str:
+    """The microsecond-precision source-mtime stamp #814 writes for `path`."""
+    return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%S.%fZ"
+    )
+
+
+def _pop_uploaded_at(props: dict) -> str:
+    """Remove and sanity-check the upload-time stamp (#814), which is "now"."""
+    value = props.pop(transfer_module._CONVERTED_MD_UPLOADED_AT_PROP)
+    stamped = datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    assert abs(stamped - time.time()) < 60
+    return value
 
 
 def _drive_folder(name, folder_id):
@@ -1157,6 +2000,90 @@ class TestSyncFolderValidation:
         )
         assert result["error"].startswith("Unknown export_format 'bogus'. Valid: ")
         assert fs.list_calls == []  # rejected before any Drive API call
+
+
+class TestSyncFolderUploadMimetype:
+    """#930: a compressed file is uploaded with its compression type, not the
+    type of the file inside it."""
+
+    async def test_local_only_compressed_file_uploads_as_gzip(self, tmp_path):
+        (tmp_path / "report.csv.gz").write_bytes(b"\x1f\x8b fake")
+        (tmp_path / "plain.csv").write_text("a,b\n1,2")
+        fs = _FakeDriveFS({"root": []})
+        ctx = MagicMock()
+        ctx.request_context.lifespan_context.drive_service = fs.svc
+        ctx.request_context.lifespan_context.drive_folder_cache = MagicMock()
+        ctx.report_progress = AsyncMock()
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root", local_path=str(tmp_path), direction="upload", ctx=ctx
+        )
+
+        assert sorted(result["uploaded"]) == ["plain.csv", "report.csv.gz"]
+        mimetypes_by_name = {
+            call.kwargs["body"]["name"]: call.kwargs["media_body"].mimetype()
+            for call in fs.svc.files.return_value.create.call_args_list
+        }
+        assert mimetypes_by_name == {
+            "report.csv.gz": "application/gzip",
+            "plain.csv": "text/csv",
+        }
+
+
+class TestSyncFolderSizeBytesCountsUploads:
+    """#1003: size_bytes ("bytes transferred") counted only downloads, so an
+    upload-only sync always reported 0."""
+
+    def _ctx(self, fs: _FakeDriveFS):
+        ctx = MagicMock()
+        ctx.request_context.lifespan_context.drive_service = fs.svc
+        ctx.request_context.lifespan_context.drive_folder_cache = MagicMock()
+        ctx.report_progress = AsyncMock()
+        return ctx
+
+    async def test_create_path_counts_uploaded_bytes(self, tmp_path):
+        (tmp_path / "a.txt").write_bytes(b"x" * 28)
+        (tmp_path / "b.txt").write_bytes(b"y" * 5)
+        fs = _FakeDriveFS({"root": []})
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root", local_path=str(tmp_path), direction="upload", ctx=self._ctx(fs)
+        )
+
+        assert sorted(result["uploaded"]) == ["a.txt", "b.txt"]
+        assert result["size_bytes"] == 33
+
+    async def test_update_path_counts_uploaded_bytes(self, tmp_path):
+        # Drive copy is far older than the local file, so the plan re-uploads
+        # it through update() rather than create().
+        (tmp_path / "a.txt").write_bytes(b"x" * 28)
+        fs = _FakeDriveFS({"root": [_drive_file("a.txt", "f1", mtime="2020-01-01T00:00:00.000Z")]})
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root", local_path=str(tmp_path), direction="upload", ctx=self._ctx(fs)
+        )
+
+        assert result["uploaded"] == ["a.txt"]
+        assert [u["fileId"] for u in fs.updated_files] == ["f1"]
+        assert fs.created_files == []
+        assert result["size_bytes"] == 28
+
+    async def test_recursive_upload_sums_bytes_across_levels(self, tmp_path):
+        (tmp_path / "top.txt").write_bytes(b"x" * 3)
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "nested.txt").write_bytes(b"y" * 7)
+        fs = _FakeDriveFS({"root": []})
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            direction="upload",
+            recursive=True,
+            ctx=self._ctx(fs),
+        )
+
+        assert sorted(result["uploaded"]) == ["sub/nested.txt", "top.txt"]
+        assert result["size_bytes"] == 10
 
 
 class TestSyncFolderRecursive:
@@ -1317,6 +2244,85 @@ class TestSyncFolderRecursive:
         assert any("a.txt" in m for m in messages)
         assert any("b.txt" in m for m in messages)
 
+    async def test_progress_message_includes_running_bytes_transferred(self, tmp_path):
+        """#352: sync_folder's progress/total stay file-count-based with no total
+        (recursive descent means the overall count isn't known upfront) — the
+        message text adds a running total of bytes transferred so far as
+        supplementary context."""
+        (tmp_path / "a.txt").write_text("hi")  # 2 bytes
+        (tmp_path / "b.txt").write_text("bye!")  # 4 bytes
+        fs = _FakeDriveFS({"root": []})
+        ctx = self._ctx(fs)
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            direction="upload",
+            ctx=ctx,
+        )
+        assert set(result["uploaded"]) == {"a.txt", "b.txt"}
+        messages = [c.args[2] for c in ctx.report_progress.await_args_list]
+        assert all(m.endswith("bytes so far") for m in messages)
+        # progress/total (args[0]/args[1]) are unaffected — still file-count-based
+        # with no total, per the docstring's own documented Progress behavior.
+        for c in ctx.report_progress.await_args_list:
+            assert c.args[1] is None
+        # Running total accumulates across both uploads (2 then 6, in whichever
+        # order the concurrent gather completes them).
+        assert any("6 bytes so far" in m for m in messages)
+
+    async def test_upload_stat_failure_after_successful_write_reports_orphan_fileId(
+        self, tmp_path, monkeypatch
+    ):
+        """#352 QA review, finding #1: the new bytes-reporting `p.stat()` call
+        used to sit inside the same try/except that covers the Drive create()/
+        update() calls above it. If the local file is deleted/moved in the
+        window between the Drive write succeeding and this stat() call, the
+        exception fell into the enclosing except and reported upload_fail with
+        no fileId — unlike the restamp-failure branch a few lines above
+        (#420/#650), which deliberately reports fileId so a genuinely-created
+        Drive object isn't left untracked. The stat() call now has its own
+        try/except mirroring that pattern."""
+        local_file = tmp_path / "a.txt"
+        local_file.write_text("hi")
+        fs = _FakeDriveFS({"root": []})
+        ctx = self._ctx(fs)
+
+        real_stat = Path.stat
+
+        def _flaky_stat(self, *args, **kwargs):
+            # Raise only once the fake Drive write has actually landed —
+            # simulates the local file vanishing in the window between the
+            # Drive write succeeding and the post-write size stat(), without
+            # having to guess how many earlier stat() calls (e.g. the
+            # pre-upload mtime read) happen first.
+            if self == local_file and fs.created_files:
+                raise OSError("No such file or directory")
+            return real_stat(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "stat", _flaky_stat)
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            direction="upload",
+            ctx=ctx,
+        )
+
+        # The Drive write genuinely succeeded before the stat() failed.
+        assert len(fs.created_files) == 1
+        assert result["uploaded"] == []
+        assert len(result["failed"]) == 1
+        entry = result["failed"][0]
+        assert entry["name"] == "a.txt"
+        assert "failed to stat the local file afterward" in entry["error"]
+        assert entry["fileId"] == "new-file-1"
+        # A genuine Drive-side change still earns a cache invalidation, the same
+        # as a real upload_ok (mirrors the restamp-failure case above).
+        ctx.request_context.lifespan_context.drive_folder_cache.mark_dirty.assert_called_once_with(
+            "root"
+        )
+
     async def test_dry_run_reports_no_progress(self, tmp_path):
         """dry_run transfers nothing, so no progress update should fire either."""
         (tmp_path / "a.txt").write_text("hi")
@@ -1384,6 +2390,114 @@ class TestSyncFolderRecursive:
         ]
         # the pre-existing local file itself must survive untouched
         assert (tmp_path / "collide").read_text() == "existing local file, not a directory"
+
+    async def test_dangling_symlink_at_subfolder_path_recorded_as_failed(self, tmp_path):
+        """#874: exists() is False for a dangling symlink, so the guard above
+        missed it and mkdir raised a raw FileExistsError mid-sync."""
+        (tmp_path / "collide").symlink_to(tmp_path / "missing-target")
+        fs = _FakeDriveFS(
+            {
+                "root": [_drive_folder("collide", "collide-folder-id")],
+                "collide-folder-id": [],
+            }
+        )
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            direction="download",
+            recursive=True,
+            ctx=self._ctx(fs),
+        )
+        assert result["failed"] == [
+            {
+                "name": "collide/",
+                "error": (
+                    "cannot create local folder 'collide': a symlink to a missing target "
+                    "already exists at this path"
+                ),
+            }
+        ]
+        assert (tmp_path / "collide").is_symlink()
+        assert not (tmp_path / "missing-target").exists()
+
+    async def test_dry_run_reports_subfolder_blocker_as_conflict(self, tmp_path):
+        """PR #1001 QA round 1: the blocker check ran only on a real run, so a
+        dry_run preview left out the folder the real run reports as failed."""
+        (tmp_path / "collide").symlink_to(tmp_path / "missing-target")
+        fs = _FakeDriveFS(
+            {
+                "root": [_drive_folder("collide", "collide-folder-id")],
+                "collide-folder-id": [_drive_file("nested.txt", "f1")],
+            }
+        )
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            direction="download",
+            recursive=True,
+            dry_run=True,
+            ctx=self._ctx(fs),
+        )
+        assert result["actions"] == [
+            {
+                "name": "collide/",
+                "action": "conflict",
+                "reason": (
+                    "cannot create local folder 'collide': a symlink to a missing target "
+                    "already exists at this path"
+                ),
+            }
+        ]
+        assert result["failed"] == []
+        assert not (tmp_path / "missing-target").exists()
+
+    async def test_folder_with_temp_file_name_is_synced(self, tmp_path):
+        """PR #1001 QA round 1: the reserved temp-file name applies to files
+        only; a folder with it is synced like any other."""
+        name = atomic_write._PARTIAL_DOWNLOAD_PREFIX + "0123456789abcdef"
+        fs = _FakeDriveFS(
+            {"root": [_drive_folder(name, "pf")], "pf": [_drive_file("nested.txt", "f1")]}
+        )
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            direction="download",
+            recursive=True,
+            dry_run=True,
+            ctx=self._ctx(fs),
+        )
+        assert [(a["name"], a["action"]) for a in result["actions"]] == [
+            (f"{name}/nested.txt", "download")
+        ]
+
+    async def test_file_created_at_subfolder_path_after_check_recorded_as_failed(
+        self, tmp_path, monkeypatch
+    ):
+        """#874: the mkdir itself is guarded too, for a file that appears
+        between the check and the mkdir."""
+        fs = _FakeDriveFS(
+            {
+                "root": [_drive_folder("collide", "collide-folder-id")],
+                "collide-folder-id": [],
+            }
+        )
+        real_mkdir = Path.mkdir
+
+        def _racing_mkdir(self, *args, **kwargs):
+            if self.name == "collide":
+                self.write_text("raced in")
+            return real_mkdir(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "mkdir", _racing_mkdir)
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            direction="download",
+            recursive=True,
+            ctx=self._ctx(fs),
+        )
+        assert [f["name"] for f in result["failed"]] == ["collide/"]
+        assert (tmp_path / "collide").read_text() == "raced in"
 
     async def test_drive_folder_create_failure_recorded_as_failed_not_crashed(self, tmp_path):
         """PR #328 review: unlike every file-level transfer, the Drive folder-create
@@ -1499,8 +2613,13 @@ class TestSyncFolderConvertMarkdown:
         assert result["uploaded"] == ["notes.md"]
         assert fs.created_files[0]["name"] == "notes.md"
         assert fs.created_files[0]["mimeType"] == "application/vnd.google-apps.document"
-        assert fs.created_files[0]["properties"] == {
-            transfer_module._CONVERT_MARKDOWN_SOURCE_PROP: "notes.md"
+        props = dict(fs.created_files[0]["properties"])
+        _pop_uploaded_at(props)
+        assert props == {
+            transfer_module._CONVERT_SOURCE_PROP: "notes.md",
+            transfer_module._CONVERT_MARKDOWN_SOURCE_PROP: "notes.md",
+            # #814: the local-side reference; a new Doc has no baseline.
+            transfer_module._CONVERTED_MD_SOURCE_MTIME_PROP: _precise_mtime(tmp_path / "notes.md"),
         }
         create_kwargs = fs.svc.files.return_value.create.call_args_list[-1].kwargs
         assert create_kwargs["media_body"].mimetype() == "text/markdown"
@@ -1511,6 +2630,75 @@ class TestSyncFolderConvertMarkdown:
         assert fs.updated_files[0]["fileId"] == "new-file-1"
         assert "modifiedTime" in fs.updated_files[0]["body"]
         assert "media_body" not in fs.updated_files[0]
+
+    @pytest.mark.parametrize(
+        ("name", "digested"),
+        [
+            # Too long for the markdown key, still fits the generic key raw.
+            ("n" * 100 + ".md", False),
+            # Too long for either: the generic marker falls back to a digest.
+            ("n" * 110 + ".md", True),
+        ],
+    )
+    async def test_long_md_name_upload_stamps_every_property_within_cap(
+        self, tmp_path, name, digested
+    ):
+        """#805: a .md name over ~95 bytes used to be stamped raw into the
+        markdown key, failing create() with 403 propertyLengthLimitExceeded
+        after Drive had already made the Doc — one more orphan per run."""
+        (tmp_path / name).write_text("# Heading")
+        fs = _FakeDriveFS({"root": []})
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            direction="upload",
+            convert_markdown=True,
+            ctx=self._ctx(fs),
+        )
+
+        assert result["uploaded"] == [name]
+        assert result["failed"] == []
+        props = fs.created_files[0]["properties"]
+        assert transfer_module._CONVERT_MARKDOWN_SOURCE_PROP not in props
+        assert props[transfer_module._CONVERT_SOURCE_PROP].startswith("sha256:") == digested
+        for key, value in props.items():
+            assert transfer_module._property_fits(key, value), (key, value)
+
+    @pytest.mark.parametrize("name", ["n" * 100 + ".md", "n" * 110 + ".md", "長い" * 30 + ".md"])
+    async def test_resync_matches_long_name_doc_via_digest_marker(self, tmp_path, name):
+        """A Doc stamped with only the digested generic marker (a long name,
+        from either sync_folder or upload_local_file's convert path) must
+        still match its local file on resync, not re-upload as a duplicate."""
+        local_file = tmp_path / name
+        local_file.write_text("# Heading")
+        drive_mtime = "2024-06-01T12:00:00.000Z"
+        ts = datetime.fromisoformat(drive_mtime.replace("Z", "+00:00")).timestamp()
+        os.utime(local_file, (ts, ts))
+        fs = _FakeDriveFS(
+            {
+                "root": [
+                    _drive_file(
+                        name,
+                        "fa",
+                        mtime=drive_mtime,
+                        mime="application/vnd.google-apps.document",
+                        properties=transfer_module._convert_properties(name),
+                    )
+                ]
+            }
+        )
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            direction="bidirectional",
+            ctx=self._ctx(fs),
+        )
+
+        assert result["skipped"] == [name]
+        assert result["uploaded"] == []
+        assert fs.created_files == []
 
     async def test_convert_markdown_false_default_uploads_md_as_plain_text(self, tmp_path):
         (tmp_path / "notes.md").write_text("# Heading")
@@ -1597,6 +2785,17 @@ class TestSyncFolderConvertMarkdown:
         assert len(fs.updated_files) == 1
         assert fs.updated_files[0]["fileId"] == "fa"
         assert fs.updated_files[0]["media_body"].mimetype() == "text/markdown"
+        # #814: a legacy Doc (no source-mtime stamp) gains the properties on
+        # re-upload, with the pre-update latest revision as its baseline and
+        # any stale import revision cleared.
+        props = dict(fs.updated_files[0]["body"]["properties"])
+        _pop_uploaded_at(props)
+        assert props == {
+            transfer_module._CONVERTED_MD_SOURCE_MTIME_PROP: _precise_mtime(local_file),
+            transfer_module._CONVERTED_MD_BASELINE_REV_PROP: "1",
+            transfer_module._CONVERTED_MD_IMPORT_REV_PROP: None,
+        }
+        assert fs.revision_list_calls == ["fa"]
 
     async def test_drive_only_converted_doc_reported_as_conflict_not_downloaded(self, tmp_path):
         """No reverse conversion exists (Google Doc -> markdown). A converted Doc
@@ -1880,6 +3079,35 @@ class TestSyncFolderConvertMarkdown:
         assert "plain file" in result["failed"][0]["error"]
         assert fs.updated_files == []
 
+    async def test_unreadable_mtime_at_upload_lands_in_failed(self, tmp_path, monkeypatch):
+        """PR #817 QA round 1: _run_one read the local mtime before its try, so a
+        file that vanished or became unreadable between the scan and the upload
+        escaped upload_fail handling. The final failed entry looked the same
+        (the gather's return_exceptions caught it), but the raw exception skipped
+        _run_one_with_progress, so no progress notification went out for it. It
+        must be a real upload_fail: reported as progress, nothing created."""
+        (tmp_path / "notes.txt").write_text("x")
+        fs = _FakeDriveFS({"root": []})
+
+        def _boom(_path, _st=None):
+            raise PermissionError("denied")
+
+        monkeypatch.setattr(transfer_module, "_local_mtime_dt", _boom)
+        ctx = self._ctx(fs)
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            direction="upload",
+            ctx=ctx,
+        )
+
+        assert result["uploaded"] == []
+        assert result["failed"] == [{"name": "notes.txt", "error": "denied"}]
+        assert fs.created_files == []
+        ctx.report_progress.assert_awaited_once()
+        assert ctx.report_progress.await_args.args[2] == "notes.txt: upload_fail"
+
     async def test_restamp_failure_after_successful_create_reports_orphan_fileId(self, tmp_path):
         """#420: sync_folder's convert_markdown upload path wraps the create() call
         and its metadata-only restamp update() in the same step. If create()
@@ -1976,6 +3204,7 @@ class TestSyncFolderConvertMarkdown:
                 return super()._update(**kwargs)
 
         fs = _RestampQuotaFailsFakeDriveFS({"root": []})
+        as_service_account(fs.svc)
 
         result = await _transfer_tools["sync_folder"](
             folder_id="root",
@@ -1991,7 +3220,45 @@ class TestSyncFolderConvertMarkdown:
         assert entry["name"] == "notes.md"
         assert entry["fileId"] == "new-file-1"
         assert "storageQuotaExceeded" not in entry["error"]
-        assert transfer_module._SA_QUOTA_ERROR in entry["error"]
+        assert _SA_QUOTA_ERROR in entry["error"]
+
+    async def test_upload_create_quota_failure_uses_friendly_message(self, tmp_path):
+        """#670: _sync_level._run_one's *outer* catch-all `except Exception` (the
+        one wrapping the whole create()/update() block, not the restamp except
+        fixed in #650) returned a bare str(e). A storageQuotaExceeded HttpError
+        raised by files().create() lands there and previously leaked Drive's raw
+        error blob instead of the shared _SA_QUOTA_ERROR text. Exercised via a
+        plain (non-convert) upload so the failure is create() itself, not the
+        convert_markdown restamp."""
+        (tmp_path / "readme.txt").write_text("hello")
+
+        class _CreateQuotaFailsFakeDriveFS(_FakeDriveFS):
+            def _create(self, **kwargs):
+                resp = MagicMock()
+                resp.status = 403
+                raise HttpError(
+                    resp=resp,
+                    content=b'{"error": {"reason": "storageQuotaExceeded"}}',
+                )
+
+        for service_account, expected in ((True, _SA_QUOTA_ERROR), (False, _USER_QUOTA_ERROR)):
+            fs = _CreateQuotaFailsFakeDriveFS({"root": []})
+            if service_account:
+                as_service_account(fs.svc)
+
+            result = await _transfer_tools["sync_folder"](
+                folder_id="root",
+                local_path=str(tmp_path),
+                direction="upload",
+                ctx=self._ctx(fs),
+            )
+
+            assert result["uploaded"] == []
+            assert len(result["failed"]) == 1
+            entry = result["failed"][0]
+            assert entry["name"] == "readme.txt"
+            # A user identity whose Drive is full gets its own text (#1009).
+            assert entry["error"] == expected
 
     async def test_bidirectional_resync_after_initial_convert_stays_in_sync(self, tmp_path):
         """TC-D218 (#414 QA review): Drive's native import-conversion on create()
@@ -2167,6 +3434,999 @@ class TestSyncFolderConvertMarkdown:
         assert fs.created_files == []
 
 
+class TestConvertedMdDriveState:
+    """#814: the Drive side of a convert_markdown Doc is judged from revision
+    history, not modifiedTime."""
+
+    @staticmethod
+    def _revs(*ids, times=None):
+        times = times or {}
+        return [{"id": i, **({"modifiedTime": times[i]} if i in times else {})} for i in ids]
+
+    @pytest.mark.parametrize(
+        ("props", "ids", "expected"),
+        [
+            # New Doc, first sync: its first revision is the import.
+            ({}, ["1"], ("unchanged", "1")),
+            ({}, ["1", "2"], ("changed", "1")),
+            # Import already recorded.
+            ({"geeSweetImportRevision": "1"}, ["1"], ("unchanged", None)),
+            ({"geeSweetImportRevision": "1"}, ["1", "2"], ("changed", None)),
+            # Recorded import trimmed away, latest is something else: an edit.
+            ({"geeSweetImportRevision": "1"}, ["5"], ("changed", None)),
+            # Re-upload: the import is the first revision after the baseline.
+            ({"geeSweetBaselineRevision": "2"}, ["1", "2", "3"], ("unchanged", "3")),
+            ({"geeSweetBaselineRevision": "2"}, ["1", "2", "3", "4"], ("changed", "3")),
+            # Import not listed yet.
+            ({"geeSweetBaselineRevision": "2"}, ["1", "2"], ("pending", None)),
+            # Baseline gone and no upload time to fall back on.
+            ({"geeSweetBaselineRevision": "2"}, ["1", "3"], ("baseline_missing", None)),
+        ],
+    )
+    def test_states(self, props, ids, expected):
+        assert transfer_module._converted_md_drive_state(props, self._revs(*ids)) == expected
+
+    _UPLOADED = "2026-01-01T00:00:00.000Z"
+
+    def test_import_merged_into_later_edit_is_changed(self):
+        """PR #854 QA round 1: a Doc edited in Drive and first synced long after,
+        once Drive compacted its history to just the edit. Taking that edit as
+        the import would let the next local change overwrite it."""
+        props = {"geeSweetUploadedAt": self._UPLOADED}
+        revs = self._revs("7", times={"7": "2026-01-20T00:00:00.000Z"})
+
+        assert transfer_module._converted_md_drive_state(props, revs) == ("changed", None)
+
+    def test_import_within_window_is_accepted(self):
+        props = {"geeSweetUploadedAt": self._UPLOADED}
+        revs = self._revs("1", times={"1": "2026-01-01T00:00:04.000Z"})
+
+        assert transfer_module._converted_md_drive_state(props, revs) == ("unchanged", "1")
+
+    def test_pruned_baseline_falls_back_to_upload_time(self):
+        """PR #854 QA round 1: a pruned baseline used to leave an unedited Doc
+        in 'baseline_missing' for good."""
+        props = {"geeSweetBaselineRevision": "2", "geeSweetUploadedAt": self._UPLOADED}
+        revs = self._revs(
+            "1",
+            "3",
+            times={"1": "2025-12-01T00:00:00.000Z", "3": "2026-01-01T00:00:05.000Z"},
+        )
+
+        assert transfer_module._converted_md_drive_state(props, revs) == ("unchanged", "3")
+
+    def test_pruned_baseline_with_no_revision_since_upload_is_pending(self):
+        props = {"geeSweetBaselineRevision": "2", "geeSweetUploadedAt": self._UPLOADED}
+        revs = self._revs("1", times={"1": "2025-12-01T00:00:00.000Z"})
+
+        assert transfer_module._converted_md_drive_state(props, revs) == ("pending", None)
+
+
+class TestSyncFolderConvertedDocChangeDetection:
+    """#814: a convert_markdown Doc carrying the source-mtime stamp is synced
+    without consulting Drive's modifiedTime, which the Docs backend updates
+    minutes behind an edit (so it both overwrote the restamp and hid real Drive
+    edits). The local side compares against the stamped mtime, the Drive side
+    against revision history."""
+
+    _LOCAL_MTIME = datetime(2025, 6, 1, tzinfo=timezone.utc)
+    _STAMP = "2025-06-01T00:00:00.000Z"
+
+    def _ctx(self, fs: _FakeDriveFS):
+        ctx = MagicMock()
+        ctx.request_context.lifespan_context.drive_service = fs.svc
+        ctx.request_context.lifespan_context.drive_folder_cache = MagicMock()
+        ctx.report_progress = AsyncMock()
+        return ctx
+
+    def _setup(self, tmp_path, *, local_offset=0.0, drive_mtime=None, props=None):
+        """A local notes.md whose mtime is `local_offset` seconds after the
+        stamped source mtime, and a matching converted Doc `fa`. The Doc's
+        modifiedTime defaults to far in the future, which the modifiedTime
+        comparison would read as "Drive newer": every test here therefore also
+        shows that value isn't consulted."""
+        local = tmp_path / "notes.md"
+        local.write_text("# Notes")
+        ts = self._LOCAL_MTIME.timestamp() + local_offset
+        os.utime(local, (ts, ts))
+        all_props = {
+            transfer_module._CONVERT_MARKDOWN_SOURCE_PROP: "notes.md",
+            transfer_module._CONVERTED_MD_SOURCE_MTIME_PROP: self._STAMP,
+            **(props or {}),
+        }
+        return _FakeDriveFS(
+            {
+                "root": [
+                    _drive_file(
+                        "notes.md",
+                        "fa",
+                        mtime=drive_mtime or "2030-01-01T00:00:00.000Z",
+                        mime="application/vnd.google-apps.document",
+                        properties=all_props,
+                    )
+                ]
+            }
+        )
+
+    async def _sync(self, fs, tmp_path, direction="bidirectional", dry_run=False):
+        return await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            direction=direction,
+            dry_run=dry_run,
+            ctx=self._ctx(fs),
+        )
+
+    async def test_unchanged_doc_skipped_despite_drifted_modified_time(self, tmp_path):
+        """The original report: a restamp overwritten by the late async
+        modifiedTime update read as "Drive newer" and sat in conflicts."""
+        fs = self._setup(tmp_path, props={transfer_module._CONVERTED_MD_IMPORT_REV_PROP: "1"})
+
+        result = await self._sync(fs, tmp_path)
+
+        assert result["skipped"] == ["notes.md"]
+        assert result["conflicts"] == []
+        assert fs.revision_list_calls == ["fa"]
+        assert fs.updated_files == []  # nothing new to record
+
+    async def test_first_sync_records_import_revision(self, tmp_path):
+        fs = self._setup(tmp_path)
+        fs.revisions["fa"] = ["1"]
+
+        result = await self._sync(fs, tmp_path)
+
+        assert result["skipped"] == ["notes.md"]
+        assert fs.updated_files == [
+            {
+                "fileId": "fa",
+                # modifiedTime too: a property write would otherwise bump it
+                # to "now", undoing the cosmetic restamp.
+                "body": {
+                    "properties": {transfer_module._CONVERTED_MD_IMPORT_REV_PROP: "1"},
+                    "modifiedTime": self._STAMP,
+                },
+                "supportsAllDrives": True,
+                "fields": "id",
+            }
+        ]
+
+    async def test_first_sync_after_reupload_records_revision_after_baseline(self, tmp_path):
+        fs = self._setup(tmp_path, props={transfer_module._CONVERTED_MD_BASELINE_REV_PROP: "2"})
+        fs.revisions["fa"] = ["1", "2", "3"]
+
+        result = await self._sync(fs, tmp_path)
+
+        assert result["skipped"] == ["notes.md"]
+        assert fs.updated_files[0]["body"] == {
+            "properties": {transfer_module._CONVERTED_MD_IMPORT_REV_PROP: "3"},
+            "modifiedTime": self._STAMP,
+        }
+
+    async def test_failed_import_revision_record_does_not_fail_sync(self, tmp_path):
+        fs = self._setup(tmp_path)
+
+        def _fail(**kwargs):
+            raise RuntimeError("transient")
+
+        fs.svc.files.return_value.update.side_effect = _fail
+
+        result = await self._sync(fs, tmp_path)
+
+        assert result["skipped"] == ["notes.md"]
+        assert result["failed"] == []
+
+    async def test_drive_edit_detected_while_modified_time_still_lags(self, tmp_path):
+        """The missed-edit half of #814: Drive's modifiedTime still matches the
+        local file minutes after a Docs edit, which the modifiedTime comparison
+        reported as in sync. The new revision shows it immediately."""
+        fs = self._setup(
+            tmp_path,
+            drive_mtime=self._STAMP,
+            props={transfer_module._CONVERTED_MD_IMPORT_REV_PROP: "1"},
+        )
+        fs.revisions["fa"] = ["1", "2"]
+
+        result = await self._sync(fs, tmp_path, direction="upload")
+
+        assert result["conflicts"] == ["notes.md"]
+        assert result["skipped"] == []
+        assert fs.updated_files == []
+
+    async def test_both_sides_changed_is_conflict_not_overwrite(self, tmp_path):
+        """Local newer used to upload straight over a Drive edit."""
+        fs = self._setup(
+            tmp_path,
+            local_offset=600,
+            props={transfer_module._CONVERTED_MD_IMPORT_REV_PROP: "1"},
+        )
+        fs.revisions["fa"] = ["1", "2"]
+
+        result = await self._sync(fs, tmp_path, dry_run=True)
+
+        assert result["actions"][0]["action"] == "conflict"
+        assert "edited both locally and in Drive" in result["actions"][0]["reason"]
+
+        result = await self._sync(fs, tmp_path)
+        assert result["conflicts"] == ["notes.md"]
+        assert result["uploaded"] == []
+        assert fs.updated_files == []
+
+    async def test_local_change_uploads_with_fresh_baseline(self, tmp_path):
+        fs = self._setup(
+            tmp_path,
+            local_offset=600,
+            props={transfer_module._CONVERTED_MD_IMPORT_REV_PROP: "1"},
+        )
+        fs.revisions["fa"] = ["1"]
+
+        result = await self._sync(fs, tmp_path)
+
+        assert result["uploaded"] == ["notes.md"]
+        (update,) = fs.updated_files
+        assert update["fileId"] == "fa"
+        props = dict(update["body"]["properties"])
+        _pop_uploaded_at(props)
+        assert props == {
+            transfer_module._CONVERTED_MD_SOURCE_MTIME_PROP: _precise_mtime(tmp_path / "notes.md"),
+            transfer_module._CONVERTED_MD_BASELINE_REV_PROP: "1",
+            transfer_module._CONVERTED_MD_IMPORT_REV_PROP: None,
+        }
+        assert update["body"]["modifiedTime"] != self._STAMP
+        # One read to plan, one fresh read for the baseline just before update().
+        assert fs.revision_list_calls == ["fa", "fa"]
+
+    async def test_local_change_under_download_direction_is_conflict(self, tmp_path):
+        fs = self._setup(
+            tmp_path,
+            local_offset=600,
+            props={transfer_module._CONVERTED_MD_IMPORT_REV_PROP: "1"},
+        )
+
+        result = await self._sync(fs, tmp_path, direction="download")
+
+        assert result["conflicts"] == ["notes.md"]
+        assert fs.updated_files == []
+
+    async def test_local_rollback_is_conflict(self, tmp_path):
+        fs = self._setup(
+            tmp_path,
+            local_offset=-600,
+            props={transfer_module._CONVERTED_MD_IMPORT_REV_PROP: "1"},
+        )
+
+        result = await self._sync(fs, tmp_path, dry_run=True)
+
+        assert result["actions"][0]["action"] == "conflict"
+        assert "older than the version last uploaded" in result["actions"][0]["reason"]
+
+    async def test_local_change_waits_while_import_revision_pending(self, tmp_path):
+        """Uploading again before the previous import is listed would stamp a
+        baseline that predates it, so that import would later read as a Drive
+        edit."""
+        fs = self._setup(
+            tmp_path,
+            local_offset=600,
+            props={transfer_module._CONVERTED_MD_BASELINE_REV_PROP: "2"},
+        )
+        fs.revisions["fa"] = ["1", "2"]
+
+        result = await self._sync(fs, tmp_path)
+
+        assert result["skipped"] == ["notes.md"]
+        assert result["uploaded"] == []
+        assert fs.updated_files == []
+
+    async def test_missing_baseline_is_conflict(self, tmp_path):
+        fs = self._setup(tmp_path, props={transfer_module._CONVERTED_MD_BASELINE_REV_PROP: "2"})
+        fs.revisions["fa"] = ["1", "3"]
+
+        result = await self._sync(fs, tmp_path, dry_run=True)
+
+        assert result["actions"][0]["action"] == "conflict"
+        assert (
+            "revision recorded before its last upload is gone" in (result["actions"][0]["reason"])
+        )
+
+    async def test_revision_read_failure_reported_as_failed(self, tmp_path):
+        fs = self._setup(tmp_path)
+        fs.revision_errors["fa"] = RuntimeError("revisions unavailable")
+
+        result = await self._sync(fs, tmp_path)
+
+        assert result["skipped"] == []
+        assert result["failed"] == [
+            {
+                "name": "notes.md",
+                "error": (
+                    "couldn't read the Doc's revision history to check for Drive edits: "
+                    "revisions unavailable"
+                ),
+            }
+        ]
+
+    async def test_dry_run_checks_revisions_but_records_nothing(self, tmp_path):
+        fs = self._setup(tmp_path)
+
+        result = await self._sync(fs, tmp_path, dry_run=True)
+
+        assert result["actions"] == [{"name": "notes.md", "action": "skip", "reason": "in sync"}]
+        assert fs.revision_list_calls == ["fa"]
+        assert fs.updated_files == []
+
+    async def test_baseline_read_failure_fails_upload_before_update(self, tmp_path):
+        fs = self._setup(
+            tmp_path,
+            local_offset=600,
+            props={transfer_module._CONVERTED_MD_IMPORT_REV_PROP: "1"},
+        )
+        calls = []
+        real = fs._list_revisions
+
+        def _second_fails(**kwargs):
+            calls.append(kwargs["fileId"])
+            if len(calls) == 2:
+                raise RuntimeError("revisions unavailable")
+            return real(**kwargs)
+
+        fs.svc.revisions.return_value.list.side_effect = _second_fails
+
+        result = await self._sync(fs, tmp_path)
+
+        assert result["uploaded"] == []
+        assert result["failed"] == [{"name": "notes.md", "error": "revisions unavailable"}]
+        assert fs.updated_files == []
+
+    async def test_legacy_doc_without_stamp_keeps_modified_time_path(self, tmp_path):
+        """No migration: a Doc converted before #814 isn't revision-checked."""
+        local = tmp_path / "notes.md"
+        local.write_text("# Notes")
+        ts = self._LOCAL_MTIME.timestamp()
+        os.utime(local, (ts, ts))
+        fs = _FakeDriveFS(
+            {
+                "root": [
+                    _drive_file(
+                        "notes.md",
+                        "fa",
+                        mtime=self._STAMP,
+                        mime="application/vnd.google-apps.document",
+                        properties={transfer_module._CONVERT_MARKDOWN_SOURCE_PROP: "notes.md"},
+                    )
+                ]
+            }
+        )
+
+        result = await self._sync(fs, tmp_path)
+
+        assert result["skipped"] == ["notes.md"]
+        assert fs.revision_list_calls == []
+
+    async def test_recording_on_drive_edited_doc_keeps_its_modified_time(self, tmp_path):
+        """PR #854 QA round 1, item 1 (reproduced live): re-sending the stamped
+        mtime on a Doc edited in Drive reset its modifiedTime, so the Drive UI
+        and every other client saw it as unedited."""
+        fs = self._setup(tmp_path)
+        fs.revisions["fa"] = ["1", "2"]
+
+        result = await self._sync(fs, tmp_path)
+
+        assert result["conflicts"] == ["notes.md"]
+        (update,) = fs.updated_files
+        # Drive's own modifiedTime from the listing (_setup's default), not the
+        # stamped source mtime, and never left out (which stamps "now").
+        assert update["body"] == {
+            "properties": {transfer_module._CONVERTED_MD_IMPORT_REV_PROP: "1"},
+            "modifiedTime": "2030-01-01T00:00:00.000Z",
+        }
+
+    async def test_local_save_within_seconds_of_upload_is_detected(self, tmp_path):
+        """PR #854 QA round 1, item 2 (reproduced live): the 5s Drive clock-skew
+        tolerance hid a local save made within 5s of the stamped mtime, and it
+        never uploaded."""
+        fs = self._setup(
+            tmp_path,
+            local_offset=3,
+            props={transfer_module._CONVERTED_MD_IMPORT_REV_PROP: "1"},
+        )
+
+        result = await self._sync(fs, tmp_path)
+
+        assert result["uploaded"] == ["notes.md"]
+
+    async def test_sub_millisecond_difference_is_in_sync(self, tmp_path):
+        fs = self._setup(
+            tmp_path,
+            local_offset=0.0002,
+            props={transfer_module._CONVERTED_MD_IMPORT_REV_PROP: "1"},
+        )
+
+        result = await self._sync(fs, tmp_path)
+
+        assert result["skipped"] == ["notes.md"]
+
+    async def test_pending_local_change_under_download_is_conflict(self, tmp_path):
+        """PR #854 QA round 1, item 3: 'pending' used to win over the
+        direction check and promise an upload that download never makes."""
+        fs = self._setup(
+            tmp_path,
+            local_offset=600,
+            props={transfer_module._CONVERTED_MD_BASELINE_REV_PROP: "2"},
+        )
+        fs.revisions["fa"] = ["1", "2"]
+
+        result = await self._sync(fs, tmp_path, direction="download", dry_run=True)
+
+        assert result["actions"][0]["action"] == "conflict"
+        assert "direction is download" in result["actions"][0]["reason"]
+
+    async def test_recording_import_revision_marks_folder_dirty(self, tmp_path):
+        """PR #854 QA round 1, item 4: the import-revision write changes the
+        Doc's metadata, like every other write here that invalidates the cache."""
+        fs = self._setup(tmp_path)
+        ctx = self._ctx(fs)
+
+        await _transfer_tools["sync_folder"](folder_id="root", local_path=str(tmp_path), ctx=ctx)
+
+        ctx.request_context.lifespan_context.drive_folder_cache.mark_dirty.assert_called_with(
+            "root"
+        )
+
+    async def test_empty_revision_history_is_drive_read_fail(self, tmp_path):
+        """PR #854 QA round 1, item 5: an empty list read as 'changed', a false
+        Drive-edit conflict whose advice changes the Doc's file ID."""
+        fs = self._setup(tmp_path, props={transfer_module._CONVERTED_MD_IMPORT_REV_PROP: "1"})
+        fs.revisions["fa"] = []
+
+        result = await self._sync(fs, tmp_path)
+
+        assert result["conflicts"] == []
+        assert result["failed"] == [
+            {
+                "name": "notes.md",
+                "error": (
+                    "couldn't read the Doc's revision history to check for Drive edits: "
+                    "Drive returned an empty revision history"
+                ),
+            }
+        ]
+
+    async def test_drive_edit_between_plan_and_upload_is_conflict(self, tmp_path):
+        """PR #854 QA round 1, item 6: the upload's fresh revision read now
+        checks the plan's view still holds; an edit landing in between used to
+        be absorbed into the baseline and overwritten."""
+        fs = self._setup(
+            tmp_path,
+            local_offset=600,
+            props={transfer_module._CONVERTED_MD_IMPORT_REV_PROP: "1"},
+        )
+        reads = iter([["1"], ["1", "2"]])
+
+        def _moving(**kwargs):
+            resp = MagicMock()
+            resp.execute.return_value = {"revisions": [{"id": i} for i in next(reads)]}
+            return resp
+
+        fs.svc.revisions.return_value.list.side_effect = _moving
+
+        result = await self._sync(fs, tmp_path)
+
+        assert result["conflicts"] == ["notes.md"]
+        assert result["uploaded"] == []
+        assert fs.updated_files == []
+
+    async def test_revision_list_follows_pagination(self):
+        svc = MagicMock()
+        pages = [
+            {"revisions": [{"id": "1"}, {"id": "2"}], "nextPageToken": "t"},
+            {"revisions": [{"id": "3"}]},
+        ]
+        svc.revisions.return_value.list.return_value.execute.side_effect = pages
+
+        revisions = await transfer_module._list_revisions(svc, "fa")
+        assert [r["id"] for r in revisions] == ["1", "2", "3"]
+        tokens = [c.kwargs["pageToken"] for c in svc.revisions.return_value.list.call_args_list]
+        assert tokens == [None, "t"]
+
+
+class TestSyncFolderResolve:
+    """#860: `resolve` clears a convert_markdown conflict per name without
+    replacing the Doc, so its file ID (sharing, comments, links) survives.
+    'keep_drive' re-baselines on the Doc's current revision; 'keep_local'
+    re-uploads in place. Every name is checked against a read-only plan of
+    the whole tree before anything is written."""
+
+    _LOCAL_MTIME = datetime(2025, 6, 1, tzinfo=timezone.utc)
+    _STAMP = "2025-06-01T00:00:00.000Z"
+    _DRIVE_MTIME = "2030-01-01T00:00:00.000Z"
+
+    def _ctx(self, fs: _FakeDriveFS):
+        ctx = MagicMock()
+        ctx.request_context.lifespan_context.drive_service = fs.svc
+        ctx.request_context.lifespan_context.drive_folder_cache = MagicMock()
+        ctx.report_progress = AsyncMock()
+        return ctx
+
+    def _local(self, directory: Path, name="notes.md", offset=0.0) -> Path:
+        directory.mkdir(parents=True, exist_ok=True)
+        local = directory / name
+        local.write_text("# Notes")
+        ts = self._LOCAL_MTIME.timestamp() + offset
+        os.utime(local, (ts, ts))
+        return local
+
+    def _doc(self, name="notes.md", file_id="fa", props=None):
+        return _drive_file(
+            name,
+            file_id,
+            mtime=self._DRIVE_MTIME,
+            mime="application/vnd.google-apps.document",
+            properties={
+                transfer_module._CONVERT_MARKDOWN_SOURCE_PROP: name,
+                transfer_module._CONVERTED_MD_SOURCE_MTIME_PROP: self._STAMP,
+                transfer_module._CONVERTED_MD_IMPORT_REV_PROP: "1",
+                **(props or {}),
+            },
+        )
+
+    def _drive_edited(self, tmp_path, local_offset=0.0):
+        """notes.md whose Doc `fa` was edited in Drive (revision 2 after the
+        recorded import revision 1): a conflict on every plain sync."""
+        self._local(tmp_path, offset=local_offset)
+        fs = _FakeDriveFS({"root": [self._doc()]})
+        fs.revisions["fa"] = ["1", "2"]
+        return fs
+
+    def _revision_reads(self, fs, *reads):
+        """Serve successive revisions.list calls from `reads`, in order."""
+        it = iter(reads)
+
+        def _next(**kwargs):
+            resp = MagicMock()
+            resp.execute.return_value = {"revisions": [{"id": i} for i in next(it)]}
+            return resp
+
+        fs.svc.revisions.return_value.list.side_effect = _next
+
+    async def _sync(self, fs, tmp_path, **kwargs):
+        return await _transfer_tools["sync_folder"](
+            folder_id="root", local_path=str(tmp_path), ctx=self._ctx(fs), **kwargs
+        )
+
+    async def test_keep_drive_rebaselines_without_touching_content(self, tmp_path):
+        fs = self._drive_edited(tmp_path)
+
+        result = await self._sync(fs, tmp_path, resolve={"notes.md": "keep_drive"})
+
+        assert result["resolved"] == ["notes.md"]
+        assert result["conflicts"] == []
+        assert result["uploaded"] == []
+        assert result["failed"] == []
+        (update,) = fs.updated_files
+        assert "media_body" not in update  # metadata only, no re-import
+        assert update["fileId"] == "fa"
+        assert update["body"] == {
+            "properties": {
+                transfer_module._CONVERTED_MD_SOURCE_MTIME_PROP: _precise_mtime(
+                    tmp_path / "notes.md"
+                ),
+                transfer_module._CONVERTED_MD_IMPORT_REV_PROP: "2",
+            },
+            # Drive's own value from the listing, as when recording an import
+            # revision on an edited Doc.
+            "modifiedTime": self._DRIVE_MTIME,
+        }
+
+    async def test_keep_drive_leaves_doc_in_sync_on_next_run(self, tmp_path):
+        fs = self._drive_edited(tmp_path)
+        await self._sync(fs, tmp_path, resolve={"notes.md": "keep_drive"})
+        (update,) = fs.updated_files
+        fs.children["root"][0]["properties"].update(update["body"]["properties"])
+        fs.updated_files.clear()
+
+        result = await self._sync(fs, tmp_path)
+
+        assert result["skipped"] == ["notes.md"]
+        assert result["conflicts"] == []
+        assert fs.updated_files == []
+
+    async def test_keep_drive_then_local_edit_uploads(self, tmp_path):
+        """The decision's workflow: carry the Drive edits into the .md, accept
+        the Drive baseline, and the next local change uploads normally."""
+        fs = self._drive_edited(tmp_path)
+        await self._sync(fs, tmp_path, resolve={"notes.md": "keep_drive"})
+        fs.children["root"][0]["properties"].update(fs.updated_files[0]["body"]["properties"])
+        fs.updated_files.clear()
+        self._local(tmp_path, offset=600)
+
+        result = await self._sync(fs, tmp_path)
+
+        assert result["uploaded"] == ["notes.md"]
+        assert result["conflicts"] == []
+
+    async def test_keep_local_reuploads_in_place(self, tmp_path):
+        fs = self._drive_edited(tmp_path, local_offset=600)
+
+        result = await self._sync(fs, tmp_path, resolve={"notes.md": "keep_local"})
+
+        assert result["uploaded"] == ["notes.md"]
+        assert result["resolved"] == ["notes.md"]
+        assert result["conflicts"] == []
+        assert fs.created_files == []  # same file ID, not a replacement Doc
+        (update,) = fs.updated_files
+        assert update["fileId"] == "fa"
+        assert "media_body" in update
+        props = dict(update["body"]["properties"])
+        _pop_uploaded_at(props)
+        assert props == {
+            transfer_module._CONVERTED_MD_SOURCE_MTIME_PROP: _precise_mtime(tmp_path / "notes.md"),
+            transfer_module._CONVERTED_MD_BASELINE_REV_PROP: "2",
+            transfer_module._CONVERTED_MD_IMPORT_REV_PROP: None,
+        }
+
+    async def test_keep_local_with_unchanged_local_file(self, tmp_path):
+        """Overwriting the Drive edit with the last-uploaded content is a valid
+        choice too: the local side doesn't have to have changed."""
+        fs = self._drive_edited(tmp_path)
+
+        result = await self._sync(fs, tmp_path, resolve={"notes.md": "keep_local"})
+
+        assert result["uploaded"] == ["notes.md"]
+        assert result["resolved"] == ["notes.md"]
+
+    async def test_dry_run_previews_without_writing(self, tmp_path):
+        fs = self._drive_edited(tmp_path)
+
+        result = await self._sync(fs, tmp_path, resolve={"notes.md": "keep_drive"}, dry_run=True)
+
+        (action,) = result["actions"]
+        assert action["action"] == "keep_drive"
+        assert action["reason"].startswith("resolve=keep_drive: accept the Doc's current Drive")
+        assert "(was: edited in Drive since the last upload" in action["reason"]
+        assert result["resolved"] == []
+        assert fs.updated_files == []
+        # The dry run is the check pass: one planning pass, one revision read.
+        assert fs.revision_list_calls == ["fa"]
+
+    async def test_dry_run_previews_keep_local(self, tmp_path):
+        fs = self._drive_edited(tmp_path)
+
+        result = await self._sync(fs, tmp_path, resolve={"notes.md": "keep_local"}, dry_run=True)
+
+        assert result["actions"][0]["action"] == "keep_local"
+        assert fs.updated_files == []
+
+    async def test_name_not_in_conflicts_is_refused(self, tmp_path):
+        self._local(tmp_path)
+        fs = _FakeDriveFS({"root": [self._doc()]})  # unedited: in sync
+
+        result = await self._sync(fs, tmp_path, resolve={"notes.md": "keep_drive"})
+
+        assert set(result) == {"error"}
+        assert "Nothing was changed" in result["error"]
+        assert "'notes.md': not a conflict (planned action: skip)" in result["error"]
+        assert fs.updated_files == []
+
+    async def test_unknown_name_is_refused(self, tmp_path):
+        fs = self._drive_edited(tmp_path)
+
+        result = await self._sync(
+            fs, tmp_path, resolve={"notes.md": "keep_drive", "other.md": "keep_drive"}
+        )
+
+        assert "'other.md': not found in this sync" in result["error"]
+        # One bad name refuses the whole call, including the valid one.
+        assert fs.updated_files == []
+
+    async def test_plain_file_conflict_is_refused(self, tmp_path):
+        """Only convert_markdown Docs: a plain file's conflict has other ways
+        out and isn't what resolve is for."""
+        local = tmp_path / "a.txt"
+        local.write_text("local content")
+        ts = self._LOCAL_MTIME.timestamp()
+        os.utime(local, (ts, ts))
+        fs = _FakeDriveFS({"root": [_drive_file("a.txt", "fb", mtime=self._STAMP, size=1)]})
+
+        result = await self._sync(fs, tmp_path, resolve={"a.txt": "keep_local"})
+
+        assert "'a.txt': a conflict, but not a convert_markdown Doc" in result["error"]
+        assert fs.updated_files == []
+
+    async def test_drive_only_doc_is_refused(self, tmp_path):
+        """No local .md to keep or to stamp."""
+        fs = _FakeDriveFS({"root": [self._doc()]})
+
+        result = await self._sync(fs, tmp_path, resolve={"notes.md": "keep_drive"})
+
+        assert "not a convert_markdown Doc with a matching local .md" in result["error"]
+
+    async def test_invalid_mode_rejected_before_any_api_call(self, tmp_path):
+        fs = self._drive_edited(tmp_path)
+
+        result = await self._sync(fs, tmp_path, resolve={"notes.md": "overwrite"})
+
+        assert result == {
+            "error": "Invalid resolve value for 'notes.md'. Use 'keep_drive' or 'keep_local'."
+        }
+        assert fs.list_calls == []
+
+    async def test_keep_local_under_download_rejected_before_any_api_call(self, tmp_path):
+        fs = self._drive_edited(tmp_path)
+
+        result = await self._sync(
+            fs, tmp_path, direction="download", resolve={"notes.md": "keep_local"}
+        )
+
+        assert "direction='download' never does" in result["error"]
+        assert fs.list_calls == []
+
+    async def test_keep_drive_allowed_under_download(self, tmp_path):
+        fs = self._drive_edited(tmp_path)
+
+        result = await self._sync(
+            fs, tmp_path, direction="download", resolve={"notes.md": "keep_drive"}
+        )
+
+        assert result["resolved"] == ["notes.md"]
+
+    async def test_bad_subfolder_name_refuses_before_top_level_runs(self, tmp_path):
+        """The reason for the check pass: a real run syncs each level before
+        planning the next, so a bad key under sub/ would otherwise only show
+        up after the top level had already been written."""
+        self._local(tmp_path)
+        (tmp_path / "new.txt").write_text("local only, would upload")
+        self._local(tmp_path / "sub", name="other.md")
+        fs = _FakeDriveFS(
+            {
+                "root": [self._doc(), _drive_folder("sub", "sub-id")],
+                "sub-id": [self._doc(name="other.md", file_id="fs")],  # unedited
+            }
+        )
+        fs.revisions["fa"] = ["1", "2"]
+
+        result = await self._sync(
+            fs,
+            tmp_path,
+            recursive=True,
+            resolve={"notes.md": "keep_drive", "sub/other.md": "keep_drive"},
+        )
+
+        assert "'sub/other.md': not a conflict (planned action: skip)" in result["error"]
+        assert fs.created_files == []
+        assert fs.updated_files == []
+
+    async def test_subfolder_name_resolved_with_recursive(self, tmp_path):
+        self._local(tmp_path / "sub")
+        fs = _FakeDriveFS(
+            {"root": [_drive_folder("sub", "sub-id")], "sub-id": [self._doc(file_id="fs")]}
+        )
+        fs.revisions["fs"] = ["1", "2"]
+
+        result = await self._sync(
+            fs, tmp_path, recursive=True, resolve={"sub/notes.md": "keep_drive"}
+        )
+
+        assert result["resolved"] == ["sub/notes.md"]
+        assert fs.updated_files[0]["fileId"] == "fs"
+
+    async def test_subfolder_name_without_recursive_is_not_found(self, tmp_path):
+        self._local(tmp_path / "sub")
+        fs = _FakeDriveFS(
+            {"root": [_drive_folder("sub", "sub-id")], "sub-id": [self._doc(file_id="fs")]}
+        )
+
+        result = await self._sync(fs, tmp_path, resolve={"sub/notes.md": "keep_drive"})
+
+        assert "needs recursive=True" in result["error"]
+
+    async def test_drive_edit_after_plan_stays_a_conflict(self, tmp_path):
+        """An edit landing between the plan and the write isn't the version
+        the caller chose to keep; it's not absorbed into the baseline."""
+        fs = self._drive_edited(tmp_path)
+        self._revision_reads(fs, ["1", "2"], ["1", "2"], ["1", "2", "3"])  # check, plan, write
+
+        result = await self._sync(fs, tmp_path, resolve={"notes.md": "keep_drive"})
+
+        assert result["conflicts"] == ["notes.md"]
+        assert result["resolved"] == []
+        assert fs.updated_files == []
+
+    async def test_conflict_gone_between_passes_is_not_applied(self, tmp_path):
+        """If the conflict clears between the check and the real pass, the
+        name lands under 'failed' and nothing is done for it, rather than the
+        resolution applying to a situation the caller never saw."""
+        fs = self._drive_edited(tmp_path)
+        self._revision_reads(fs, ["1", "2"], ["1"])  # check: edited; real: unedited
+
+        result = await self._sync(fs, tmp_path, resolve={"notes.md": "keep_local"})
+
+        assert result["uploaded"] == []
+        assert result["resolved"] == []
+        assert result["failed"] == [
+            {
+                "name": "notes.md",
+                "error": (
+                    "resolve not applied, nothing changed: not a conflict (planned action: skip)"
+                ),
+            }
+        ]
+        assert fs.updated_files == []
+
+    async def test_name_gone_between_passes_is_reported(self, tmp_path):
+        local = self._local(tmp_path)
+        fs = _FakeDriveFS({"root": [self._doc()]})
+        fs.revisions["fa"] = ["1", "2"]
+        listings = iter([[self._doc()], []])
+
+        def _vanishing(**kwargs):
+            files = next(listings)
+            if not files:
+                local.unlink()  # gone on both sides by the real pass
+            resp = MagicMock()
+            resp.execute.return_value = {"files": files}
+            return resp
+
+        fs.svc.files.return_value.list.side_effect = _vanishing
+
+        result = await self._sync(fs, tmp_path, resolve={"notes.md": "keep_drive"})
+
+        assert result["failed"] == [
+            {"name": "notes.md", "error": "resolve not applied, nothing changed: no longer found"}
+        ]
+        assert fs.updated_files == []
+
+    async def test_keep_drive_write_failure_reported_as_failed(self, tmp_path):
+        fs = self._drive_edited(tmp_path)
+
+        def _fail(**kwargs):
+            raise RuntimeError("update rejected")
+
+        fs.svc.files.return_value.update.side_effect = _fail
+
+        result = await self._sync(fs, tmp_path, resolve={"notes.md": "keep_drive"})
+
+        assert result["resolved"] == []
+        assert result["failed"] == [{"name": "notes.md", "error": "update rejected"}]
+
+    async def test_keep_drive_marks_folder_dirty(self, tmp_path):
+        fs = self._drive_edited(tmp_path)
+        ctx = self._ctx(fs)
+
+        await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            resolve={"notes.md": "keep_drive"},
+            ctx=ctx,
+        )
+
+        ctx.request_context.lifespan_context.drive_folder_cache.mark_dirty.assert_called_with(
+            "root"
+        )
+
+    async def test_legacy_doc_keep_drive_moves_it_onto_revision_check(self, tmp_path):
+        """A Doc from before #814 stuck as 'drive newer' (the late async
+        modifiedTime update): keep_drive gives it the stamp, so the next sync
+        compares revisions instead of modifiedTime."""
+        self._local(tmp_path)
+        fs = _FakeDriveFS(
+            {
+                "root": [
+                    _drive_file(
+                        "notes.md",
+                        "fa",
+                        mtime=self._DRIVE_MTIME,
+                        mime="application/vnd.google-apps.document",
+                        properties={transfer_module._CONVERT_MARKDOWN_SOURCE_PROP: "notes.md"},
+                    )
+                ]
+            }
+        )
+        fs.revisions["fa"] = ["7"]
+
+        result = await self._sync(fs, tmp_path, resolve={"notes.md": "keep_drive"})
+
+        assert result["resolved"] == ["notes.md"]
+        (update,) = fs.updated_files
+        assert update["body"]["properties"] == {
+            transfer_module._CONVERTED_MD_SOURCE_MTIME_PROP: _precise_mtime(tmp_path / "notes.md"),
+            transfer_module._CONVERTED_MD_IMPORT_REV_PROP: "7",
+        }
+        fs.children["root"][0]["properties"].update(update["body"]["properties"])
+        fs.updated_files.clear()
+
+        result = await self._sync(fs, tmp_path)
+
+        assert result["skipped"] == ["notes.md"]
+
+    def _legacy(self, tmp_path):
+        """notes.md and a Doc `fa` converted before #814 (no stamp) whose
+        modifiedTime reads as "Drive newer": a conflict on every sync."""
+        self._local(tmp_path)
+        return _FakeDriveFS(
+            {
+                "root": [
+                    _drive_file(
+                        "notes.md",
+                        "fa",
+                        mtime=self._DRIVE_MTIME,
+                        mime="application/vnd.google-apps.document",
+                        properties={transfer_module._CONVERT_MARKDOWN_SOURCE_PROP: "notes.md"},
+                    )
+                ]
+            }
+        )
+
+    async def test_legacy_doc_drive_edit_after_plan_stays_a_conflict(self, tmp_path):
+        """PR #1016 review, finding 2: a pre-#814 Doc has no revision job, so
+        the "Drive moved since planning" guard used to be skipped and an edit
+        landing before the write was absorbed into the baseline."""
+        fs = self._legacy(tmp_path)
+        self._revision_reads(fs, ["7"], ["7"], ["7", "8"])  # check, plan, write
+
+        result = await self._sync(fs, tmp_path, resolve={"notes.md": "keep_drive"})
+
+        assert result["conflicts"] == ["notes.md"]
+        assert result["resolved"] == []
+        assert fs.updated_files == []
+
+    async def test_legacy_doc_keep_local_drive_edit_after_plan_stays_a_conflict(self, tmp_path):
+        fs = self._legacy(tmp_path)
+        self._revision_reads(fs, ["7"], ["7"], ["7", "8"])  # check, plan, baseline read
+
+        result = await self._sync(fs, tmp_path, resolve={"notes.md": "keep_local"})
+
+        assert result["conflicts"] == ["notes.md"]
+        assert result["uploaded"] == []
+        assert fs.updated_files == []
+
+    async def test_legacy_doc_revision_read_failure_refuses(self, tmp_path):
+        fs = self._legacy(tmp_path)
+        fs.revision_errors["fa"] = RuntimeError("revisions unavailable")
+
+        result = await self._sync(fs, tmp_path, resolve={"notes.md": "keep_drive"})
+
+        assert (
+            "'notes.md': couldn't read the Doc's revision history to resolve it: "
+            "revisions unavailable" in result["error"]
+        )
+        assert fs.updated_files == []
+
+    async def test_legacy_doc_not_named_gets_no_revision_read(self, tmp_path):
+        """The extra read is only for a Doc resolve names."""
+        fs = self._legacy(tmp_path)
+
+        result = await self._sync(fs, tmp_path)
+
+        assert result["conflicts"] == ["notes.md"]
+        assert fs.revision_list_calls == []
+
+    async def test_drive_only_edit_reason_suggests_keep_drive(self, tmp_path):
+        fs = self._drive_edited(tmp_path)
+
+        result = await self._sync(fs, tmp_path, dry_run=True)
+
+        assert "re-sync with resolve 'keep_drive'" in result["actions"][0]["reason"]
+
+    async def test_both_sides_reason_suggests_keep_local_not_keep_drive(self, tmp_path):
+        """PR #1016 review, finding 1: after merging, the local file holds its
+        own edits too. keep_drive would record it as matching the Doc, so
+        those edits would never reach Drive while syncs read "in sync"."""
+        fs = self._drive_edited(tmp_path, local_offset=600)
+
+        result = await self._sync(fs, tmp_path, dry_run=True)
+
+        reason = result["actions"][0]["reason"]
+        assert reason.endswith("re-sync with resolve 'keep_local' to upload the merged file")
+        assert "keep_drive" not in reason
+
+    async def test_resolved_empty_without_resolve(self, tmp_path):
+        fs = self._drive_edited(tmp_path)
+
+        result = await self._sync(fs, tmp_path)
+
+        assert result["resolved"] == []
+        assert result["conflicts"] == ["notes.md"]
+
+
 class TestSyncFolderDownloadMtimeRoundTrip:
     """Issue #346: a downloaded file's local mtime defaulted to write time ('now'),
     not Drive's modifiedTime — since 'now' is always later than Drive's original
@@ -2241,12 +4501,362 @@ class TestSyncFolderDownloadMtimeRoundTrip:
         assert second["uploaded"] == []
 
 
+def _partial_files(directory: Path) -> list[str]:
+    return [p.name for p in directory.iterdir() if atomic_write._is_partial_download(p.name)]
+
+
+class _FailingDownloader:
+    """Writes `written` bytes, then raises from the next chunk, like a dropped
+    connection partway through a large download."""
+
+    written = b"truncated"
+
+    def __init__(self, fh, request):
+        self._fh = fh
+        self._calls = 0
+
+    def next_chunk(self):
+        self._calls += 1
+        if self._calls == 1:
+            self._fh.write(self.written)
+            return None, False
+        raise ConnectionError("connection reset mid-download")
+
+
+class TestSyncFolderFailedDownloadLeavesNoPartial:
+    """#844: a download that failed partway left a truncated file at the
+    destination with a current mtime, which the next bidirectional sync read
+    as locally newer and uploaded over the intact Drive copy."""
+
+    def _ctx(self, fs: _FakeDriveFS):
+        ctx = MagicMock()
+        ctx.request_context.lifespan_context.drive_service = fs.svc
+        ctx.request_context.lifespan_context.drive_folder_cache = MagicMock()
+        ctx.report_progress = AsyncMock()
+        return ctx
+
+    def _fs(self) -> _FakeDriveFS:
+        return _FakeDriveFS(
+            {
+                "root": [
+                    _drive_file(
+                        "big.bin",
+                        "fbig",
+                        mtime="2024-06-01T12:00:00.000Z",
+                        mime="application/octet-stream",
+                        size=50,
+                    )
+                ]
+            }
+        )
+
+    async def test_failed_download_keeps_existing_local_file_intact(self, tmp_path, monkeypatch):
+        local = tmp_path / "big.bin"
+        local.write_bytes(b"old local content")
+        old_mtime = datetime(2020, 1, 1, tzinfo=timezone.utc).timestamp()
+        os.utime(local, (old_mtime, old_mtime))
+        monkeypatch.setattr(transfer_module, "MediaIoBaseDownload", _FailingDownloader)
+        fs = self._fs()
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            direction="bidirectional",
+            ctx=self._ctx(fs),
+        )
+
+        assert [f["name"] for f in result["failed"]] == ["big.bin"]
+        assert local.read_bytes() == b"old local content"
+        assert local.stat().st_mtime == old_mtime
+        assert _partial_files(tmp_path) == []
+
+    async def test_failed_download_then_resync_does_not_upload(self, tmp_path, monkeypatch):
+        """The issue's scenario end to end: Drive-only file, download fails,
+        the next sync must not upload anything over the Drive copy."""
+        monkeypatch.setattr(transfer_module, "MediaIoBaseDownload", _FailingDownloader)
+        fs = self._fs()
+        ctx = self._ctx(fs)
+
+        first = await _transfer_tools["sync_folder"](
+            folder_id="root", local_path=str(tmp_path), direction="bidirectional", ctx=ctx
+        )
+        assert [f["name"] for f in first["failed"]] == ["big.bin"]
+        assert not (tmp_path / "big.bin").exists()
+        assert _partial_files(tmp_path) == []
+
+        second = await _transfer_tools["sync_folder"](
+            folder_id="root", local_path=str(tmp_path), direction="bidirectional", ctx=ctx
+        )
+        assert second["uploaded"] == []
+        assert fs.created_files == []
+        assert [u for u in fs.updated_files if "media_body" in u] == []
+
+    async def test_failed_mtime_restamp_leaves_destination_untouched(self, tmp_path, monkeypatch):
+        """The restamp runs before the rename, so a failure there can't leave a
+        complete file with a 'now' mtime either."""
+
+        class _OkDownloader:
+            def __init__(self, fh, request):
+                self._fh = fh
+
+            def next_chunk(self):
+                self._fh.write(b"complete")
+                return None, True
+
+        def _utime_fails(*args, **kwargs):
+            raise PermissionError("utime denied")
+
+        monkeypatch.setattr(transfer_module, "MediaIoBaseDownload", _OkDownloader)
+        monkeypatch.setattr(transfer_module.os, "utime", _utime_fails)
+        fs = self._fs()
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root", local_path=str(tmp_path), direction="bidirectional", ctx=self._ctx(fs)
+        )
+
+        assert [f["name"] for f in result["failed"]] == ["big.bin"]
+        assert not (tmp_path / "big.bin").exists()
+        assert _partial_files(tmp_path) == []
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root can write a 0o444 file")
+    async def test_read_only_local_file_is_a_download_fail_not_replaced(
+        self, tmp_path, monkeypatch
+    ):
+        """PR #884 QA round 1: sync_folder's download branch must refuse a
+        read-only local file the way the old in-place write did."""
+        local = tmp_path / "big.bin"
+        local.write_bytes(b"protected")
+        old_mtime = datetime(2020, 1, 1, tzinfo=timezone.utc).timestamp()
+        os.utime(local, (old_mtime, old_mtime))
+        local.chmod(0o444)
+
+        class _OkDownloader:
+            def __init__(self, fh, request):
+                self._fh = fh
+
+            def next_chunk(self):
+                self._fh.write(b"drive content")
+                return None, True
+
+        monkeypatch.setattr(transfer_module, "MediaIoBaseDownload", _OkDownloader)
+        fs = self._fs()
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root", local_path=str(tmp_path), direction="download", ctx=self._ctx(fs)
+        )
+
+        assert [f["name"] for f in result["failed"]] == ["big.bin"]
+        assert result["downloaded"] == []
+        assert local.read_bytes() == b"protected"
+        assert _partial_files(tmp_path) == []
+
+    async def test_leftover_partial_is_never_uploaded(self, tmp_path):
+        """A temp file only survives a hard kill mid-download. sync_folder must
+        not treat it as a local-only file to upload."""
+        leftover = tmp_path / (atomic_write._PARTIAL_DOWNLOAD_PREFIX + "0123456789abcdef")
+        leftover.write_bytes(b"half a file")
+        fs = _FakeDriveFS({"root": []})
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root", local_path=str(tmp_path), direction="bidirectional", ctx=self._ctx(fs)
+        )
+
+        assert result["uploaded"] == []
+        assert fs.created_files == []
+        # #887: reported, so it doesn't sit there unnoticed, but not deleted.
+        assert result["skipped"] == [leftover.name]
+        assert leftover.read_bytes() == b"half a file"
+
+    async def test_leftover_partial_is_a_skip_action_in_dry_run(self, tmp_path):
+        leftover = tmp_path / (atomic_write._PARTIAL_DOWNLOAD_PREFIX + "0123456789abcdef")
+        leftover.write_bytes(b"half a file")
+        fs = _FakeDriveFS({"root": []})
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root", local_path=str(tmp_path), dry_run=True, ctx=self._ctx(fs)
+        )
+
+        assert result["skipped"] == []
+        assert result["actions"] == [
+            {
+                "name": leftover.name,
+                "action": "skip",
+                "reason": transfer_module._PARTIAL_SKIP_REASON,
+            }
+        ]
+
+    async def test_drive_file_with_partial_name_is_refused(self, tmp_path, monkeypatch):
+        """#887: only the local side filtered the temp name, so a Drive file
+        with it downloaded, was hidden locally, and downloaded again next sync."""
+        name = atomic_write._PARTIAL_DOWNLOAD_PREFIX + "0123456789abcdef"
+        fs = _FakeDriveFS({"root": [_drive_file(name, "fp", mime="application/octet-stream")]})
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root", local_path=str(tmp_path), direction="download", ctx=self._ctx(fs)
+        )
+
+        assert result["downloaded"] == []
+        assert [f["name"] for f in result["failed"]] == [name]
+        assert "reserved" in result["failed"][0]["error"]
+        assert list(tmp_path.iterdir()) == []
+
+    async def test_temp_file_name_on_both_sides_is_not_drive_only(self, tmp_path):
+        """PR #1001 QA round 1: a local leftover sharing a Drive file's reserved
+        name was previewed as 'drive only, upload direction'."""
+        name = atomic_write._PARTIAL_DOWNLOAD_PREFIX + "0123456789abcdef"
+        (tmp_path / name).write_bytes(b"half a file")
+        fs = _FakeDriveFS({"root": [_drive_file(name, "fp", mime="application/octet-stream")]})
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            direction="upload",
+            dry_run=True,
+            ctx=self._ctx(fs),
+        )
+
+        assert result["actions"] == [
+            {
+                "name": name,
+                "action": "unsafe_name",
+                "reason": "name is reserved for this server's temporary download files; not synced",
+            }
+        ]
+
+    async def test_directory_at_download_destination_fails_before_download(
+        self, tmp_path, monkeypatch
+    ):
+        """PR #1001 QA round 1: the whole file streamed into a temp file, then
+        the rename failed with an error naming the temp file."""
+        (tmp_path / "big.bin").mkdir()
+        downloads: list[bool] = []
+
+        class _RecordingDownloader:
+            def __init__(self, fh, request):
+                downloads.append(True)
+
+            def next_chunk(self):
+                return None, True
+
+        monkeypatch.setattr(transfer_module, "MediaIoBaseDownload", _RecordingDownloader)
+        fs = self._fs()
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root", local_path=str(tmp_path), direction="download", ctx=self._ctx(fs)
+        )
+
+        assert [f["name"] for f in result["failed"]] == ["big.bin"]
+        assert "destination is a directory" in result["failed"][0]["error"]
+        assert atomic_write._PARTIAL_DOWNLOAD_PREFIX not in result["failed"][0]["error"]
+        assert downloads == []
+        fs.svc.files.return_value.get_media.assert_not_called()
+
+
+class TestDownloadToolsFailedDownloadLeavesNoPartial:
+    """#844's sibling sites: download_file and download_folder shared the same
+    write-straight-to-destination pattern as sync_folder."""
+
+    def _ctx(self, drive_svc):
+        ctx = _make_ctx(drive_service=drive_svc, drive_folder_cache=MagicMock())
+        ctx.report_progress = AsyncMock()
+        return ctx
+
+    async def test_download_file_failure_keeps_existing_file(self, tmp_path, monkeypatch):
+        dest = tmp_path / "big.bin"
+        dest.write_bytes(b"previous download")
+        svc = MagicMock()
+        svc.files.return_value.get.return_value.execute.return_value = {
+            "name": "big.bin",
+            "mimeType": "application/octet-stream",
+        }
+        monkeypatch.setattr(transfer_module, "MediaIoBaseDownload", _FailingDownloader)
+
+        with pytest.raises(ConnectionError):
+            await _transfer_tools["download_file"](
+                file_id="fbig", local_path=str(dest), ctx=self._ctx(svc)
+            )
+
+        assert dest.read_bytes() == b"previous download"
+        assert _partial_files(tmp_path) == []
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root can write a 0o444 file")
+    async def test_download_file_refuses_read_only_destination(self, tmp_path, monkeypatch):
+        """PR #884 QA round 1, the live repro: a read-only file was replaced by
+        the Drive content and the call reported success."""
+        dest = tmp_path / "big.bin"
+        dest.write_bytes(b"protected")
+        dest.chmod(0o444)
+        svc = MagicMock()
+        svc.files.return_value.get.return_value.execute.return_value = {
+            "name": "big.bin",
+            "mimeType": "application/octet-stream",
+        }
+
+        class _OkDownloader:
+            def __init__(self, fh, request):
+                self._fh = fh
+
+            def next_chunk(self):
+                self._fh.write(b"drive content")
+                return None, True
+
+        monkeypatch.setattr(transfer_module, "MediaIoBaseDownload", _OkDownloader)
+
+        with pytest.raises(PermissionError):
+            await _transfer_tools["download_file"](
+                file_id="fbig", local_path=str(dest), ctx=self._ctx(svc)
+            )
+
+        assert dest.read_bytes() == b"protected"
+        assert _partial_files(tmp_path) == []
+
+    async def test_download_folder_failure_leaves_no_file_for_skip_if_exists(
+        self, tmp_path, monkeypatch
+    ):
+        """With skip_if_exists=True (the default), a truncated file left by a
+        failed run would be skipped by every later run, so it never healed."""
+        svc = MagicMock()
+        svc.files.return_value.list.return_value.execute.return_value = {
+            "files": [
+                {"id": "fbig", "name": "big.bin", "mimeType": "application/octet-stream"},
+            ]
+        }
+        monkeypatch.setattr(transfer_module, "MediaIoBaseDownload", _FailingDownloader)
+
+        result = await _transfer_tools["download_folder"](
+            folder_id="root", local_path=str(tmp_path), ctx=self._ctx(svc)
+        )
+
+        assert [f["name"] for f in result["failed"]] == ["big.bin"]
+        assert not (tmp_path / "big.bin").exists()
+        assert _partial_files(tmp_path) == []
+
+    async def test_upload_local_folder_skips_leftover_partial(self, tmp_path):
+        (tmp_path / "a.txt").write_text("a")
+        (tmp_path / (atomic_write._PARTIAL_DOWNLOAD_PREFIX + "0123456789abcdef")).write_bytes(
+            b"half a file"
+        )
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.list.return_value.execute.return_value = {"files": []}
+        drive_svc.files.return_value.create.return_value.execute.return_value = {
+            "id": "fid",
+            "name": "a.txt",
+            "webViewLink": "https://example.com",
+        }
+
+        result = await _transfer_tools["upload_local_folder"](
+            str(tmp_path), "folder1", ctx=self._ctx(drive_svc)
+        )
+
+        assert result["uploaded"] == ["a.txt"]
+        assert result["failed"] == []
+
+
 class TestSyncFolderUseChecksum:
     """Issue #274: mtime alone can't distinguish real content drift from a
-    non-content-changing mtime bump (or vice versa) — upload_local_file in
-    particular doesn't stamp modifiedTime the way sync_folder's own upload does,
-    so identical content re-downloads forever under mtime-only comparison.
-    use_checksum=True adds a content check ahead of the mtime comparison for
+    non-content-changing mtime bump (or vice versa), e.g. a local regeneration
+    that rewrites the same bytes, so identical content gets transferred again
+    under mtime-only comparison. use_checksum=True adds a content check ahead of the mtime comparison for
     names present on both sides."""
 
     _CONTENT = b"hello world"
@@ -2269,8 +4879,8 @@ class TestSyncFolderUseChecksum:
 
     async def test_checksum_match_skips_despite_mtime_far_apart(self, tmp_path):
         # Drive's modifiedTime is far outside the 5s tolerance of the local file's
-        # mtime (mirrors upload_local_file's non-stamped modifiedTime), but the
-        # content is identical.
+        # mtime (e.g. a same-bytes local copy that didn't preserve mtime), but
+        # the content is identical.
         fs = _FakeDriveFS(
             {"root": [_drive_file("a.txt", "fa", mtime="2024-06-01T00:00:00.000Z", md5=self._MD5)]}
         )
@@ -2327,16 +4937,27 @@ class TestSyncFolderUseChecksum:
         assert result["skipped"] == []
         assert result["conflicts"] == []
 
-    async def test_checksum_not_computed_when_mtimes_already_within_tolerance(
+    async def test_checksum_verifies_within_tolerance_pair_when_opted_in(
         self, tmp_path, monkeypatch
     ):
-        # #274 PR #472 review, finding #3: a pair already "in sync" by mtime alone
-        # settles there without paying for a hash read that couldn't change the
-        # outcome anyway.
+        # #716: an explicit use_checksum=True is an accuracy opt-in, so it hashes
+        # a within-tolerance pair too instead of trusting mtime alone (#274 PR
+        # #472 originally gated this off). Identical content still settles as a
+        # skip.
         spy = MagicMock(side_effect=transfer_module._local_md5)
         monkeypatch.setattr(transfer_module, "_local_md5", spy)
         fs = _FakeDriveFS(
-            {"root": [_drive_file("a.txt", "fa", mtime="2024-06-01T00:00:00.000Z", md5=self._MD5)]}
+            {
+                "root": [
+                    _drive_file(
+                        "a.txt",
+                        "fa",
+                        mtime="2024-06-01T00:00:00.000Z",
+                        md5=self._MD5,
+                        size=len(self._CONTENT),
+                    )
+                ]
+            }
         )
         self._write_local(tmp_path, "a.txt", self._CONTENT, "2024-06-01T00:00:02.000Z")
 
@@ -2347,7 +4968,8 @@ class TestSyncFolderUseChecksum:
             ctx=self._ctx(fs),
         )
         assert result["skipped"] == ["a.txt"]
-        spy.assert_not_called()
+        assert result["conflicts"] == []
+        spy.assert_called_once()
 
     async def test_checksum_not_computed_during_dry_run(self, tmp_path, monkeypatch):
         # Same finding #3: dry_run is documented as a cheap, no-transfer preview —
@@ -2425,6 +5047,422 @@ class TestSyncFolderUseChecksum:
         p = tmp_path / "a.txt"
         p.write_bytes(self._CONTENT)
         assert transfer_module._local_md5(p) == self._MD5
+
+
+class TestSyncFolderChecksumWithinTolerance:
+    """Issue #716: #659's byte-size check catches a within-tolerance pair whose
+    content diverged *and* changed length, but a same-size edit that also
+    preserves mtime still read as "in sync" — use_checksum's hash was gated on
+    the mtimes already disagreeing, so even an explicit use_checksum=True never
+    verified it. An explicit opt-in now hashes that pair too; a mismatch is a
+    `conflict` for every direction (mtimes agree, so recency is unknown — same
+    reasoning as the size-mismatch conflict)."""
+
+    _CONTENT = b"hello world"  # 11 bytes
+    _MD5 = "5eb63bbbe01eeed093cb22bb8f5acdc3"
+    _SAME_SIZE_EDIT = b"HELLO WORLD"  # 11 bytes, different md5
+
+    def _ctx(self, fs: _FakeDriveFS):
+        ctx = MagicMock()
+        ctx.request_context.lifespan_context.drive_service = fs.svc
+        ctx.request_context.lifespan_context.drive_folder_cache = MagicMock()
+        ctx.report_progress = AsyncMock()
+        return ctx
+
+    def _write_local(self, tmp_path, content, mtime_str="2024-06-01T00:00:02.000Z"):
+        p = tmp_path / "a.txt"
+        p.write_bytes(content)
+        dt = datetime.fromisoformat(mtime_str.replace("Z", "+00:00"))
+        os.utime(p, (dt.timestamp(), dt.timestamp()))
+        return p
+
+    def _write_local_named(self, tmp_path, name, content):
+        p = tmp_path / name
+        p.write_bytes(content)
+        dt = datetime.fromisoformat("2024-06-01T00:00:02.000+00:00")
+        os.utime(p, (dt.timestamp(), dt.timestamp()))
+
+    def _fs(self, md5=_MD5):
+        return _FakeDriveFS(
+            {
+                "root": [
+                    _drive_file(
+                        "a.txt",
+                        "fa",
+                        mtime="2024-06-01T00:00:00.000Z",
+                        md5=md5,
+                        size=len(self._CONTENT),
+                    )
+                ]
+            }
+        )
+
+    @pytest.mark.parametrize("direction", ["bidirectional", "upload", "download"])
+    async def test_same_size_checksum_mismatch_is_conflict_for_every_direction(
+        self, tmp_path, direction
+    ):
+        fs = self._fs()
+        self._write_local(tmp_path, self._SAME_SIZE_EDIT)
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            direction=direction,
+            use_checksum=True,
+            ctx=self._ctx(fs),
+        )
+        assert result["conflicts"] == ["a.txt"]
+        assert result["skipped"] == []
+        assert result["uploaded"] == []
+        assert result["downloaded"] == []
+        # Local file untouched — a conflict never auto-transfers.
+        assert (tmp_path / "a.txt").read_bytes() == self._SAME_SIZE_EDIT
+
+    async def test_without_use_checksum_same_size_edit_still_skips_without_reading(
+        self, tmp_path, monkeypatch
+    ):
+        # The default (use_checksum=False) keeps the cheap mtime+size behavior:
+        # no hash read, and the same-size edit is still the documented gap.
+        spy = MagicMock(side_effect=transfer_module._local_md5)
+        monkeypatch.setattr(transfer_module, "_local_md5", spy)
+        fs = self._fs()
+        self._write_local(tmp_path, self._SAME_SIZE_EDIT)
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            ctx=self._ctx(fs),
+        )
+        assert result["skipped"] == ["a.txt"]
+        assert result["conflicts"] == []
+        spy.assert_not_called()
+
+    async def test_size_mismatch_resolves_without_reading(self, tmp_path, monkeypatch):
+        # A within-tolerance pair whose sizes already differ is a conflict from
+        # the stat alone — the hash block must not pay for a read it can't
+        # change the outcome of.
+        spy = MagicMock(side_effect=transfer_module._local_md5)
+        monkeypatch.setattr(transfer_module, "_local_md5", spy)
+        fs = self._fs()
+        self._write_local(tmp_path, b"a different length entirely")
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            use_checksum=True,
+            ctx=self._ctx(fs),
+        )
+        assert result["conflicts"] == ["a.txt"]
+        spy.assert_not_called()
+
+    async def test_dry_run_does_not_hash_within_tolerance_pair(self, tmp_path, monkeypatch):
+        # dry_run stays a cheap preview: the same-size edit previews as a skip
+        # (no read) — but says the checksum wasn't verified, since the real run
+        # reports a conflict for this same state (PR #841 QA).
+        spy = MagicMock(side_effect=transfer_module._local_md5)
+        monkeypatch.setattr(transfer_module, "_local_md5", spy)
+        fs = self._fs()
+        self._write_local(tmp_path, self._SAME_SIZE_EDIT)
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            use_checksum=True,
+            dry_run=True,
+            ctx=self._ctx(fs),
+        )
+        spy.assert_not_called()
+        a_txt = [a for a in result["actions"] if a["name"] == "a.txt"]
+        assert a_txt[0]["action"] == "skip"
+        assert a_txt[0]["reason"] == "in sync (checksum not verified in dry_run)"
+
+    async def test_dry_run_without_use_checksum_reason_is_unannotated(self, tmp_path):
+        fs = self._fs()
+        self._write_local(tmp_path, self._SAME_SIZE_EDIT)
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            dry_run=True,
+            ctx=self._ctx(fs),
+        )
+        assert result["actions"][0]["reason"] == "in sync"
+
+    async def test_local_file_vanishing_before_stat_reported_as_failed(self, tmp_path, monkeypatch):
+        # PR #841 QA: the plan loop's stat was unguarded, so a file deleted
+        # between the directory scan and the plan raised FileNotFoundError out
+        # of the whole call. Simulate the race by having the scan report a name
+        # that is gone by the time it's statted.
+        ghost = tmp_path / "a.txt"
+        real_iterdir = Path.iterdir
+        real_is_file = Path.is_file
+        monkeypatch.setattr(
+            Path,
+            "iterdir",
+            lambda self: (
+                iter([*real_iterdir(self), ghost]) if self == tmp_path else real_iterdir(self)
+            ),
+        )
+        monkeypatch.setattr(
+            Path, "is_file", lambda self: True if self == ghost else real_is_file(self)
+        )
+        fs = self._fs()
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            ctx=self._ctx(fs),
+        )
+        assert len(result["failed"]) == 1
+        assert result["failed"][0]["name"] == "a.txt"
+        assert result["skipped"] == []
+        assert result["downloaded"] == []
+
+    async def test_hashes_run_concurrently_bounded_and_keep_name_order(self, tmp_path, monkeypatch):
+        # PR #841 QA: with every both-sides pair now hashed, hashing them one at
+        # a time put a full serial read of the folder ahead of any transfer.
+        # They now run concurrently, capped at _SYNC_HASH_CONCURRENCY, and each
+        # result still lands on its own name.
+        lock = threading.Lock()
+        state = {"now": 0, "peak": 0}
+        real_md5 = transfer_module._local_md5
+
+        def _slow_md5(path):
+            with lock:
+                state["now"] += 1
+                state["peak"] = max(state["peak"], state["now"])
+            time.sleep(0.05)
+            with lock:
+                state["now"] -= 1
+            return real_md5(path)
+
+        monkeypatch.setattr(transfer_module, "_local_md5", _slow_md5)
+        names = [f"f{i:02d}.txt" for i in range(20)]
+        files = []
+        for i, name in enumerate(names):
+            # Odd-numbered files carry a same-size edit locally.
+            self._write_local_named(
+                tmp_path, name, self._SAME_SIZE_EDIT if i % 2 else self._CONTENT
+            )
+            files.append(
+                _drive_file(
+                    name,
+                    f"id{i}",
+                    mtime="2024-06-01T00:00:00.000Z",
+                    md5=self._MD5,
+                    size=len(self._CONTENT),
+                )
+            )
+        fs = _FakeDriveFS({"root": files})
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            use_checksum=True,
+            ctx=self._ctx(fs),
+        )
+        assert 1 < state["peak"] <= transfer_module._SYNC_HASH_CONCURRENCY
+        assert result["skipped"] == names[0::2]
+        assert result["conflicts"] == names[1::2]
+
+    async def test_within_tolerance_read_failure_reported_as_failed(self, tmp_path, monkeypatch):
+        # The newly-reachable hash read degrades to one 'failed' entry like the
+        # out-of-tolerance one does (#274 PR #472 review, finding #1).
+        def _boom(path):
+            raise OSError("permission denied")
+
+        monkeypatch.setattr(transfer_module, "_local_md5", _boom)
+        fs = self._fs()
+        self._write_local(tmp_path, self._CONTENT)
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            use_checksum=True,
+            ctx=self._ctx(fs),
+        )
+        assert result["failed"] == [{"name": "a.txt", "error": "permission denied"}]
+        assert result["skipped"] == []
+
+    async def test_no_drive_md5_falls_back_to_in_sync(self, tmp_path):
+        # A file Drive reports no md5Checksum for can't be verified — it settles
+        # on the mtime+size decision, as before.
+        fs = self._fs(md5=None)
+        self._write_local(tmp_path, self._SAME_SIZE_EDIT)
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            use_checksum=True,
+            ctx=self._ctx(fs),
+        )
+        assert result["skipped"] == ["a.txt"]
+
+
+class TestSyncFolderSizeDivergence:
+    """Issue #659: `sync_folder` reports "in sync" for a name whose content
+    differs on the two sides whenever the mtimes happen to agree. The classic
+    trigger is a rename-in-place — `mv` preserves mtime, so a name ends up
+    pointing at different bytes with an unchanged timestamp and the equal-mtime
+    skip hides it forever. use_checksum can't catch it (its hash check is guarded
+    on the mtimes already disagreeing). Fixed with a near-free byte-size check:
+    Drive's `size` is already in the folder listing, so a within-tolerance mtime
+    pair whose sizes disagree is not skipped — it is reported as a `conflict`,
+    for every direction (PR #712 QA round 1): the mtimes agree, so recency is
+    unknown, and a directional sync already reports `conflict` rather than
+    overwrite a target it *can* tell is newer, so this branch (which knows less)
+    must be at least as cautious."""
+
+    _CONTENT = b"hello world"  # 11 bytes
+    _MD5 = "5eb63bbbe01eeed093cb22bb8f5acdc3"
+    _OTHER = b"totally different content, longer"  # 33 bytes — different size
+
+    def _ctx(self, fs: _FakeDriveFS):
+        ctx = MagicMock()
+        ctx.request_context.lifespan_context.drive_service = fs.svc
+        ctx.request_context.lifespan_context.drive_folder_cache = MagicMock()
+        ctx.report_progress = AsyncMock()
+        return ctx
+
+    def _write_local(self, tmp_path, name, content, mtime_str):
+        p = tmp_path / name
+        p.write_bytes(content)
+        dt = datetime.fromisoformat(mtime_str.replace("Z", "+00:00"))
+        os.utime(p, (dt.timestamp(), dt.timestamp()))
+        return p
+
+    def _fs_with_stale_drive_file(self):
+        # Drive still holds the 11-byte _CONTENT under 'a.txt' (size + md5 match
+        # it); the local 'a.txt' will be overwritten with different, differently
+        # sized bytes at the same mtime.
+        return _FakeDriveFS(
+            {
+                "root": [
+                    _drive_file(
+                        "a.txt",
+                        "fa",
+                        mtime="2024-06-01T00:00:00.000Z",
+                        md5=self._MD5,
+                        size=len(self._CONTENT),
+                    )
+                ]
+            }
+        )
+
+    async def test_bidirectional_equal_mtime_size_differs_is_conflict(self, tmp_path):
+        fs = self._fs_with_stale_drive_file()
+        self._write_local(tmp_path, "a.txt", self._OTHER, "2024-06-01T00:00:00.000Z")
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            ctx=self._ctx(fs),
+        )
+        assert result["skipped"] == []
+        assert result["conflicts"] == ["a.txt"]
+        assert result["uploaded"] == []
+        assert result["downloaded"] == []
+
+    async def test_upload_direction_equal_mtime_size_differs_is_conflict(self, tmp_path):
+        # direction='upload' must NOT auto-upload here: the local file could be the
+        # stale side (a collaborator's newer, differently-sized Drive copy whose
+        # mtime landed within tolerance) — same caution the drive-newer +
+        # direction='upload' branch already applies (PR #712 QA round 1).
+        fs = self._fs_with_stale_drive_file()
+        self._write_local(tmp_path, "a.txt", self._OTHER, "2024-06-01T00:00:00.000Z")
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            direction="upload",
+            ctx=self._ctx(fs),
+        )
+        assert result["conflicts"] == ["a.txt"]
+        assert result["uploaded"] == []
+        assert result["skipped"] == []
+
+    async def test_download_direction_equal_mtime_size_differs_is_conflict(self, tmp_path):
+        # Symmetric to the upload case: direction='download' must not silently
+        # overwrite a freshly-renamed local file (no local revision history to
+        # recover from) with Drive's stale bytes.
+        fs = self._fs_with_stale_drive_file()
+        self._write_local(tmp_path, "a.txt", self._OTHER, "2024-06-01T00:00:00.000Z")
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            direction="download",
+            ctx=self._ctx(fs),
+        )
+        assert result["conflicts"] == ["a.txt"]
+        assert result["downloaded"] == []
+        assert result["skipped"] == []
+
+    async def test_signal_is_independent_of_use_checksum_and_md5(self, tmp_path):
+        # Drive reports `size` but no md5Checksum, and use_checksum is left at its
+        # default False — the divergence is still caught purely from size.
+        fs = _FakeDriveFS(
+            {
+                "root": [
+                    _drive_file(
+                        "a.txt",
+                        "fa",
+                        mtime="2024-06-01T00:00:00.000Z",
+                        size=len(self._CONTENT),
+                    )
+                ]
+            }
+        )
+        self._write_local(tmp_path, "a.txt", self._OTHER, "2024-06-01T00:00:00.000Z")
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            ctx=self._ctx(fs),
+        )
+        assert result["conflicts"] == ["a.txt"]
+        assert result["skipped"] == []
+
+    async def test_equal_mtime_equal_size_still_reads_as_in_sync(self, tmp_path):
+        # Documented remaining gap under the default use_checksum=False: a
+        # same-size edit that also preserves mtime is indistinguishable without a
+        # hash (opt in with use_checksum=True — see
+        # TestSyncFolderChecksumWithinTolerance, #716).
+        fs = self._fs_with_stale_drive_file()
+        self._write_local(tmp_path, "a.txt", b"11 bytes!!!", "2024-06-01T00:00:02.000Z")  # 11 bytes
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            ctx=self._ctx(fs),
+        )
+        assert result["skipped"] == ["a.txt"]
+        assert result["conflicts"] == []
+
+    async def test_dry_run_flags_size_divergence_without_reading_files(self, tmp_path, monkeypatch):
+        # The other half of the bug report: a dry-run preview must give a signal.
+        # Size comes from the listing, so this costs no file read — the hash path
+        # stays dry_run-gated.
+        spy = MagicMock(side_effect=transfer_module._local_md5)
+        monkeypatch.setattr(transfer_module, "_local_md5", spy)
+        fs = self._fs_with_stale_drive_file()
+        self._write_local(tmp_path, "a.txt", self._OTHER, "2024-06-01T00:00:00.000Z")
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            use_checksum=True,
+            dry_run=True,
+            ctx=self._ctx(fs),
+        )
+        spy.assert_not_called()
+        # dry_run leaves the flat lists empty (#512) — the signal is in `actions`.
+        assert result["skipped"] == []
+        assert result["conflicts"] == []
+        a_txt = [a for a in result["actions"] if a["name"] == "a.txt"]
+        assert len(a_txt) == 1
+        assert a_txt[0]["action"] == "conflict"
+        assert "size" in a_txt[0]["reason"]
 
 
 class TestDownloadFolder:
@@ -2538,6 +5576,258 @@ class TestDownloadFolder:
         for c in ctx.report_progress.await_args_list:
             assert c.args[1] == 2  # total
 
+    async def test_progress_message_falls_back_to_running_bytes_when_sizes_unknown(self, tmp_path):
+        """#352: Drive doesn't report a `size` for Workspace files, so an upfront
+        byte total isn't knowable when export_format is exporting them — the
+        message falls back to a running byte count with no '/total' denominator
+        rather than fabricating one. progress/total (the primary metric) stay
+        file-count-based either way."""
+        svc = MagicMock()
+        svc.files.return_value.list.return_value.execute.return_value = {
+            "files": [
+                {
+                    "id": "doc1",
+                    "name": "Doc One",
+                    "mimeType": "application/vnd.google-apps.document",
+                },
+                {
+                    "id": "doc2",
+                    "name": "Doc Two",
+                    "mimeType": "application/vnd.google-apps.document",
+                },
+            ]
+        }
+        svc.files.return_value.export.return_value.execute.return_value = b"content"
+        ctx = self._ctx(svc)
+
+        result = await _transfer_tools["download_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            export_format="pdf",
+            ctx=ctx,
+        )
+        assert result["failed"] == []
+        messages = [c.args[2] for c in ctx.report_progress.await_args_list]
+        assert all("bytes so far:" in m for m in messages)
+        assert not any(" bytes:" in m for m in messages)
+        for c in ctx.report_progress.await_args_list:
+            assert c.args[1] == 2  # total stays file-count-based
+
+    async def test_progress_message_includes_byte_total_when_sizes_known(
+        self, tmp_path, monkeypatch
+    ):
+        """#352: non-Workspace candidates report `size` in the same Drive listing
+        call, so an accurate upfront byte total is known — the message shows it
+        as 'transferred/total bytes' instead of a denominator-less running count.
+        The fake downloader writes each candidate's own listed size (5 and 7,
+        not a fixed amount for both) so the numerator is checked against the
+        real accumulated total, not just the denominator's presence (#352 QA
+        review, finding #4 — the original version's fixed 5-byte-per-file fake
+        would have passed even if bytes_completed accumulation regressed)."""
+        svc = MagicMock()
+        svc.files.return_value.list.return_value.execute.return_value = {
+            "files": [
+                {
+                    "id": "bin1",
+                    "name": "a.bin",
+                    "mimeType": "application/octet-stream",
+                    "size": "5",
+                },
+                {
+                    "id": "bin2",
+                    "name": "b.bin",
+                    "mimeType": "application/octet-stream",
+                    "size": "7",
+                },
+            ]
+        }
+        sizes = {"bin1": 5, "bin2": 7}
+        svc.files.return_value.get_media.side_effect = lambda fileId, supportsAllDrives: MagicMock(
+            fileId=fileId
+        )
+
+        class _FakeDownloader:
+            def __init__(self, fh, request):
+                self._fh = fh
+                self._size = sizes[request.fileId]
+
+            def next_chunk(self):
+                self._fh.write(b"x" * self._size)
+                return None, True
+
+        monkeypatch.setattr(transfer_module, "MediaIoBaseDownload", _FakeDownloader)
+        ctx = self._ctx(svc)
+
+        result = await _transfer_tools["download_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            ctx=ctx,
+        )
+        assert result["failed"] == []
+        assert result["size_bytes"] == 12
+        by_completed = {c.args[0]: c.args[2] for c in ctx.report_progress.await_args_list}
+        assert set(by_completed) == {1, 2}
+        # First completion (whichever file finishes first) reports its own real
+        # size against the fixed total; second (final) completion reports the
+        # real accumulated total, not a fixed/guessed value.
+        assert by_completed[1] in ("1/2, 5/12 bytes: a.bin: ok", "1/2, 7/12 bytes: b.bin: ok")
+        assert by_completed[2].startswith("2/2, 12/12 bytes:")
+
+    async def test_progress_unit_bytes_reports_byte_totals_when_sizes_known(
+        self, tmp_path, monkeypatch
+    ):
+        """#741: progress_unit='bytes' feeds the structured progress/total fields
+        from bytes_completed/total_bytes_expected instead of file counts, for a
+        client that renders a progress bar from those fields alone rather than
+        parsing the message text. The message text itself is unaffected — still
+        file-count-first with a supplementary bytes note (#352)."""
+        svc = MagicMock()
+        svc.files.return_value.list.return_value.execute.return_value = {
+            "files": [
+                {
+                    "id": "bin1",
+                    "name": "a.bin",
+                    "mimeType": "application/octet-stream",
+                    "size": "5",
+                },
+                {
+                    "id": "bin2",
+                    "name": "b.bin",
+                    "mimeType": "application/octet-stream",
+                    "size": "7",
+                },
+            ]
+        }
+        sizes = {"bin1": 5, "bin2": 7}
+        svc.files.return_value.get_media.side_effect = lambda fileId, supportsAllDrives: MagicMock(
+            fileId=fileId
+        )
+
+        class _FakeDownloader:
+            def __init__(self, fh, request):
+                self._fh = fh
+                self._size = sizes[request.fileId]
+
+            def next_chunk(self):
+                self._fh.write(b"x" * self._size)
+                return None, True
+
+        monkeypatch.setattr(transfer_module, "MediaIoBaseDownload", _FakeDownloader)
+        ctx = self._ctx(svc)
+
+        result = await _transfer_tools["download_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            progress_unit="bytes",
+            ctx=ctx,
+        )
+        assert result["failed"] == []
+        calls = [(c.args[0], c.args[1], c.args[2]) for c in ctx.report_progress.await_args_list]
+        progress_totals = {(progress, total) for progress, total, _ in calls}
+        # Whichever file finishes first reports its own byte size (5 or 7)
+        # against the full total (12); the second (final) completion reports
+        # the accumulated 12/12 — the message text stays file-count-first
+        # regardless of progress_unit.
+        assert progress_totals in ({(5, 12), (12, 12)}, {(7, 12), (12, 12)})
+        final_message = next(msg for progress, _, msg in calls if progress == 12)
+        assert final_message.startswith("2/2, 12/12 bytes:")
+
+    async def test_progress_unit_bytes_falls_back_to_files_when_sizes_unknown(self, tmp_path):
+        """#741: progress_unit='bytes' has no reliable total to report against
+        when a Workspace export's size isn't known upfront — falls back to
+        file-count for the structured fields rather than reporting a byte
+        'total' with no real denominator."""
+        svc = MagicMock()
+        svc.files.return_value.list.return_value.execute.return_value = {
+            "files": [
+                {
+                    "id": "doc1",
+                    "name": "Doc One",
+                    "mimeType": "application/vnd.google-apps.document",
+                },
+                {
+                    "id": "doc2",
+                    "name": "Doc Two",
+                    "mimeType": "application/vnd.google-apps.document",
+                },
+            ]
+        }
+        svc.files.return_value.export.return_value.execute.return_value = b"content"
+        ctx = self._ctx(svc)
+
+        result = await _transfer_tools["download_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            export_format="pdf",
+            progress_unit="bytes",
+            ctx=ctx,
+        )
+        assert result["failed"] == []
+        for c in ctx.report_progress.await_args_list:
+            assert c.args[1] == 2  # falls back to file-count total, not bytes
+
+    async def test_progress_unit_bytes_reaches_full_total_even_when_a_candidate_fails(
+        self, tmp_path, monkeypatch
+    ):
+        """#741 QA review, finding #1: bytes_completed only advanced on success,
+        while total_bytes_expected sums every candidate's declared size regardless
+        of outcome — a failed candidate's size stayed baked into the denominator
+        while never counted toward the numerator, so the final report_progress
+        call reported less than 100% even though the whole batch had finished.
+        bytes_accounted (distinct from bytes_completed, which stays success-only
+        for the message text) now advances by each candidate's own declared size
+        on every outcome, matching file-count mode's "final call always reports
+        full completion" guarantee."""
+        svc = MagicMock()
+        svc.files.return_value.list.return_value.execute.return_value = {
+            "files": [
+                {
+                    "id": "bin1",
+                    "name": "a.bin",
+                    "mimeType": "application/octet-stream",
+                    "size": "5",
+                },
+                {
+                    "id": "bin2",
+                    "name": "b.bin",
+                    "mimeType": "application/octet-stream",
+                    "size": "7",
+                },
+            ]
+        }
+        svc.files.return_value.get_media.side_effect = lambda fileId, supportsAllDrives: MagicMock(
+            fileId=fileId
+        )
+
+        class _FakeDownloader:
+            def __init__(self, fh, request):
+                self._fh = fh
+                self._fid = request.fileId
+
+            def next_chunk(self):
+                if self._fid == "bin2":
+                    raise RuntimeError("simulated download failure")
+                self._fh.write(b"x" * 5)
+                return None, True
+
+        monkeypatch.setattr(transfer_module, "MediaIoBaseDownload", _FakeDownloader)
+        ctx = self._ctx(svc)
+
+        result = await _transfer_tools["download_folder"](
+            folder_id="root",
+            local_path=str(tmp_path),
+            progress_unit="bytes",
+            ctx=ctx,
+        )
+        assert len(result["failed"]) == 1
+        assert result["failed"][0]["name"] == "b.bin"
+        # Both candidates' declared sizes (5 + 7 = 12) are accounted for by the
+        # final call, matching total_bytes_expected exactly — never stuck below it.
+        progress_values = [c.args[0] for c in ctx.report_progress.await_args_list]
+        assert 12 in progress_values
+        for c in ctx.report_progress.await_args_list:
+            assert c.args[1] == 12  # total stays fixed regardless of outcome
+
     async def test_duplicate_drive_filenames_do_not_race_or_double_count(self, tmp_path):
         """PR #351 review, live-reproduced: Drive allows two files with the same
         name (distinct IDs) in one folder; the local filesystem doesn't. The old
@@ -2601,41 +5891,22 @@ class TestDownloadFolder:
         assert result["downloaded"] == ["Doc One.pdf"]
         assert result["failed"] == []
 
-    async def test_skip_if_exists_true_skips_existing_and_does_not_redownload(self, tmp_path):
+    @pytest.mark.parametrize(
+        ("skip_if_exists", "skipped", "downloaded", "export_calls", "final_bytes"),
+        [
+            (True, ["Doc One.pdf"], [], 0, b"already here"),
+            (False, [], ["Doc One.pdf"], 1, b"new content"),
+        ],
+        ids=["skip", "redownload"],
+    )
+    async def test_skip_if_exists_with_existing_destination(
+        self, tmp_path, skip_if_exists, skipped, downloaded, export_calls, final_bytes
+    ):
         """TC-D109 (v0.8.0 QA run, #227): skip_if_exists was live-SKIPped as
-        local-filesystem-dependent and had no unit coverage. A destination file
-        that already exists must be left untouched — the candidate never reaches
-        export()/get_media() at all."""
-        svc = MagicMock()
-        svc.files.return_value.list.return_value.execute.return_value = {
-            "files": [
-                {
-                    "id": "doc1",
-                    "name": "Doc One",
-                    "mimeType": "application/vnd.google-apps.document",
-                },
-            ]
-        }
-        dest = tmp_path / "Doc One.pdf"
-        dest.write_bytes(b"already here")
-
-        result = await _transfer_tools["download_folder"](
-            folder_id="root",
-            local_path=str(tmp_path),
-            export_format="pdf",
-            skip_if_exists=True,
-            ctx=self._ctx(svc),
-        )
-        assert result["skipped"] == ["Doc One.pdf"]
-        assert result["downloaded"] == []
-        assert result["failed"] == []
-        svc.files.return_value.export.assert_not_called()
-        assert dest.read_bytes() == b"already here"
-
-    async def test_skip_if_exists_false_redownloads_existing_file(self, tmp_path):
-        """Companion to the skip_if_exists=True case above: with the flag off, an
-        existing destination file is not treated as a skip candidate and gets
-        overwritten by a fresh export."""
+        local-filesystem-dependent and had no unit coverage. With the flag on, an
+        existing destination file is left untouched and the candidate never
+        reaches export(); with it off, the file is overwritten by a fresh export.
+        One parametrized test so the shared mock can't drift between cases (#561)."""
         svc = MagicMock()
         svc.files.return_value.list.return_value.execute.return_value = {
             "files": [
@@ -2648,19 +5919,20 @@ class TestDownloadFolder:
         }
         svc.files.return_value.export.return_value.execute.return_value = b"new content"
         dest = tmp_path / "Doc One.pdf"
-        dest.write_bytes(b"stale content")
+        dest.write_bytes(b"already here")
 
         result = await _transfer_tools["download_folder"](
             folder_id="root",
             local_path=str(tmp_path),
             export_format="pdf",
-            skip_if_exists=False,
+            skip_if_exists=skip_if_exists,
             ctx=self._ctx(svc),
         )
-        assert result["downloaded"] == ["Doc One.pdf"]
-        assert result["skipped"] == []
-        svc.files.return_value.export.assert_called_once()
-        assert dest.read_bytes() == b"new content"
+        assert result["skipped"] == skipped
+        assert result["downloaded"] == downloaded
+        assert result["failed"] == []
+        assert svc.files.return_value.export.call_count == export_calls
+        assert dest.read_bytes() == final_bytes
 
     async def test_mime_type_filter_appended_to_drive_query(self, tmp_path):
         """TC-D110 (v0.8.0 QA run, #227): mime_type_filter is delegated entirely to
@@ -2713,6 +5985,13 @@ class TestDownloadFile:
     def _metadata(self, name, mime_type):
         return {"name": name, "mimeType": mime_type}
 
+    def _assert_metadata_call(self, svc, file_id):
+        """#551: supportsAllDrives=True is what lets a shared-drive file
+        resolve, and `fields` must include both keys download_file reads."""
+        svc.files.return_value.get.assert_called_once_with(
+            fileId=file_id, fields="name, mimeType", supportsAllDrives=True
+        )
+
     async def test_google_doc_export(self, tmp_path):
         svc = MagicMock()
         svc.files.return_value.get.return_value.execute.return_value = self._metadata(
@@ -2730,6 +6009,7 @@ class TestDownloadFile:
         svc.files.return_value.export.assert_called_once_with(
             fileId="doc1", mimeType="application/pdf"
         )
+        self._assert_metadata_call(svc, "doc1")
         dest = tmp_path / "My Doc.pdf"
         assert result == {
             "local_path": str(dest),
@@ -2760,6 +6040,30 @@ class TestDownloadFile:
         assert result["local_path"] == str(dest)
         assert dest.read_bytes() == b"xlsx bytes"
 
+    async def test_str_export_content_is_utf8_encoded(self, tmp_path):
+        """#551: googleapiclient can hand back a text export (csv/html/txt) as
+        str rather than bytes; download_file encodes it as UTF-8 before writing."""
+        svc = MagicMock()
+        svc.files.return_value.get.return_value.execute.return_value = self._metadata(
+            "My Sheet", "application/vnd.google-apps.spreadsheet"
+        )
+        text = "name,city\nZoë,Zürich\n"
+        svc.files.return_value.export.return_value.execute.return_value = text
+
+        result = await _transfer_tools["download_file"](
+            file_id="sheet1",
+            local_path=str(tmp_path),
+            export_format="csv",
+            ctx=self._ctx(svc),
+        )
+
+        svc.files.return_value.export.assert_called_once_with(fileId="sheet1", mimeType="text/csv")
+        self._assert_metadata_call(svc, "sheet1")
+        dest = tmp_path / "My Sheet.csv"
+        expected = text.encode("utf-8")
+        assert dest.read_bytes() == expected
+        assert result["size_bytes"] == len(expected)
+
     async def test_explicit_local_path_overrides_drive_filename(self, tmp_path):
         """When local_path names an exact file (not a directory), that name is
         used as-is rather than Drive's own name + a guessed extension — the
@@ -2782,6 +6086,26 @@ class TestDownloadFile:
             fileId="slides1",
             mimeType="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         )
+        assert result["local_path"] == str(dest)
+        assert dest.read_bytes() == b"pptx bytes"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["custom_name.pptx"]
+
+    async def test_explicit_local_path_replaces_existing_file(self, tmp_path):
+        svc = MagicMock()
+        svc.files.return_value.get.return_value.execute.return_value = self._metadata(
+            "My Slides", "application/vnd.google-apps.presentation"
+        )
+        svc.files.return_value.export.return_value.execute.return_value = b"pptx bytes"
+        dest = tmp_path / "custom_name.pptx"
+        dest.write_bytes(b"previous download")
+
+        result = await _transfer_tools["download_file"](
+            file_id="slides1",
+            local_path=str(dest),
+            export_format="pptx",
+            ctx=self._ctx(svc),
+        )
+
         assert result["local_path"] == str(dest)
         assert dest.read_bytes() == b"pptx bytes"
 
@@ -2812,7 +6136,10 @@ class TestDownloadFile:
         )
 
         svc.files.return_value.export.assert_not_called()
-        svc.files.return_value.get_media.assert_called_once_with(fileId="bin1")
+        svc.files.return_value.get_media.assert_called_once_with(
+            fileId="bin1", supportsAllDrives=True
+        )
+        self._assert_metadata_call(svc, "bin1")
         dest = tmp_path / "photo.png"
         assert result == {"local_path": str(dest), "name": "photo.png", "size_bytes": len(content)}
         assert dest.read_bytes() == content
@@ -2864,6 +6191,350 @@ class TestDownloadFile:
                 ctx=self._ctx(svc),
             )
         svc.files.return_value.export.assert_not_called()
+
+    async def test_trailing_slash_nonexistent_dir_is_created_and_file_saved_inside(
+        self, tmp_path, monkeypatch
+    ):
+        """#690: a local_path ending in a separator whose directory doesn't exist
+        yet was writing a plain file literally named after the last segment
+        (Path() strips the trailing slash before the .is_dir() check). It must
+        instead create the directory and save the Drive file inside it."""
+        svc = MagicMock()
+        svc.files.return_value.get.return_value.execute.return_value = self._metadata(
+            "photo.png", "image/png"
+        )
+
+        class _FakeDownloader:
+            def __init__(self, fh, request):
+                self._fh = fh
+
+            def next_chunk(self):
+                self._fh.write(b"png bytes")
+                return None, True
+
+        monkeypatch.setattr(transfer_module, "MediaIoBaseDownload", _FakeDownloader)
+        new_dir = tmp_path / "new" / "sub"  # neither level exists yet
+        result = await _transfer_tools["download_file"](
+            file_id="bin1",
+            local_path=str(new_dir) + os.sep,  # trailing separator
+            ctx=self._ctx(svc),
+        )
+
+        assert new_dir.is_dir()
+        saved = new_dir / "photo.png"
+        assert saved.is_file()
+        assert saved.read_bytes() == b"png bytes"
+        assert result["local_path"] == str(saved)
+        # The bug's signature: NO plain file literally named "sub" alongside.
+        assert not (tmp_path / "new" / "sub").is_file()
+
+    async def test_trailing_slash_dir_second_download_does_not_clobber(self, tmp_path, monkeypatch):
+        """#690's clobber symptom: two different Drive files downloaded to the
+        same trailing-slash local_path must land as two separate files inside the
+        directory, not overwrite one file named after the directory."""
+        svc = MagicMock()
+        target = str(tmp_path / "out") + os.sep
+
+        class _FakeDownloader:
+            payload = b""
+
+            def __init__(self, fh, request):
+                self._fh = fh
+
+            def next_chunk(self):
+                self._fh.write(_FakeDownloader.payload)
+                return None, True
+
+        monkeypatch.setattr(transfer_module, "MediaIoBaseDownload", _FakeDownloader)
+
+        svc.files.return_value.get.return_value.execute.return_value = self._metadata(
+            "first.bin", "application/octet-stream"
+        )
+        _FakeDownloader.payload = b"first"
+        await _transfer_tools["download_file"](file_id="a", local_path=target, ctx=self._ctx(svc))
+
+        svc.files.return_value.get.return_value.execute.return_value = self._metadata(
+            "second.bin", "application/octet-stream"
+        )
+        _FakeDownloader.payload = b"second"
+        await _transfer_tools["download_file"](file_id="b", local_path=target, ctx=self._ctx(svc))
+
+        out = tmp_path / "out"
+        assert (out / "first.bin").read_bytes() == b"first"
+        assert (out / "second.bin").read_bytes() == b"second"
+        assert not out.is_file()
+
+    async def test_trailing_slash_over_existing_non_directory_raises(self, tmp_path):
+        """If a plain file already sits where the trailing-slash local_path points,
+        the directory intent can't be honored — raise rather than silently write
+        past it."""
+        svc = MagicMock()
+        svc.files.return_value.get.return_value.execute.return_value = self._metadata(
+            "x.bin", "application/octet-stream"
+        )
+        clash = tmp_path / "clash"
+        clash.write_bytes(b"i am a file")
+
+        with pytest.raises(ValueError, match=r"non-directory path component at.*clash"):
+            await _transfer_tools["download_file"](
+                file_id="bin1",
+                local_path=str(clash) + os.sep,
+                ctx=self._ctx(svc),
+            )
+        assert clash.read_bytes() == b"i am a file"  # untouched
+        # #724: reject the local collision before spending a Drive metadata call.
+        svc.files.return_value.get.assert_not_called()
+
+    async def test_trailing_slash_with_file_in_parent_path_raises_valueerror(self, tmp_path):
+        """#724: an intermediate regular file must produce the same friendly
+        ValueError surface rather than leaking a pathlib/OSError exception."""
+        svc = MagicMock()
+        svc.files.return_value.get.return_value.execute.return_value = self._metadata(
+            "x.bin", "application/octet-stream"
+        )
+        clash = tmp_path / "clash"
+        clash.write_bytes(b"i am a file")
+        target = clash / "sub"
+
+        with pytest.raises(ValueError, match=r"non-directory path component at.*clash"):
+            await _transfer_tools["download_file"](
+                file_id="bin1",
+                local_path=str(target) + os.sep,
+                ctx=self._ctx(svc),
+            )
+
+        assert clash.read_bytes() == b"i am a file"
+        svc.files.return_value.get.assert_not_called()
+
+    async def test_file_destination_with_file_parent_fails_before_drive_call(self, tmp_path):
+        """#836: a regular file in an intermediate parent must not leak
+        NotADirectoryError or spend a Drive metadata request."""
+        svc = MagicMock()
+        clash = tmp_path / "clash"
+        clash.write_bytes(b"i am a file")
+        target = clash / "sub" / "out.bin"
+
+        with pytest.raises(ValueError, match=r"non-directory path component at.*clash"):
+            await _transfer_tools["download_file"](
+                file_id="bin1", local_path=str(target), ctx=self._ctx(svc)
+            )
+
+        svc.files.return_value.get.assert_not_called()
+        assert clash.read_bytes() == b"i am a file"
+
+    async def test_trailing_slash_with_dangling_symlink_names_blocker(self, tmp_path):
+        """#836: exists() is false for a dangling symlink, but mkdir sees it."""
+        svc = MagicMock()
+        blocker = tmp_path / "dangling"
+        blocker.symlink_to(tmp_path / "missing-target")
+
+        with pytest.raises(ValueError, match=r"symlink to a missing target at.*dangling"):
+            await _transfer_tools["download_file"](
+                file_id="bin1", local_path=str(blocker) + os.sep, ctx=self._ctx(svc)
+            )
+
+        svc.files.return_value.get.assert_not_called()
+
+    async def test_dangling_symlink_at_explicit_file_destination_is_refused(self, tmp_path):
+        """#874: without a trailing slash the same dangling symlink used to be
+        accepted, and the write followed it to create its missing target."""
+        svc = MagicMock()
+        missing = tmp_path / "missing-target"
+        link = tmp_path / "out.bin"
+        link.symlink_to(missing)
+
+        with pytest.raises(ValueError, match=r"symlink to a missing target at.*out\.bin"):
+            await _transfer_tools["download_file"](
+                file_id="bin1", local_path=str(link), ctx=self._ctx(svc)
+            )
+
+        svc.files.return_value.get.assert_not_called()
+        assert not missing.exists()
+
+    @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs mkfifo")
+    async def test_fifo_at_explicit_file_destination_fails_before_drive_call(self, tmp_path):
+        """PR #1001 QA round 1: _write_atomically refused the FIFO, but only
+        after a Workspace export's whole round trip."""
+        svc = MagicMock()
+        fifo = tmp_path / "pipe"
+        os.mkfifo(fifo)
+
+        with pytest.raises(OSError, match="isn't a regular file"):
+            await _transfer_tools["download_file"](
+                file_id="doc1", local_path=str(fifo), export_format="pdf", ctx=self._ctx(svc)
+            )
+
+        svc.files.return_value.get.assert_not_called()
+        svc.files.return_value.export.assert_not_called()
+
+    @pytest.mark.parametrize("blocker", ["fifo", "dir"])
+    async def test_unwritable_name_in_directory_target_fails_before_export(self, tmp_path, blocker):
+        """PR #1001 QA round 2: a directory target's resolved dir/<name> was
+        only checked by _write_atomically, after the whole export."""
+        if blocker == "fifo" and not hasattr(os, "mkfifo"):
+            pytest.skip("needs mkfifo")
+        svc = MagicMock()
+        svc.files.return_value.get.return_value.execute.return_value = self._metadata(
+            "My Doc", "application/vnd.google-apps.document"
+        )
+        target = tmp_path / "My Doc.txt"
+        if blocker == "fifo":
+            os.mkfifo(target)
+            expected = OSError
+        else:
+            target.mkdir()
+            expected = IsADirectoryError
+
+        with pytest.raises(expected):
+            await _transfer_tools["download_file"](
+                file_id="doc1",
+                local_path=str(tmp_path) + os.sep,
+                export_format="txt",
+                ctx=self._ctx(svc),
+            )
+
+        svc.files.return_value.export.assert_not_called()
+
+    async def test_trailing_slash_dot_is_a_directory_target(self, tmp_path):
+        """#874: Path() drops a trailing '/.', so 'newdir/.' used to write a file
+        named 'newdir' (the #690 symptom)."""
+        svc = MagicMock()
+        svc.files.return_value.get.return_value.execute.return_value = self._metadata(
+            "My Doc", "application/vnd.google-apps.document"
+        )
+        svc.files.return_value.export.return_value.execute.return_value = b"pdf bytes"
+        newdir = tmp_path / "newdir"
+
+        result = await _transfer_tools["download_file"](
+            file_id="doc1",
+            local_path=str(newdir) + os.sep + ".",
+            export_format="pdf",
+            ctx=self._ctx(svc),
+        )
+
+        assert newdir.is_dir()
+        assert (newdir / "My Doc.pdf").read_bytes() == b"pdf bytes"
+        assert result["local_path"] == str(newdir / "My Doc.pdf")
+
+    async def test_trailing_slash_dot_over_existing_file_raises_with_hint(self, tmp_path):
+        """#874: 'report/.' over an existing file used to overwrite it. The error
+        says the ending is what made it a directory target."""
+        svc = MagicMock()
+        report = tmp_path / "report"
+        report.write_bytes(b"keep me")
+
+        with pytest.raises(ValueError, match=r"Remove that ending to write a file"):
+            await _transfer_tools["download_file"](
+                file_id="bin1", local_path=str(report) + os.sep + ".", ctx=self._ctx(svc)
+            )
+
+        assert report.read_bytes() == b"keep me"
+        svc.files.return_value.get.assert_not_called()
+
+    async def test_trailing_slash_hint_only_when_destination_itself_blocks(self, tmp_path):
+        """#874: the hint names the trailing separator only when dropping it
+        would help, i.e. the destination itself is the file in the way."""
+        svc = MagicMock()
+        clash = tmp_path / "clash"
+        clash.write_bytes(b"i am a file")
+
+        with pytest.raises(ValueError, match=r"ends in a path separator"):
+            await _transfer_tools["download_file"](
+                file_id="bin1", local_path=str(clash) + os.sep, ctx=self._ctx(svc)
+            )
+        with pytest.raises(ValueError) as excinfo:
+            await _transfer_tools["download_file"](
+                file_id="bin1", local_path=str(clash / "sub") + os.sep, ctx=self._ctx(svc)
+            )
+        assert "ends in a path separator" not in str(excinfo.value)
+
+    async def test_directory_created_during_metadata_call_raises_valueerror(self, tmp_path):
+        """#874: the preflight runs before the awaited metadata call, so a file
+        created at the target meanwhile must still surface as ValueError, not a
+        raw FileExistsError from mkdir."""
+        svc = MagicMock()
+        target = tmp_path / "out"
+
+        def _metadata_then_race(*_args, **_kwargs):
+            target.write_bytes(b"raced in")
+            return self._metadata("x.bin", "application/octet-stream")
+
+        svc.files.return_value.get.return_value.execute.side_effect = _metadata_then_race
+
+        with pytest.raises(ValueError, match=r"non-directory path component at.*out"):
+            await _transfer_tools["download_file"](
+                file_id="bin1", local_path=str(target) + os.sep, ctx=self._ctx(svc)
+            )
+        assert target.read_bytes() == b"raced in"
+
+    async def test_parent_created_during_metadata_call_raises_valueerror(self, tmp_path):
+        """#874: same race for an explicit file destination's parent, which
+        raised a raw NotADirectoryError/FileExistsError."""
+        svc = MagicMock()
+        parent = tmp_path / "sub"
+
+        def _metadata_then_race(*_args, **_kwargs):
+            parent.write_bytes(b"raced in")
+            return self._metadata("x.bin", "application/octet-stream")
+
+        svc.files.return_value.get.return_value.execute.side_effect = _metadata_then_race
+
+        with pytest.raises(ValueError, match=r"non-directory path component at.*sub"):
+            await _transfer_tools["download_file"](
+                file_id="bin1", local_path=str(parent / "x.bin"), ctx=self._ctx(svc)
+            )
+
+
+class TestFolderToolsLocalPathPreflight:
+    """#874: download_folder and sync_folder ran a bare mkdir -p on local_path,
+    so a file in an intermediate parent, or a dangling symlink at local_path,
+    leaked a raw NotADirectoryError/FileExistsError after the Drive listing."""
+
+    def _ctx(self, drive_svc):
+        ctx = _make_ctx(drive_service=drive_svc, drive_folder_cache=MagicMock())
+        ctx.report_progress = AsyncMock()
+        return ctx
+
+    @pytest.mark.parametrize("tool", ["download_folder", "sync_folder"])
+    async def test_file_in_parent_path_raises_valueerror_before_drive_call(self, tmp_path, tool):
+        clash = tmp_path / "clash"
+        clash.write_bytes(b"i am a file")
+        svc = MagicMock()
+
+        with pytest.raises(ValueError, match=r"non-directory path component at.*clash"):
+            await _transfer_tools[tool](
+                folder_id="root", local_path=str(clash / "sub"), ctx=self._ctx(svc)
+            )
+
+        svc.files.return_value.list.assert_not_called()
+        assert clash.read_bytes() == b"i am a file"
+
+    @pytest.mark.parametrize("tool", ["download_folder", "sync_folder"])
+    async def test_dangling_symlink_local_path_raises_valueerror(self, tmp_path, tool):
+        link = tmp_path / "dest"
+        link.symlink_to(tmp_path / "missing-target")
+        svc = MagicMock()
+
+        with pytest.raises(ValueError, match=r"symlink to a missing target at.*dest"):
+            await _transfer_tools[tool](folder_id="root", local_path=str(link), ctx=self._ctx(svc))
+
+        svc.files.return_value.list.assert_not_called()
+
+    async def test_download_folder_refuses_drive_file_with_partial_name(self, tmp_path):
+        """#887: such a file would be invisible to every later sync of the folder."""
+        name = atomic_write._PARTIAL_DOWNLOAD_PREFIX + "0123456789abcdef"
+        svc = MagicMock()
+        svc.files.return_value.list.return_value.execute.return_value = {
+            "files": [{"id": "fp", "name": name, "mimeType": "application/octet-stream"}]
+        }
+
+        result = await _transfer_tools["download_folder"](
+            folder_id="root", local_path=str(tmp_path), ctx=self._ctx(svc)
+        )
+
+        assert result["downloaded"] == []
+        assert [f["name"] for f in result["failed"]] == [name]
+        svc.files.return_value.get_media.assert_not_called()
 
 
 class TestSyncFolderResponseSizeCap:
@@ -2951,6 +6622,51 @@ class TestSyncFolderResponseSizeCap:
                 result_local_path=str(sync_dir / "nested" / "out.json"),
                 ctx=self._ctx(fs),
             )
+
+    async def test_result_local_path_over_existing_file_raises_before_any_transfer(self, tmp_path):
+        # PR #1000 QA round 1: a bad result_local_path must fail before the sync
+        # runs, not at the final manifest write after every transfer, and the error
+        # must name result_local_path, not sync_folder's other local_path param.
+        fs = _FakeDriveFS({"root": []})
+        sync_dir = tmp_path / "sync"
+        sync_dir.mkdir()
+        (sync_dir / "local.txt").write_text("upload me")
+        blocker = tmp_path / "blocker"
+        blocker.write_text("keep me")
+        with pytest.raises(ValueError, match=r"^result_local_path .* non-directory"):
+            await _transfer_tools["sync_folder"](
+                folder_id="root",
+                local_path=str(sync_dir),
+                direction="upload",
+                result_local_path=f"{blocker}/",
+                ctx=self._ctx(fs),
+            )
+        assert fs.list_calls == []
+        assert fs.created_files == []
+        assert blocker.read_text() == "keep me"
+
+    async def test_refused_result_local_path_leaves_missing_local_path_uncreated(self, tmp_path):
+        # PR #1000 QA round 2: the result_local_path checks run before local_path's
+        # mkdir, so a refused call leaves nothing on disk.
+        fs = _FakeDriveFS({"root": []})
+        sync_dir = tmp_path / "new" / "deep" / "sync"
+        blocker = tmp_path / "blocker"
+        blocker.write_text("keep me")
+        with pytest.raises(ValueError, match=r"^result_local_path "):
+            await _transfer_tools["sync_folder"](
+                folder_id="root",
+                local_path=str(sync_dir),
+                result_local_path=f"{blocker}/",
+                ctx=self._ctx(fs),
+            )
+        with pytest.raises(ValueError, match="must not be local_path"):
+            await _transfer_tools["sync_folder"](
+                folder_id="root",
+                local_path=str(sync_dir),
+                result_local_path=str(sync_dir / "out.json"),
+                ctx=self._ctx(fs),
+            )
+        assert not (tmp_path / "new").exists()
 
     async def test_result_local_path_outside_local_path_succeeds(self, tmp_path):
         fs = _FakeDriveFS({"root": [_drive_file("readme.txt", "f1")]})
@@ -3063,18 +6779,16 @@ class TestDownloadFileUnsafeName:
         svc.files.return_value.get_media.assert_not_called()
         svc.files.return_value.export.assert_not_called()
 
-    async def test_dotdot_name_into_existing_dir_raises(self, tmp_path):
-        target = tmp_path / "a"
-        target.mkdir()
+    async def test_trailing_separator_dir_not_created_for_refused_name(self, tmp_path):
+        target = tmp_path / "new"
         svc = self._svc("..")
 
-        with pytest.raises(ValueError, match="special path segment"):
+        with pytest.raises(ValueError):
             await _transfer_tools["download_file"](
-                file_id="f1", local_path=str(target), ctx=self._ctx(svc)
+                file_id="f1", local_path=str(target) + "/", ctx=self._ctx(svc)
             )
 
-        assert _tree(tmp_path) == {"a"}
-        svc.files.return_value.get_media.assert_not_called()
+        assert not target.exists()
 
     async def test_exported_workspace_name_checked_with_extension(self, tmp_path):
         svc = self._svc("../escaped", mime=_DOC_MIME)
@@ -3318,6 +7032,7 @@ class TestSyncFolderUnsafeName:
         assert [(a["name"], a["action"]) for a in result["actions"]] == [
             ("../../evil.md", "unsafe_name")
         ]
+        assert fs.revision_list_calls == []
 
     @pytest.mark.parametrize("direction", ["download", "bidirectional"])
     async def test_recursive_refuses_dotdot_subfolder(self, tmp_path, direction):
@@ -3380,3 +7095,271 @@ class TestSyncFolderUnsafeName:
         assert result["failed"] == []
         assert result["folders_skipped"] == ["../"]
         assert fs.list_calls == ["root"]
+
+
+class _OkDownloader:
+    """Writes b"drive content" in one chunk."""
+
+    def __init__(self, fh, request):
+        self._fh = fh
+
+    def next_chunk(self):
+        self._fh.write(b"drive content")
+        return None, True
+
+
+class TestCallsThatWriteNothingCreateNoDirectories:
+    """#1012: download_file, sync_folder, and download_folder ran mkdir -p on
+    the destination before they knew the call would write anything, so an
+    error or a dry_run left empty directories behind."""
+
+    def _ctx(self, drive_svc):
+        ctx = MagicMock()
+        ctx.request_context.lifespan_context.drive_service = drive_svc
+        ctx.request_context.lifespan_context.drive_folder_cache = MagicMock()
+        ctx.report_progress = AsyncMock()
+        return ctx
+
+    def _svc(self, name, mime_type):
+        svc = MagicMock()
+        svc.files.return_value.get.return_value.execute.return_value = {
+            "name": name,
+            "mimeType": mime_type,
+        }
+        return svc
+
+    @pytest.mark.parametrize("local_path", ["new/dir/", "new/dir/out.pdf"])
+    async def test_download_file_missing_export_format(self, tmp_path, local_path):
+        svc = self._svc("My Doc", _DOC_MIME)
+
+        with pytest.raises(ValueError, match="export_format is required"):
+            await _transfer_tools["download_file"](
+                file_id="doc1", local_path=f"{tmp_path}/{local_path}", ctx=self._ctx(svc)
+            )
+
+        assert _tree(tmp_path) == set()
+
+    async def test_download_file_unknown_export_format(self, tmp_path):
+        svc = self._svc("My Doc", _DOC_MIME)
+
+        with pytest.raises(ValueError, match="Unknown export_format"):
+            await _transfer_tools["download_file"](
+                file_id="doc1",
+                local_path=f"{tmp_path}/new/",
+                export_format="bogus",
+                ctx=self._ctx(svc),
+            )
+
+        assert _tree(tmp_path) == set()
+
+    async def test_download_file_export_error(self, tmp_path):
+        svc = self._svc("My Doc", _DOC_MIME)
+        resp = MagicMock(status=403, reason="Forbidden")
+        svc.files.return_value.export.return_value.execute.side_effect = HttpError(
+            resp=resp, content=b'{"error": {"message": "exportSizeLimitExceeded"}}'
+        )
+
+        with pytest.raises(HttpError):
+            await _transfer_tools["download_file"](
+                file_id="doc1",
+                local_path=f"{tmp_path}/new/dir/",
+                export_format="pdf",
+                ctx=self._ctx(svc),
+            )
+
+        assert _tree(tmp_path) == set()
+
+    async def test_download_file_failed_media_download_keeps_its_directory(
+        self, tmp_path, monkeypatch
+    ):
+        """No rmdir rollback: it could race another call writing into the same
+        new directory (PR #1023 QA round 1). The partial file is still gone."""
+        svc = self._svc("big.bin", "application/octet-stream")
+        monkeypatch.setattr(transfer_module, "MediaIoBaseDownload", _FailingDownloader)
+
+        with pytest.raises(ConnectionError):
+            await _transfer_tools["download_file"](
+                file_id="fbig",
+                local_path=str(tmp_path / "new" / "sub" / "big.bin"),
+                ctx=self._ctx(svc),
+            )
+
+        assert _tree(tmp_path) == {"new", "new/sub"}
+
+    async def test_download_file_success_still_creates_dirs(self, tmp_path):
+        svc = self._svc("My Doc", _DOC_MIME)
+        svc.files.return_value.export.return_value.execute.return_value = b"pdf bytes"
+
+        result = await _transfer_tools["download_file"](
+            file_id="doc1",
+            local_path=f"{tmp_path}/new/dir/",
+            export_format="pdf",
+            ctx=self._ctx(svc),
+        )
+
+        dest = tmp_path / "new" / "dir" / "My Doc.pdf"
+        assert dest.read_bytes() == b"pdf bytes"
+        assert result["local_path"] == str(dest)
+
+    async def test_download_folder_listing_error(self, tmp_path):
+        svc = MagicMock()
+        resp = MagicMock(status=404, reason="Not Found")
+        svc.files.return_value.list.return_value.execute.side_effect = HttpError(
+            resp=resp, content=b'{"error": {"message": "File not found: bogus"}}'
+        )
+
+        with pytest.raises(HttpError):
+            await _transfer_tools["download_folder"](
+                folder_id="bogus", local_path=str(tmp_path / "new" / "dir"), ctx=self._ctx(svc)
+            )
+
+        assert _tree(tmp_path) == set()
+
+    @pytest.mark.parametrize(
+        "files",
+        [
+            [],
+            [
+                {"id": "d1", "name": "Doc", "mimeType": _DOC_MIME},
+                {"id": "s1", "name": "sub", "mimeType": "application/vnd.google-apps.folder"},
+                {"id": "u1", "name": "..", "mimeType": "text/plain"},
+            ],
+        ],
+        ids=["empty", "all_skipped_or_refused"],
+    )
+    async def test_download_folder_nothing_to_download(self, tmp_path, files):
+        svc = MagicMock()
+        svc.files.return_value.list.return_value.execute.return_value = {"files": files}
+
+        result = await _transfer_tools["download_folder"](
+            folder_id="root", local_path=str(tmp_path / "new"), ctx=self._ctx(svc)
+        )
+
+        assert result["downloaded"] == []
+        assert _tree(tmp_path) == set()
+
+    async def test_download_folder_creates_local_path_for_a_download(self, tmp_path, monkeypatch):
+        svc = MagicMock()
+        svc.files.return_value.list.return_value.execute.return_value = {
+            "files": [{"id": "f1", "name": "a.bin", "mimeType": "application/octet-stream"}]
+        }
+        monkeypatch.setattr(transfer_module, "MediaIoBaseDownload", _OkDownloader)
+
+        result = await _transfer_tools["download_folder"](
+            folder_id="root", local_path=str(tmp_path / "new"), ctx=self._ctx(svc)
+        )
+
+        assert result["downloaded"] == ["a.bin"]
+        assert (tmp_path / "new" / "a.bin").read_bytes() == b"drive content"
+
+    async def test_sync_folder_dry_run_missing_local_path(self, tmp_path):
+        """A missing local_path plans as an empty local side."""
+        fs = _FakeDriveFS(
+            {"root": [_drive_file("a.txt", "fa"), _drive_folder("sub", "fsub")], "fsub": []}
+        )
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path / "new" / "sync"),
+            direction="download",
+            recursive=True,
+            dry_run=True,
+            ctx=self._ctx(fs.svc),
+        )
+
+        assert [(a["name"], a["action"]) for a in result["actions"]] == [("a.txt", "download")]
+        assert result["failed"] == []
+        assert fs.list_calls == ["root", "fsub"]
+        assert _tree(tmp_path) == set()
+
+    async def test_sync_folder_refused_resolve_on_missing_local_path(self, tmp_path):
+        """A real run's resolve check pass is a dry_run: a refused call
+        changed nothing, on disk included."""
+        fs = _FakeDriveFS({"root": []})
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path / "new"),
+            convert_markdown=True,
+            resolve={"notes.md": "keep_drive"},
+            ctx=self._ctx(fs.svc),
+        )
+
+        assert "Nothing was changed" in result["error"]
+        assert _tree(tmp_path) == set()
+
+    async def test_sync_folder_listing_error_on_missing_local_path(self, tmp_path):
+        fs = _FakeDriveFS({})
+        resp = MagicMock(status=404, reason="Not Found")
+        listing = MagicMock()
+        listing.execute.side_effect = HttpError(
+            resp=resp, content=b'{"error": {"message": "File not found: bogus"}}'
+        )
+        fs.svc.files.return_value.list.side_effect = lambda **_kwargs: listing
+
+        with pytest.raises(HttpError):
+            await _transfer_tools["sync_folder"](
+                folder_id="bogus",
+                local_path=str(tmp_path / "new"),
+                direction="download",
+                ctx=self._ctx(fs.svc),
+            )
+
+        assert _tree(tmp_path) == set()
+
+    @pytest.mark.parametrize("direction", ["upload", "bidirectional"])
+    async def test_sync_folder_real_run_with_nothing_to_write_locally(self, tmp_path, direction):
+        """An upload-only sync never writes locally, and neither does any
+        direction when Drive has nothing to download."""
+        fs = _FakeDriveFS({"root": []})
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path / "new"),
+            direction=direction,
+            ctx=self._ctx(fs.svc),
+        )
+
+        assert result["failed"] == []
+        assert _tree(tmp_path) == set()
+
+    async def test_sync_folder_upload_direction_ignores_drive_files(self, tmp_path):
+        fs = _FakeDriveFS({"root": [_drive_file("a.txt", "fa")]})
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path / "new"),
+            direction="upload",
+            ctx=self._ctx(fs.svc),
+        )
+
+        assert result["downloaded"] == []
+        assert _tree(tmp_path) == set()
+
+    async def test_sync_folder_download_creates_local_path(self, tmp_path, monkeypatch):
+        fs = _FakeDriveFS({"root": [_drive_file("a.txt", "fa")]})
+        monkeypatch.setattr(transfer_module, "MediaIoBaseDownload", _OkDownloader)
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path / "new" / "sync"),
+            direction="download",
+            ctx=self._ctx(fs.svc),
+        )
+
+        assert result["downloaded"] == ["a.txt"]
+        assert (tmp_path / "new" / "sync" / "a.txt").read_bytes() == b"drive content"
+
+    async def test_sync_folder_drive_only_subfolder_creates_local_path(self, tmp_path):
+        fs = _FakeDriveFS({"root": [_drive_folder("sub", "fsub")], "fsub": []})
+
+        result = await _transfer_tools["sync_folder"](
+            folder_id="root",
+            local_path=str(tmp_path / "new"),
+            direction="download",
+            recursive=True,
+            ctx=self._ctx(fs.svc),
+        )
+
+        assert result["failed"] == []
+        assert _tree(tmp_path) == {"new", "new/sub"}

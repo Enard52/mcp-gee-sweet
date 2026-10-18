@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import html as html_module
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from html.parser import HTMLParser
 
 from .ast import BulletItem, Cell, DocNode, Heading, Image, NamedBlock, Paragraph, Row, Run, Table
@@ -39,6 +39,76 @@ _VOID_TAGS = {
     "wbr",
 }
 
+# The literal whitespace characters a markup pretty-printer/renderer can
+# actually emit as structural formatting noise: source indentation (a run of
+# spaces/tabs) or a newline between two tags, plus the "\r" half of a "\r\n"
+# line ending. Used by _is_formatting_whitespace below (#444) to tell that
+# apart from a non-ASCII space character like "\xa0" (the result of decoding
+# "&nbsp;"/"&#160;" — HTMLParser's default convert_charrefs=True resolves
+# these into plain str.isspace()-true characters before handle_data ever
+# sees them, so handle_entityref/handle_charref never fire for ordinary body
+# text and can't be used as the signal instead): no renderer or
+# hand-formatter has a reason to emit a non-breaking space as indentation,
+# so its presence means a human actually typed it. Deliberately excludes
+# "\v"/"\f" (vertical tab / form feed) despite both being ASCII and
+# str.isspace()-true: no pretty-printer emits either as structural
+# whitespace either — the same "nothing legitimate produces this" reasoning
+# that justifies treating "\xa0" as authored applies to these too (PR #772
+# QA round 1, finding 2), so a resumed segment whose only trailing content
+# is a genuinely-typed "\v"/"\f" (e.g. pasted from a terminal) must also
+# survive rather than being silently dropped as if it were noise.
+_ASCII_FORMATTING_WHITESPACE = " \t\n\r"
+
+
+def _is_formatting_whitespace(text: str) -> bool:
+    """True for a non-empty string made up only of the plain ASCII
+    whitespace characters a pretty-printer/renderer would emit as
+    structural noise — False for text.strip() == "" text that still
+    contains something else (e.g. "&nbsp;"'s decoded "\\xa0", or a stray
+    "\\v"/"\\f"), which is real, if invisible, authored content instead
+    (#444)."""
+    return text != "" and all(c in _ASCII_FORMATTING_WHITESPACE for c in text)
+
+
+def _is_resumed_authored_whitespace(resumed: bool, runs: list[Run | Image], raw_text: str) -> bool:
+    """True when a resumed block's segment is non-empty and its full,
+    unstripped text is whitespace-only per str.strip() but not made up
+    solely of _ASCII_FORMATTING_WHITESPACE characters — i.e. it contains
+    something like the decoded "\\xa0" from an authored "&nbsp;" that no
+    markup pretty-printer/renderer would emit as indentation noise (#444).
+    Shared by _emit_block_node and the <pre> close-tag handler's own
+    parallel fresh/resumed whitespace check so the two definitions can't
+    drift out of sync the way #417 was filed to prevent for block-open
+    state (PR #772 QA round 1, finding 3)."""
+    return resumed and bool(runs) and not _is_formatting_whitespace(raw_text)
+
+
+def _strip_formatting_whitespace(runs: list[Run | Image]) -> list[Run | Image]:
+    """Remove _ASCII_FORMATTING_WHITESPACE characters from each Run's text
+    in a resumed segment being preserved for its genuinely-authored content
+    (#444's _is_resumed_authored_whitespace case). Without this, an
+    incidental newline sitting next to the authored content — e.g. the
+    indentation between a nested list's closing tag and the "&nbsp;" that
+    follows it — would still reach the Docs API as literal inserted text:
+    the API splits on any "\\n" into a new paragraph regardless of styling
+    (#719), producing a spurious extra paragraph for exactly the segment
+    this fix was meant to preserve cleanly (PR #772 QA round 1, finding 1).
+    Only ever called on a segment already confirmed non-empty and
+    whitespace-only-but-authored, so it can never strip a run down to
+    nothing without also having something authored left in a sibling run —
+    a Run that does strip down to empty is dropped outright, mirroring
+    _flush_run's own refusal to create an empty Run. Image entries pass
+    through untouched."""
+    result: list[Run | Image] = []
+    for r in runs:
+        if isinstance(r, Image):
+            result.append(r)
+            continue
+        stripped = "".join(c for c in r.text if c not in _ASCII_FORMATTING_WHITESPACE)
+        if stripped:
+            result.append(replace(r, text=stripped))
+    return result
+
 
 @dataclass
 class _BlockFrame:
@@ -68,15 +138,18 @@ def _px_to_pt(value: str) -> float | None:
         return None
 
 
-def _make_image(attr_dict: dict, src: str) -> Image:
+def _make_image(attr_dict: dict, src: str, link_url: str | None = None) -> Image:
     """Build an Image node from an <img> tag's attributes. width/height are
     only ever present on raw HTML <img> tags (content_format="html") — plain
-    markdown "![alt](src)" has no syntax for them, so they're None there."""
+    markdown "![alt](src)" has no syntax for them, so they're None there.
+    link_url is the enclosing <a href>, if any (markdown "[![alt](src)](url)",
+    #977)."""
     return Image(
         src=src,
         alt=attr_dict.get("alt") or None,
         width=_px_to_pt(attr_dict.get("width") or ""),
         height=_px_to_pt(attr_dict.get("height") or ""),
+        link_url=link_url,
     )
 
 
@@ -139,6 +212,17 @@ class _AstParser(HTMLParser):
         self._strike_depth = 0
         self._code_depth = 0  # inline <code> nesting; ignored inside <pre>
         self._link_url: list[str] = []  # stack of href values
+        # href values of <a> tags opened with no block or table cell around them.
+        # Read only by the bare top-level <img> branch (#977), so a top-level
+        # "<a href><img></a>" keeps its link; kept apart from _link_url so text
+        # handling, and an unclosed top-level <a>, are unaffected.
+        self._bare_link_url: list[str] = []
+        # One entry per open <a>: which of the two stacks above its start tag
+        # pushed an href onto ("block" or "bare"), or None if it pushed nothing
+        # (no href, e.g. <a name>). </a> pops only what its own start tag pushed,
+        # so an href-less anchor nested in a linked one can't pop the outer
+        # link (#994).
+        self._anchor_pushes: list[str | None] = []
 
         # --- current run buffer ---
         self._run_buf: list[str] = []
@@ -188,9 +272,38 @@ class _AstParser(HTMLParser):
         runs, self._pending_runs = self._pending_runs, []
         return runs
 
+    def _open_block(self, tag: str, *, resumed: bool, named_style: str | None):
+        """Reset every piece of per-segment block-open state together, in the
+        one place all four sites that begin buffering a block's content route
+        through: a fresh `_BLOCK_TAGS`/`pre` start tag, `_resume_interrupted_
+        block`, and the implicit top-level paragraph opened for bare text
+        (#343). Each of these fields used to be hand-duplicated at every
+        call site — the actual root cause behind #417: `_block_had_
+        unsupported_content` was forgotten at the implicit-paragraph site in
+        round 1, then `_block_resumed` was forgotten at the very same site in
+        round 2, because nothing forced the two sites' lists to stay in sync.
+        Routing every site through this one setter makes omitting a field
+        here structurally impossible instead of relying on each call site's
+        own manual list matching the others going forward.
+        """
+        self._block_tag = tag
+        self._block_resumed = resumed
+        self._block_had_unsupported_content = False
+        self._block_named_style = named_style
+        self._run_buf = []
+        self._pending_runs = []
+
     def _make_bullet_item(self, runs: list[Run | Image]) -> BulletItem:
         ordered = self._list_ordered[-1] if self._list_ordered else False
-        depth = len(self._list_ordered) - 1
+        # max(..., 0): an orphan <li> outside any <ul>/<ol> (reachable — "li" is an
+        # ordinary _BLOCK_TAGS entry, not gated on an enclosing list) would otherwise
+        # compute depth -1 here. Clamped at the source rather than left for every
+        # downstream consumer (emitter.py's tab/min_depth math, ast_to_markdown.py's
+        # indent math) to independently remember to clamp — #434 QA round 2 found the
+        # un-clamped value already needed patching at 3 separate emitter.py call
+        # sites, which is exactly the kind of duplication-invites-a-missed-site
+        # pattern #417 was filed to close for block-open state.
+        depth = max(len(self._list_ordered) - 1, 0)
         # Detect task list markers written as literal [x] / [ ] by the markdown library.
         # An image can never be the first child here in practice (markdown always wraps
         # a bare "![]()" in its own <p>, never mixes it as literal leading text before a
@@ -225,6 +338,10 @@ class _AstParser(HTMLParser):
         self._strike_depth = 0
         self._code_depth = 0
         self._link_url = []
+        # The cleared hrefs' anchors no longer own an entry to pop.
+        self._anchor_pushes = [
+            None if pushed == "block" else pushed for pushed in self._anchor_pushes
+        ]
 
     def _emit_block_node(
         self, tag: str, runs: list[Run | Image], *, preserve_if_empty: bool = False
@@ -273,7 +390,28 @@ class _AstParser(HTMLParser):
         stray "\n". Both the non-`<p>` and resumed-`<p>` cases fall back to
         the same preserve_if_empty gate the runs=[] case already uses (a
         real drop elsewhere in the same segment still earns a boundary
-        node; an ordinary formatting artifact doesn't). Emitter.py's
+        node; an ordinary formatting artifact doesn't) — *unless* the
+        resumed segment's whitespace-only text contains a character
+        `_is_formatting_whitespace` doesn't recognize as ordinary ASCII
+        formatting whitespace (#444) — e.g. the "\xa0" a decoded "&nbsp;"
+        becomes (HTMLParser's default convert_charrefs=True resolves
+        "&nbsp;"/"&#160;" into that plain character before handle_data ever
+        sees it, so handle_entityref/handle_charref never fire for this and
+        can't be used as the signal instead). A markup-formatting artifact
+        (like the stray "\n" above) is always plain ASCII whitespace
+        produced by a parser/pretty-printer — a non-breaking space or other
+        non-ASCII space character has no reason to appear there, so a
+        resumed segment that's whitespace-only *because of* one (e.g. an
+        explicit "&nbsp;" placed right after a nested list/table/pre, still
+        inside the same tag) can only be something a human actually typed —
+        real, if invisible, content to lose, the same rationale the
+        fresh-`<p>` case above already rests on. This deliberately does NOT
+        extend to a *fresh* `<li>`/heading whose only content is such a
+        character (e.g. `<li>&nbsp;</li>` between two real siblings): that's
+        the PR #441 regression above, and the signal doesn't rescue it,
+        since the problem there isn't ambiguity about who produced the
+        character — it's that lists/headings have no blank-line-spacer
+        convention for a standalone empty item to begin with. Emitter.py's
         ast_to_requests() no longer special-cases this text at all — it
         emits whatever text a kept node carries, whitespace or not.
 
@@ -282,11 +420,21 @@ class _AstParser(HTMLParser):
         Run at all, must never hit the empty-drop path below just because
         joining its (nonexistent) Run text yields "".
         """
-        text = "".join(r.text for r in runs if isinstance(r, Run)).strip()
+        raw_text = "".join(r.text for r in runs if isinstance(r, Run))
+        text = raw_text.strip()
         has_image = any(isinstance(r, Image) for r in runs)
         if not text and not has_image:
             is_fresh_paragraph_whitespace = tag == "p" and bool(runs) and not self._block_resumed
-            if not is_fresh_paragraph_whitespace and not preserve_if_empty:
+            is_resumed_authored_whitespace = _is_resumed_authored_whitespace(
+                self._block_resumed, runs, raw_text
+            )
+            if is_resumed_authored_whitespace:
+                runs = _strip_formatting_whitespace(runs)
+            if (
+                not is_fresh_paragraph_whitespace
+                and not is_resumed_authored_whitespace
+                and not preserve_if_empty
+            ):
                 return
         if tag in _HEADING_TAGS:
             level = int(tag[1])
@@ -436,12 +584,7 @@ class _AstParser(HTMLParser):
         self._block_stack.pop()
         if not resumes:
             return
-        self._block_tag = frame.outer_tag
-        self._block_resumed = True
-        self._block_had_unsupported_content = False
-        self._run_buf = []
-        self._pending_runs = []
-        self._block_named_style = frame.named_style
+        self._open_block(frame.outer_tag, resumed=True, named_style=frame.named_style)
 
     # ------------------------------------------------------------------
     # HTMLParser callbacks
@@ -519,27 +662,18 @@ class _AstParser(HTMLParser):
         # --- pre / code block ---
         if tag == "pre" and self._table_depth == 0:
             self._interrupt_open_block("pre")
-            self._block_tag = "pre"
-            self._block_resumed = False
-            self._block_had_unsupported_content = False
+            self._open_block("pre", resumed=False, named_style=None)
             self._in_pre = True
-            self._run_buf = []
-            self._pending_runs = []
             return
 
         # --- block elements ---
         if tag in _BLOCK_TAGS and self._table_depth == 0:
             self._interrupt_open_block(tag)
-            self._block_tag = tag
-            self._block_resumed = False
-            self._block_had_unsupported_content = False
-            self._run_buf = []
-            self._pending_runs = []
+            named_style = None
             if tag == "p":
                 style = (attr_dict.get("data-style") or "").lower()
-                self._block_named_style = _NAMED_BLOCK_STYLES.get(style)
-            else:
-                self._block_named_style = None
+                named_style = _NAMED_BLOCK_STYLES.get(style)
+            self._open_block(tag, resumed=False, named_style=named_style)
             return
 
         # --- thematic break (<hr>) with no open block ---
@@ -570,18 +704,17 @@ class _AstParser(HTMLParser):
         # Same rationale as <hr> just above: markdown's own "![]()" syntax
         # always renders wrapped in a <p>, so this only matters for raw HTML
         # (content_format="html") supplying a top-level <img> with no
-        # wrapping tag at all.
-        if (
-            tag == "img"
-            and self._block_tag is None
-            and self._table_depth == 0
-            and self._tag_depth == 0
-        ):
+        # wrapping block at all. Unlike <hr> and bare text, an <img> wrapped
+        # only in inline tags still gets its implicit paragraph: a raw-HTML
+        # "<a href><img></a>" (a linked badge, say) is real content, and
+        # dropping it loses the image along with its link (PR #992 QA round 1).
+        if tag == "img" and self._block_tag is None and self._table_depth == 0:
             src = attr_dict.get("src")
             if src:
+                link_url = self._bare_link_url[-1] if self._bare_link_url else None
                 self._nodes.append(
                     Paragraph(
-                        runs=[_make_image(attr_dict, src)],
+                        runs=[_make_image(attr_dict, src, link_url)],
                         blockquote_depth=self._blockquote_depth,
                     )
                 )
@@ -608,6 +741,7 @@ class _AstParser(HTMLParser):
                 href = attr_dict.get("href", "")
                 if href:
                     self._link_url.append(href)
+                self._anchor_pushes.append("block" if href else None)
             elif tag == "code" and not self._in_pre:
                 self._code_depth += 1
             elif tag == "br":
@@ -623,7 +757,9 @@ class _AstParser(HTMLParser):
                 # already gets in a cell.
                 src = attr_dict.get("src")
                 if src:
-                    self._pending_runs.append(_make_image(attr_dict, src))
+                    self._pending_runs.append(
+                        _make_image(attr_dict, src, self._link_url[-1] if self._link_url else None)
+                    )
                 else:
                     self._block_had_unsupported_content = True
             elif self._block_tag:
@@ -633,6 +769,11 @@ class _AstParser(HTMLParser):
                 # silently dropped rather than contributing a run — see
                 # self._block_had_unsupported_content.
                 self._block_had_unsupported_content = True
+        elif tag == "a":
+            href = attr_dict.get("href", "") if self._table_depth == 0 else ""
+            if href:
+                self._bare_link_url.append(href)
+            self._anchor_pushes.append("bare" if href else None)
 
     def handle_endtag(self, tag):
         # --- table structure ---
@@ -682,15 +823,10 @@ class _AstParser(HTMLParser):
         # now (see _resume_interrupted_block), which needs the already-popped
         # count to tell whether the interrupting list construct — however its
         # own open/close tags were paired — has actually closed.
-        if tag == "ol":
+        if tag in ("ol", "ul"):
             if self._list_ordered:
                 self._list_ordered.pop()
-            self._resume_interrupted_block("ol")
-            return
-        if tag == "ul":
-            if self._list_ordered:
-                self._list_ordered.pop()
-            self._resume_interrupted_block("ul")
+            self._resume_interrupted_block(tag)
             return
 
         # --- blockquote (#476) ---
@@ -737,10 +873,39 @@ class _AstParser(HTMLParser):
             # remaining flush is whitespace-only or empty — the same
             # preserve_if_empty guarantee _emit_block_node gives every other
             # block type — otherwise the dropped content leaves no trace at
-            # all in the resulting doc (QA round 1, PR #515).
+            # all in the resulting doc (QA round 1, PR #515). And, mirroring
+            # _emit_block_node's own #444 fix: a resumed <pre> whose trailing
+            # flush is whitespace-only but contains a character
+            # _is_formatting_whitespace doesn't recognize as ordinary ASCII
+            # formatting whitespace (e.g. the "\xa0" a decoded "&nbsp;"
+            # becomes) is still genuinely-authored content, not the
+            # markup-formatting noise this whole check exists to filter out
+            # of the resumed case — an indentation artifact between a
+            # nested table's close tag and this <pre>'s own close tag is
+            # always plain ASCII whitespace. As in _emit_block_node, the
+            # preserved runs are then stripped of that formatting whitespace
+            # (PR #772 QA round 1, finding 1) — but only when this segment
+            # is whitespace-only to begin with (`not text.strip()`): a
+            # resumed <pre> can also carry genuine multi-line content of its
+            # own (is_resumed_authored_whitespace is True there too, since
+            # real text isn't all-formatting-whitespace either), and that
+            # content's own newlines are real, significant <pre> text, not
+            # noise to strip — they're handled separately at write time via
+            # the Courier-New "\n"→"\v" substitution (#719), same as any
+            # other code paragraph.
             text = "".join(r.text for r in runs if isinstance(r, Run))
             is_fresh_pre_whitespace = not self._block_resumed and bool(runs)
-            if text.strip() or is_fresh_pre_whitespace or self._block_had_unsupported_content:
+            is_resumed_authored_whitespace = _is_resumed_authored_whitespace(
+                self._block_resumed, runs, text
+            )
+            if not text.strip() and is_resumed_authored_whitespace:
+                runs = _strip_formatting_whitespace(runs)
+            if (
+                text.strip()
+                or is_fresh_pre_whitespace
+                or is_resumed_authored_whitespace
+                or self._block_had_unsupported_content
+            ):
                 self._nodes.append(Paragraph(runs=runs, blockquote_depth=self._blockquote_depth))
             self._block_tag = None
             self._in_pre = False
@@ -771,23 +936,38 @@ class _AstParser(HTMLParser):
                 self._underline_depth = max(0, self._underline_depth - 1)
             elif tag in _INLINE_STRIKE:
                 self._strike_depth = max(0, self._strike_depth - 1)
-            elif tag == "a" and self._link_url:
-                self._link_url.pop()
+            elif tag == "a":
+                self._close_anchor()
             elif tag == "code" and not self._in_pre:
                 self._code_depth = max(0, self._code_depth - 1)
+        elif tag == "a":
+            self._close_anchor()
+
+    def _close_anchor(self):
+        """Pop whatever href the matching <a> start tag pushed, and nothing
+        else (#994)."""
+        if not self._anchor_pushes:
+            return
+        pushed = self._anchor_pushes.pop()
+        if pushed == "block" and self._link_url:
+            self._link_url.pop()
+        elif pushed == "bare" and self._bare_link_url:
+            self._bare_link_url.pop()
 
     def handle_data(self, data):
-        if (
-            self._table_depth >= 1 and self._table_stack and self._table_stack[-1].in_cell
-        ) or self._block_tag:
+        # Table-cell text and open-block text are independent triggers that happen
+        # to be buffered the same way today; kept as separate branches so either
+        # can diverge without first untangling a merged condition (#638).
+        if self._table_depth >= 1 and self._table_stack and self._table_stack[-1].in_cell:  # noqa: SIM114
+            self._run_buf.append(data)
+        elif self._block_tag:
             self._run_buf.append(data)
         elif self._table_depth == 0 and self._tag_depth == 0 and data.strip():
             # Genuinely bare text — no wrapping block tag, no enclosing tag of
             # any kind (#343). Implicitly open a paragraph so it isn't
             # silently dropped the way inline-only content
             # (e.g. "<span>no blocks</span>") intentionally is.
-            self._block_tag = "p"
-            self._block_named_style = None
+            self._open_block("p", resumed=False, named_style=None)
             self._run_buf.append(data)
 
     def handle_entityref(self, name):

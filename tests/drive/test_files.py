@@ -1,17 +1,21 @@
 """Tests for tools/drive/files.py (search_spreadsheets, create_folder, move_file, delete_file, etc.)."""
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from googleapiclient.errors import HttpError
 
+from mcp_gee_sweet.cache import DriveFolderCache
+from mcp_gee_sweet.tools.drive import _SA_QUOTA_ERROR, _USER_QUOTA_ERROR
 from mcp_gee_sweet.tools.drive import files as drive_files_module
+
+from ..fakes import as_service_account
 
 
 def _make_tool_registry():
     captured = {}
 
-    def tool(annotations=None):
+    def tool(annotations=None, local_only=False):
         def decorator(func):
             captured[func.__name__] = func
             return func
@@ -31,6 +35,14 @@ def _make_ctx(**services):
 
 _drive_tool, _drive_tools = _make_tool_registry()
 drive_files_module.register(_drive_tool)
+
+
+def _assert_error_list(result, underlying: str) -> None:
+    """The "error dict, not raised" contract: one {"error": ...} item carrying the
+    underlying exception's text. Doesn't pin the message's prefix wording (#574)."""
+    assert len(result) == 1
+    assert set(result[0]) == {"error"}
+    assert underlying in result[0]["error"]
 
 
 class TestSearchSpreadsheets:
@@ -76,7 +88,114 @@ class TestSearchSpreadsheets:
         )
         ctx = _make_ctx(drive_service=drive_svc)
         result = await _drive_tools["search_spreadsheets"](query="budget 2024", ctx=ctx)
-        assert result == [{"error": "Search failed: simulated API failure"}]
+        _assert_error_list(result, "simulated API failure")
+
+    async def test_requests_starred_field(self):
+        """#388: search_spreadsheets shares search_files' starred exposure."""
+        drive_svc = self._drive_service()
+        ctx = _make_ctx(drive_service=drive_svc)
+        await _drive_tools["search_spreadsheets"](query="budget", ctx=ctx)
+        fields_arg = drive_svc.files.return_value.list.call_args.kwargs["fields"]
+        assert "starred" in fields_arg
+
+    async def test_result_includes_starred_field(self):
+        drive_svc = MagicMock()
+        drive_svc.files.return_value.list.return_value.execute.return_value = {
+            "files": [
+                {
+                    "id": "fid1",
+                    "name": "budget.gsheet",
+                    "webViewLink": "https://drive.google.com/fid1",
+                    "starred": True,
+                }
+            ]
+        }
+        ctx = _make_ctx(drive_service=drive_svc)
+        result = await _drive_tools["search_spreadsheets"](query="budget", ctx=ctx)
+        assert result[0]["starred"] is True
+
+
+class TestSearchFiles:
+    def _drive_service(self, files=None):
+        mock = MagicMock()
+        mock.files.return_value.list.return_value.execute.return_value = {"files": files or []}
+        return mock
+
+    def _captured_q(self, drive_svc):
+        return drive_svc.files.return_value.list.call_args.kwargs["q"]
+
+    async def test_requests_starred_field(self):
+        """#388: get_file_metadata/list_files/search_files now surface starred."""
+        svc = self._drive_service()
+        ctx = _make_ctx(drive_service=svc)
+        await _drive_tools["search_files"](query="budget", ctx=ctx)
+        fields_arg = svc.files.return_value.list.call_args.kwargs["fields"]
+        assert "starred" in fields_arg
+
+    async def test_result_includes_starred_field(self):
+        svc = self._drive_service(
+            files=[
+                {
+                    "id": "fid1",
+                    "name": "budget.pdf",
+                    "mimeType": "application/pdf",
+                    "modifiedTime": "2026-06-01T00:00:00Z",
+                    "webViewLink": "https://drive.google.com/fid1",
+                    "starred": True,
+                }
+            ]
+        )
+        ctx = _make_ctx(drive_service=svc)
+        result = await _drive_tools["search_files"](query="budget", ctx=ctx)
+        assert result[0]["starred"] is True
+
+    async def test_single_quote_is_escaped(self):
+        svc = self._drive_service()
+        ctx = _make_ctx(drive_service=svc)
+        await _drive_tools["search_files"](query="it's a test", ctx=ctx)
+        q = self._captured_q(svc)
+        assert "\\'" in q  # literal backslash-apostrophe present in query string
+
+    async def test_escaped_form_used_not_raw(self):
+        svc = self._drive_service()
+        ctx = _make_ctx(drive_service=svc)
+        await _drive_tools["search_files"](query="O'Brien", ctx=ctx)
+        q = self._captured_q(svc)
+        assert "O\\'Brien" in q
+        # The apostrophe in 'O'Brien' must be preceded by a backslash
+        idx = q.index("'Brien")
+        assert q[idx - 1] == "\\"
+
+    async def test_query_without_quotes_passes_through(self):
+        svc = self._drive_service()
+        ctx = _make_ctx(drive_service=svc)
+        await _drive_tools["search_files"](query="budget 2024", ctx=ctx)
+        q = self._captured_q(svc)
+        assert "budget 2024" in q
+
+    async def test_mime_type_filter_added_to_query(self):
+        svc = self._drive_service()
+        ctx = _make_ctx(drive_service=svc)
+        await _drive_tools["search_files"](query="budget", mime_type="application/pdf", ctx=ctx)
+        q = self._captured_q(svc)
+        assert "mimeType='application/pdf'" in q
+
+    async def test_folder_id_filter_added_to_query(self):
+        svc = self._drive_service()
+        ctx = _make_ctx(drive_service=svc)
+        await _drive_tools["search_files"](query="budget", folder_id="folder1", ctx=ctx)
+        q = self._captured_q(svc)
+        assert "'folder1' in parents" in q
+
+    async def test_api_error_returns_error_dict_not_raised(self):
+        """An API/auth failure must surface as [{"error": ...}], not propagate."""
+        svc = self._drive_service()
+        svc.files.return_value.list.return_value.execute.side_effect = RuntimeError(
+            "simulated API failure"
+        )
+        ctx = _make_ctx(drive_service=svc)
+        result = await _drive_tools["search_files"](query="budget", ctx=ctx)
+        _assert_error_list(result, "simulated API failure")
 
 
 class TestFileMutations:
@@ -146,6 +265,88 @@ class TestFileMutations:
         ctx = _make_ctx(drive_service=mock, drive_folder_cache=folder_cache)
         await _drive_tools["delete_file"](file_id="fid1", permanent=True, ctx=ctx)
         folder_cache.mark_dirty.assert_called_once_with("par1")
+
+    async def test_delete_file_requests_capabilities_in_parents_lookup(self):
+        """#876: the capability check rides on the existing get, no extra request."""
+        mock = MagicMock()
+        mock.files.return_value.get.return_value.execute.return_value = {"parents": ["par1"]}
+        ctx = _make_ctx(drive_service=mock, drive_folder_cache=MagicMock())
+        await _drive_tools["delete_file"](file_id="fid1", permanent=True, ctx=ctx)
+        mock.files.return_value.get.assert_called_once()
+        fields = mock.files.return_value.get.call_args.kwargs["fields"]
+        assert "canDelete" in fields
+        assert "canTrash" in fields
+        assert "driveId" in fields
+
+    async def test_delete_file_permanent_without_can_delete_raises_before_delete(self):
+        """#876: Content manager on a Shared Drive gets a clear error, not Drive's 404."""
+        mock = MagicMock()
+        mock.files.return_value.get.return_value.execute.return_value = {
+            "parents": ["par1"],
+            "driveId": "drive1",
+            "capabilities": {"canDelete": False, "canTrash": True},
+        }
+        folder_cache = MagicMock()
+        ctx = _make_ctx(drive_service=mock, drive_folder_cache=folder_cache)
+        with pytest.raises(ValueError, match="permanent=False") as exc_info:
+            await _drive_tools["delete_file"](file_id="fid1", permanent=True, ctx=ctx)
+        assert "Shared Drive" in str(exc_info.value)
+        mock.files.return_value.delete.assert_not_called()
+        folder_cache.mark_dirty.assert_not_called()
+
+    async def test_delete_file_permanent_without_can_delete_on_my_drive_omits_shared_drive_note(
+        self,
+    ):
+        """A non-owner editor of a My Drive file also lacks canDelete; no Shared Drive aside."""
+        mock = MagicMock()
+        mock.files.return_value.get.return_value.execute.return_value = {
+            "parents": ["par1"],
+            "capabilities": {"canDelete": False, "canTrash": True},
+        }
+        ctx = _make_ctx(drive_service=mock, drive_folder_cache=MagicMock())
+        with pytest.raises(ValueError) as exc_info:
+            await _drive_tools["delete_file"](file_id="fid1", permanent=True, ctx=ctx)
+        assert "Shared Drive" not in str(exc_info.value)
+        assert "permanent=False" in str(exc_info.value)
+        mock.files.return_value.delete.assert_not_called()
+
+    async def test_delete_file_permanent_without_delete_or_trash_omits_trash_hint(self):
+        mock = MagicMock()
+        mock.files.return_value.get.return_value.execute.return_value = {
+            "parents": ["par1"],
+            "capabilities": {"canDelete": False, "canTrash": False},
+        }
+        ctx = _make_ctx(drive_service=mock, drive_folder_cache=MagicMock())
+        with pytest.raises(ValueError) as exc_info:
+            await _drive_tools["delete_file"](file_id="fid1", permanent=True, ctx=ctx)
+        assert "permanent=False" not in str(exc_info.value)
+        mock.files.return_value.delete.assert_not_called()
+
+    async def test_delete_file_permanent_with_can_delete_calls_delete(self):
+        mock = MagicMock()
+        mock.files.return_value.get.return_value.execute.return_value = {
+            "parents": ["par1"],
+            "capabilities": {"canDelete": True, "canTrash": True},
+        }
+        mock.files.return_value.delete.return_value.execute.return_value = None
+        ctx = _make_ctx(drive_service=mock, drive_folder_cache=MagicMock())
+        result = await _drive_tools["delete_file"](file_id="fid1", permanent=True, ctx=ctx)
+        mock.files.return_value.delete.assert_called_once_with(
+            fileId="fid1", supportsAllDrives=True
+        )
+        assert result == {"fileId": "fid1", "action": "deleted"}
+
+    async def test_delete_file_trash_ignores_can_delete_false(self):
+        """Trashing only needs canTrash; a missing canDelete must not block it."""
+        mock = MagicMock()
+        mock.files.return_value.get.return_value.execute.return_value = {
+            "parents": ["par1"],
+            "capabilities": {"canDelete": False, "canTrash": True},
+        }
+        mock.files.return_value.update.return_value.execute.return_value = {"id": "fid1"}
+        ctx = _make_ctx(drive_service=mock, drive_folder_cache=MagicMock())
+        result = await _drive_tools["delete_file"](file_id="fid1", permanent=False, ctx=ctx)
+        assert result == {"fileId": "fid1", "action": "trashed"}
 
     async def test_restore_file_marks_parent_dirty(self):
         mock = MagicMock()
@@ -289,7 +490,8 @@ class TestCreateShortcut:
 
 
 class TestStarFile:
-    """star_file/unstar_file (#139) set starred via files().update, no folder-cache impact."""
+    """star_file/unstar_file (#139) set starred via files().update and mark the
+    file's parent folder(s) dirty in drive_folder_cache (#388, TC-D260)."""
 
     async def test_star_file_sets_starred_true(self):
         mock = MagicMock()
@@ -297,16 +499,32 @@ class TestStarFile:
             "id": "fid1",
             "name": "file.txt",
             "starred": True,
+            "parents": ["par1"],
         }
-        ctx = _make_ctx(drive_service=mock)
+        folder_cache = MagicMock()
+        ctx = _make_ctx(drive_service=mock, drive_folder_cache=folder_cache)
         result = await _drive_tools["star_file"](file_id="fid1", ctx=ctx)
         mock.files.return_value.update.assert_called_once_with(
             fileId="fid1",
             body={"starred": True},
             supportsAllDrives=True,
-            fields="id, name, starred",
+            fields="id, name, starred, parents",
         )
         assert result == {"fileId": "fid1", "name": "file.txt", "starred": True}
+        folder_cache.mark_dirty.assert_called_once_with("par1")
+
+    async def test_star_file_no_parents_no_dirty_call(self):
+        mock = MagicMock()
+        mock.files.return_value.update.return_value.execute.return_value = {
+            "id": "fid1",
+            "name": "file.txt",
+            "starred": True,
+            "parents": [],
+        }
+        folder_cache = MagicMock()
+        ctx = _make_ctx(drive_service=mock, drive_folder_cache=folder_cache)
+        await _drive_tools["star_file"](file_id="fid1", ctx=ctx)
+        folder_cache.mark_dirty.assert_not_called()
 
     async def test_unstar_file_sets_starred_false(self):
         mock = MagicMock()
@@ -314,16 +532,32 @@ class TestStarFile:
             "id": "fid1",
             "name": "file.txt",
             "starred": False,
+            "parents": ["par1"],
         }
-        ctx = _make_ctx(drive_service=mock)
+        folder_cache = MagicMock()
+        ctx = _make_ctx(drive_service=mock, drive_folder_cache=folder_cache)
         result = await _drive_tools["unstar_file"](file_id="fid1", ctx=ctx)
         mock.files.return_value.update.assert_called_once_with(
             fileId="fid1",
             body={"starred": False},
             supportsAllDrives=True,
-            fields="id, name, starred",
+            fields="id, name, starred, parents",
         )
         assert result == {"fileId": "fid1", "name": "file.txt", "starred": False}
+        folder_cache.mark_dirty.assert_called_once_with("par1")
+
+    async def test_unstar_file_no_parents_no_dirty_call(self):
+        mock = MagicMock()
+        mock.files.return_value.update.return_value.execute.return_value = {
+            "id": "fid1",
+            "name": "file.txt",
+            "starred": False,
+            "parents": [],
+        }
+        folder_cache = MagicMock()
+        ctx = _make_ctx(drive_service=mock, drive_folder_cache=folder_cache)
+        await _drive_tools["unstar_file"](file_id="fid1", ctx=ctx)
+        folder_cache.mark_dirty.assert_not_called()
 
 
 def _quota_http_error():
@@ -354,22 +588,33 @@ class TestQuotaErrors:
     def _assert_helpful_error(self, result):
         assert "error" in result
         assert "storageQuotaExceeded" not in result["error"]
-        assert "Service accounts" in result["error"]
+        assert "This service account has no My Drive storage" in result["error"]
         assert "server://auth-status" in result["error"]
 
     async def test_create_spreadsheet_quota_returns_error_dict(self):
-        mock = MagicMock()
+        mock = as_service_account(MagicMock())
         mock.files.return_value.create.return_value.execute.side_effect = _quota_http_error()
         ctx = _make_ctx(drive_service=mock, drive_folder_cache=MagicMock(), folder_id=None)
         result = await _drive_tools["create_spreadsheet"](title="Test", ctx=ctx)
         self._assert_helpful_error(result)
 
     async def test_copy_file_quota_returns_error_dict(self):
-        mock = MagicMock()
+        mock = as_service_account(MagicMock())
         mock.files.return_value.copy.return_value.execute.side_effect = _quota_http_error()
         ctx = _make_ctx(drive_service=mock, drive_folder_cache=MagicMock())
         result = await _drive_tools["copy_file"](file_id="fid", ctx=ctx)
         self._assert_helpful_error(result)
+
+    @pytest.mark.parametrize("tool", ["create_spreadsheet", "copy_file"])
+    async def test_user_identity_quota_says_storage_is_full(self, tool):
+        # A user whose own Drive is full must not be told to switch to OAuth (#1009).
+        mock = MagicMock()
+        mock.files.return_value.create.return_value.execute.side_effect = _quota_http_error()
+        mock.files.return_value.copy.return_value.execute.side_effect = _quota_http_error()
+        ctx = _make_ctx(drive_service=mock, drive_folder_cache=MagicMock(), folder_id=None)
+        kwargs = {"title": "Test"} if tool == "create_spreadsheet" else {"file_id": "fid"}
+        result = await _drive_tools[tool](ctx=ctx, **kwargs)
+        assert result == {"error": _USER_QUOTA_ERROR}
 
     async def test_create_spreadsheet_non_quota_403_still_raises(self):
         """A 403 that is not storageQuotaExceeded must propagate — not be swallowed."""
@@ -408,7 +653,8 @@ class TestListDrives:
         first_kwargs, second_kwargs = (
             c.kwargs for c in svc.drives.return_value.list.call_args_list
         )
-        assert "pageToken" not in first_kwargs
+        # googleapiclient drops None-valued params, so None means "first page".
+        assert first_kwargs.get("pageToken") is None
         assert second_kwargs["pageToken"] == "page2"
         assert len(result) == 150
 
@@ -423,6 +669,35 @@ class TestListDrives:
 
         assert svc.drives.return_value.list.call_count == 1
         assert len(result) == 5
+
+    async def test_stops_once_max_results_reached_even_with_a_next_page_token(self):
+        """No extra call once max_results drives are in hand, token or not."""
+        svc = self._drive_service()
+        svc.drives.return_value.list.return_value.execute.side_effect = [
+            self._page(100, next_token="page2"),
+        ]
+        ctx = _make_ctx(drive_service=svc)
+
+        result = await _drive_tools["list_drives"](max_results=100, ctx=ctx)
+
+        assert svc.drives.return_value.list.call_count == 1
+        assert len(result) == 100
+
+    async def test_never_ending_page_token_is_bounded(self, monkeypatch):
+        """#615: empty pages that always carry a nextPageToken must not loop forever."""
+        from mcp_gee_sweet.tools.drive import files as files_module
+        from mcp_gee_sweet.tools.pagination import PageLimitExceeded
+
+        monkeypatch.setattr(files_module, "_LIST_DRIVES_MAX_PAGES", 3)
+        svc = self._drive_service()
+        svc.drives.return_value.list.return_value.execute.return_value = self._page(
+            0, next_token="again"
+        )
+        ctx = _make_ctx(drive_service=svc)
+
+        with pytest.raises(PageLimitExceeded):
+            await _drive_tools["list_drives"](max_results=100, ctx=ctx)
+        assert svc.drives.return_value.list.call_count == 3
 
 
 class TestListSharedWithMe:
@@ -468,7 +743,7 @@ class TestListSharedWithMe:
         )
         ctx = _make_ctx(drive_service=svc)
         result = await _drive_tools["list_shared_with_me"](ctx=ctx)
-        assert result == [{"error": "List shared with me failed: simulated API failure"}]
+        _assert_error_list(result, "simulated API failure")
 
     async def test_max_results_capped_at_200(self):
         svc = self._drive_service()
@@ -553,7 +828,7 @@ class TestListRecentFiles:
         )
         ctx = _make_ctx(drive_service=svc)
         result = await _drive_tools["list_recent_files"](ctx=ctx)
-        assert result == [{"error": "List recent files failed: simulated API failure"}]
+        _assert_error_list(result, "simulated API failure")
 
 
 class TestListFiles:
@@ -609,6 +884,47 @@ class TestListFiles:
         result = await _drive_tools["list_files"](folder_id="folder1", ctx=ctx)
         assert result[0]["md5_checksum"] is None
 
+    async def test_requests_starred_field(self):
+        """#388: get_file_metadata/list_files/search_files now surface starred."""
+        svc = self._drive_service()
+        ctx = self._ctx(svc)
+        await _drive_tools["list_files"](folder_id="folder1", ctx=ctx)
+        fields_arg = svc.files.return_value.list.call_args.kwargs["fields"]
+        assert "starred" in fields_arg
+
+    async def test_result_includes_starred_field(self):
+        svc = self._drive_service(
+            files=[
+                {
+                    "id": "fid1",
+                    "name": "report.pdf",
+                    "mimeType": "application/pdf",
+                    "modifiedTime": "2026-06-01T00:00:00Z",
+                    "webViewLink": "https://drive.google.com/fid1",
+                    "starred": True,
+                }
+            ]
+        )
+        ctx = self._ctx(svc)
+        result = await _drive_tools["list_files"](folder_id="folder1", ctx=ctx)
+        assert result[0]["starred"] is True
+
+    async def test_result_starred_defaults_false_when_absent(self):
+        svc = self._drive_service(
+            files=[
+                {
+                    "id": "fid2",
+                    "name": "Notes",
+                    "mimeType": "application/vnd.google-apps.document",
+                    "modifiedTime": "2026-06-01T00:00:00Z",
+                    "webViewLink": "https://docs.google.com/fid2",
+                }
+            ]
+        )
+        ctx = self._ctx(svc)
+        result = await _drive_tools["list_files"](folder_id="folder1", ctx=ctx)
+        assert result[0]["starred"] is False
+
     async def test_mime_type_single_quote_is_escaped(self):
         """Regression test — mime_type was interpolated with zero escaping (not
         even the broken quote-doubling list_shared_with_me/list_recent_files had),
@@ -626,7 +942,187 @@ class TestListFiles:
         )
         ctx = self._ctx(svc)
         result = await _drive_tools["list_files"](folder_id="folder1", ctx=ctx)
-        assert result == [{"error": "List files failed: simulated API failure"}]
+        _assert_error_list(result, "simulated API failure")
+
+    async def test_requests_next_page_token(self):
+        """#698: nextPageToken's absence is what marks a listing exhaustive."""
+        svc = self._drive_service()
+        ctx = self._ctx(svc)
+        await _drive_tools["list_files"](folder_id="folder1", ctx=ctx)
+        fields_arg = svc.files.return_value.list.call_args.kwargs["fields"]
+        assert "nextPageToken" in fields_arg
+        assert "incompleteSearch" in fields_arg
+
+    @pytest.mark.parametrize(
+        ("response_extra", "expected_exhaustive"),
+        [
+            ({}, True),
+            ({"nextPageToken": "tok"}, False),
+            # PR #788 QA round 1: Drive flags a possibly-partial result this way.
+            ({"incompleteSearch": True}, False),
+        ],
+    )
+    async def test_store_exhaustive_flag_follows_next_page_token(
+        self, response_extra, expected_exhaustive
+    ):
+        svc = self._drive_service()
+        svc.files.return_value.list.return_value.execute.return_value = {
+            "files": [],
+            **response_extra,
+        }
+        ctx = self._ctx(svc)
+        await _drive_tools["list_files"](folder_id="folder1", ctx=ctx)
+        folder_cache = ctx.request_context.lifespan_context.drive_folder_cache
+        assert folder_cache.store.call_args.kwargs["exhaustive"] is expected_exhaustive
+
+    async def test_mark_dirty_during_fetch_is_not_overwritten(self, tmp_path):
+        """#698 finding 1, end to end with a real cache: a mutation that marks the
+        folder dirty while list_files is awaiting Drive must survive the in-flight
+        call's store() — the next list_files refetches instead of serving the
+        pre-mutation listing."""
+        folder_cache = DriveFolderCache(db_path=str(tmp_path / "c.db"), ttl=60)
+        svc = MagicMock()
+
+        def execute_with_concurrent_mutation(*args, **kwargs):
+            folder_cache.mark_dirty("folder1")  # e.g. upload_file into folder1
+            return {"files": [{"id": "old", "name": "old.txt", "mimeType": "text/plain"}]}
+
+        svc.files.return_value.list.return_value.execute.side_effect = (
+            execute_with_concurrent_mutation
+        )
+        ctx = _make_ctx(drive_service=svc, drive_folder_cache=folder_cache)
+        await _drive_tools["list_files"](folder_id="folder1", ctx=ctx)
+        assert folder_cache.get("folder1", None, 100) is None
+
+
+class TestListFolders:
+    """#689: list_folders with no parent must fall back to DRIVE_FOLDER_ID
+    (lc.folder_id), mirroring list_spreadsheets — not hardcode 'root' in parents."""
+
+    def _drive_service(self, files=None):
+        mock = MagicMock()
+        mock.files.return_value.list.return_value.execute.return_value = {"files": files or []}
+        return mock
+
+    def _captured_q(self, svc):
+        return svc.files.return_value.list.call_args.kwargs["q"]
+
+    async def test_no_parent_falls_back_to_configured_default(self):
+        svc = self._drive_service()
+        ctx = _make_ctx(drive_service=svc, folder_id="default_folder")
+        await _drive_tools["list_folders"](ctx=ctx)
+        q = self._captured_q(svc)
+        assert "'default_folder' in parents" in q
+        assert "'root' in parents" not in q
+
+    async def test_explicit_parent_overrides_configured_default(self):
+        svc = self._drive_service()
+        ctx = _make_ctx(drive_service=svc, folder_id="default_folder")
+        await _drive_tools["list_folders"](parent_folder_id="explicit_par", ctx=ctx)
+        q = self._captured_q(svc)
+        assert "'explicit_par' in parents" in q
+        assert "default_folder" not in q
+
+    async def test_no_parent_no_default_lists_across_my_drive(self):
+        svc = self._drive_service()
+        ctx = _make_ctx(drive_service=svc, folder_id=None)
+        await _drive_tools["list_folders"](ctx=ctx)
+        q = self._captured_q(svc)
+        assert "in parents" not in q
+        assert "'root'" not in q
+
+    async def test_result_shape_unchanged(self):
+        svc = self._drive_service(
+            files=[{"id": "f1", "name": "Sub", "parents": ["default_folder"]}]
+        )
+        ctx = _make_ctx(drive_service=svc, folder_id="default_folder")
+        result = await _drive_tools["list_folders"](ctx=ctx)
+        assert result == [{"id": "f1", "name": "Sub", "parent": "default_folder"}]
+
+    def _captured_page_size(self, svc):
+        return svc.files.return_value.list.call_args.kwargs["pageSize"]
+
+    async def test_default_max_results_used_as_page_size(self):
+        # #718: the no-parent + no-DRIVE_FOLDER_ID fallback previously issued a
+        # single unpaginated call with no pageSize at all, silently truncated
+        # at the API's own default (~100) with no caller control.
+        svc = self._drive_service()
+        ctx = _make_ctx(drive_service=svc, folder_id=None)
+        await _drive_tools["list_folders"](ctx=ctx)
+        assert self._captured_page_size(svc) == 100
+
+    async def test_max_results_passed_through_as_page_size(self):
+        svc = self._drive_service()
+        ctx = _make_ctx(drive_service=svc, folder_id=None)
+        await _drive_tools["list_folders"](max_results=25, ctx=ctx)
+        assert self._captured_page_size(svc) == 25
+
+    async def test_max_results_clamped_to_1000(self):
+        svc = self._drive_service()
+        ctx = _make_ctx(drive_service=svc, folder_id=None)
+        await _drive_tools["list_folders"](max_results=5000, ctx=ctx)
+        assert self._captured_page_size(svc) == 1000
+
+    async def test_max_results_clamped_to_at_least_1(self):
+        svc = self._drive_service()
+        ctx = _make_ctx(drive_service=svc, folder_id=None)
+        await _drive_tools["list_folders"](max_results=0, ctx=ctx)
+        assert self._captured_page_size(svc) == 1
+
+
+class TestListSpreadsheets:
+    """#718: list_spreadsheets had no max_results/pageSize at all — the
+    no-parent + no-DRIVE_FOLDER_ID fallback was a single unpaginated call
+    silently truncated at the API's own default with no caller control."""
+
+    def _drive_service(self, files=None):
+        mock = MagicMock()
+        mock.files.return_value.list.return_value.execute.return_value = {"files": files or []}
+        return mock
+
+    def _captured_q(self, svc):
+        return svc.files.return_value.list.call_args.kwargs["q"]
+
+    def _captured_page_size(self, svc):
+        return svc.files.return_value.list.call_args.kwargs["pageSize"]
+
+    async def test_no_folder_no_default_lists_across_all_drives(self):
+        svc = self._drive_service()
+        ctx = _make_ctx(drive_service=svc, folder_id=None)
+        await _drive_tools["list_spreadsheets"](ctx=ctx)
+        q = self._captured_q(svc)
+        assert "in parents" not in q
+        assert svc.files.return_value.list.call_args.kwargs["includeItemsFromAllDrives"] is True
+
+    async def test_result_shape_unchanged(self):
+        svc = self._drive_service(files=[{"id": "s1", "name": "Budget"}])
+        ctx = _make_ctx(drive_service=svc, folder_id=None)
+        result = await _drive_tools["list_spreadsheets"](ctx=ctx)
+        assert result == [{"id": "s1", "title": "Budget"}]
+
+    async def test_default_max_results_used_as_page_size(self):
+        svc = self._drive_service()
+        ctx = _make_ctx(drive_service=svc, folder_id=None)
+        await _drive_tools["list_spreadsheets"](ctx=ctx)
+        assert self._captured_page_size(svc) == 100
+
+    async def test_max_results_passed_through_as_page_size(self):
+        svc = self._drive_service()
+        ctx = _make_ctx(drive_service=svc, folder_id=None)
+        await _drive_tools["list_spreadsheets"](max_results=25, ctx=ctx)
+        assert self._captured_page_size(svc) == 25
+
+    async def test_max_results_clamped_to_1000(self):
+        svc = self._drive_service()
+        ctx = _make_ctx(drive_service=svc, folder_id=None)
+        await _drive_tools["list_spreadsheets"](max_results=5000, ctx=ctx)
+        assert self._captured_page_size(svc) == 1000
+
+    async def test_max_results_clamped_to_at_least_1(self):
+        svc = self._drive_service()
+        ctx = _make_ctx(drive_service=svc, folder_id=None)
+        await _drive_tools["list_spreadsheets"](max_results=0, ctx=ctx)
+        assert self._captured_page_size(svc) == 1
 
 
 class TestGetFileMetadata:
@@ -664,6 +1160,40 @@ class TestGetFileMetadata:
         ctx = _make_ctx(drive_service=svc)
         result = await _drive_tools["get_file_metadata"](file_id="fid2", ctx=ctx)
         assert result["md5_checksum"] is None
+
+    async def test_requests_starred_field(self):
+        """#388: previously there was no way to read a file's starred state
+        independently of star_file/unstar_file's own mutation response."""
+        svc = self._drive_service()
+        ctx = _make_ctx(drive_service=svc)
+        await _drive_tools["get_file_metadata"](file_id="fid1", ctx=ctx)
+        fields_arg = svc.files.return_value.get.call_args.kwargs["fields"]
+        assert "starred" in fields_arg
+
+    async def test_result_includes_starred_true(self):
+        svc = self._drive_service(
+            file={
+                "id": "fid1",
+                "name": "report.pdf",
+                "mimeType": "application/pdf",
+                "starred": True,
+            }
+        )
+        ctx = _make_ctx(drive_service=svc)
+        result = await _drive_tools["get_file_metadata"](file_id="fid1", ctx=ctx)
+        assert result["starred"] is True
+
+    async def test_result_starred_defaults_false_when_absent(self):
+        svc = self._drive_service(
+            file={
+                "id": "fid1",
+                "name": "report.pdf",
+                "mimeType": "application/pdf",
+            }
+        )
+        ctx = _make_ctx(drive_service=svc)
+        result = await _drive_tools["get_file_metadata"](file_id="fid1", ctx=ctx)
+        assert result["starred"] is False
 
 
 class TestGetStorageQuota:
@@ -936,6 +1466,54 @@ class TestImportCsvToSheet:
         ranges = {c.kwargs["range"] for c in update_call.call_args_list}
         assert ranges == {"Sheet1!A1", "Sheet1!A3", "Sheet1!A5"}
 
+    async def test_reports_progress_per_chunk(self, tmp_path, monkeypatch):
+        """#355: extends #316/#319's per-item ctx.report_progress pattern to
+        import_csv_to_sheet's concurrent chunk writes."""
+        monkeypatch.setattr(drive_files_module, "_CSV_IMPORT_CHUNK_ROWS", 2)
+        rows = [["h"]] + [[str(i)] for i in range(5)]
+        path = self._write_csv(tmp_path, rows)
+        drive_svc = self._drive_service()
+        sheets_svc = self._sheets_service()
+        ctx = _make_ctx(
+            drive_service=drive_svc,
+            sheets_service=sheets_svc,
+            drive_folder_cache=MagicMock(),
+            sheet_data_cache=MagicMock(),
+            folder_id=None,
+        )
+        ctx.report_progress = AsyncMock()
+        await _drive_tools["import_csv_to_sheet"](local_path=str(path), title="X", ctx=ctx)
+
+        assert ctx.report_progress.await_count == 3
+        completed_values = sorted(c.args[0] for c in ctx.report_progress.await_args_list)
+        assert completed_values == [1, 2, 3]
+        for c in ctx.report_progress.await_args_list:
+            assert c.args[1] == 3  # total chunks
+            assert ": ok" in c.args[2]
+
+    async def test_report_progress_failure_does_not_demote_a_successful_chunk(
+        self, tmp_path, monkeypatch
+    ):
+        """PR #351's review established this guard for download_folder/sync_folder:
+        a broken notification channel must not turn an already-successful item into
+        a failure. #355 extends the same pattern here."""
+        monkeypatch.setattr(drive_files_module, "_CSV_IMPORT_CHUNK_ROWS", 2)
+        rows = [["h"], ["1"], ["2"]]
+        path = self._write_csv(tmp_path, rows)
+        drive_svc = self._drive_service()
+        sheets_svc = self._sheets_service()
+        ctx = _make_ctx(
+            drive_service=drive_svc,
+            sheets_service=sheets_svc,
+            drive_folder_cache=MagicMock(),
+            sheet_data_cache=MagicMock(),
+            folder_id=None,
+        )
+        ctx.report_progress = AsyncMock(side_effect=RuntimeError("connection dropped"))
+        result = await _drive_tools["import_csv_to_sheet"](local_path=str(path), title="X", ctx=ctx)
+        assert "error" not in result
+        assert result["rows_written"] == 3
+
     async def test_partial_chunk_failure_reports_failed_and_written_ranges(
         self, tmp_path, monkeypatch
     ):
@@ -980,11 +1558,11 @@ class TestImportCsvToSheet:
 
     async def test_storage_quota_error_returns_helpful_message(self, tmp_path):
         path = self._write_csv(tmp_path, [["a"], ["1"]])
-        drive_svc = MagicMock()
+        drive_svc = as_service_account(MagicMock())
         drive_svc.files.return_value.create.return_value.execute.side_effect = _quota_http_error()
         ctx = _make_ctx(drive_service=drive_svc, sheets_service=MagicMock(), folder_id=None)
         result = await _drive_tools["import_csv_to_sheet"](local_path=str(path), title="X", ctx=ctx)
-        assert result["error"] == drive_files_module._SA_QUOTA_ERROR
+        assert result["error"] == _SA_QUOTA_ERROR
 
     async def test_other_403_error_reraises(self, tmp_path):
         path = self._write_csv(tmp_path, [["a"], ["1"]])

@@ -69,12 +69,72 @@ rejected `batchUpdate` executes nothing at all, successful or not.
 
 Fixed by treating this as a retryable, not fatal, failure: Google's own error message names the
 failing request's index directly (`"Invalid requests[N].insertInlineImage: ..."`), so
-`_apply_doc_content` catches the `HttpError`, parses that index out via regex
-(`_failed_insert_image_request_index`), strips exactly that request from the list, and retries
-with everything else unchanged. Safe without any position recomputation specifically *because* a
-rejected batch never partially applies — every other request's absolute position is exactly as
-valid on retry as it was on the first attempt. The removed image's outcome entry gets an
-`error` field; every other image/table/text request in the same call is unaffected.
+`_apply_doc_content` catches the `HttpError`, parses that index out of the structured response
+(`_failed_insert_image_request_index` — status 400 plus `HttpError.reason`, which the client
+library fills from the JSON body's `error.message`, not `HttpError`'s own display string, #510),
+and strips exactly that request. The dropped image's outcome `error` is built from that same
+field, minus its `Invalid requests[N].` lead-in (`N` indexes an internal retry batch). Safe without any
+position recomputation specifically *because* a rejected batch never partially applies — every
+other request's absolute position is exactly as valid on retry as it was on the first attempt.
+The removed image's outcome entry gets an `error` field; every other image/table/text request in
+the same call is unaffected.
+
+Google names only the *first* failing image per error (confirmed live), so K unreachable images
+need K retries. Resending the whole document each time would be K+1 full-size round trips, so
+(#510):
+
+- **K=0 and K=1 stay all-or-nothing.** The happy path is one atomic call; the first retry is
+  still one atomic call of the whole remaining list. K=1, the common case, costs 2 calls, the
+  same as before #510.
+- **From the second bad image on, the list splits** at the start of `ast_to_requests`'s trailing
+  descending-position `insertTable`/`insertInlineImage` pass (`_positional_insert_tail_start`).
+  The prefix (text, styles, bullets) is committed once on its own, and only the small tail is
+  retried per further bad image. That boundary is the only safe split point: every prefix
+  request must run before any positional insert, while within the tail each insert lands at or
+  before every insert already applied, so dropping one never shifts the rest.
+- **Residual partial-write window (K≥2 only):** once the prefix has committed, a tail retry that
+  fails for a *non*-image reason raises with the text already in the doc but no tables or
+  images, and `fill_tables` never runs.
+- **Fail-safe:** the tail boundary is inferred from request kinds, so it silently depends on
+  `ast_to_requests` emitting nothing after its positional-insert pass (pinned by a unit test).
+  If any image request is found outside the inferred tail, the retry never splits and falls
+  back to whole-list retries.
+
+Confirmed live that the split produces a document structurally identical to the old
+whole-list retry (text, bullets, table, and the surviving image all in place).
+
+## Linked images (#977)
+
+An `<img>` inside `<a href>` (markdown `[![alt](src)](url)`) keeps its link: `html_parser.py`
+copies the open `<a>`'s href onto `Image.link_url`. That includes raw HTML with no enclosing
+block: a top-level `<img>` gets an implicit paragraph even when it's wrapped in inline tags (unlike
+bare text or `<hr>` in that position), and reads its link from `_bare_link_url`, a stack separate
+from `_link_url` so text handling and an unclosed top-level `<a>` are unaffected. Each open `<a>`
+records which of the two stacks it pushed onto, or that it pushed nothing (`_anchor_pushes`), and
+its `</a>` pops only that: an href-less `<a name>` nested in a linked anchor used to pop the outer
+link (#994, PR #992 QA round 2). Docs stores an image's link on its
+`inlineObjectElement`'s own `textStyle.link`, so `emitter.py` follows the image's
+`insertInlineImage` with an `updateTextStyle` over its one-character range
+`[position, position + 1)`. The link has to come right after its own insert, inside the
+descending-position tail: at that point nothing before `position` has shifted yet. An inserted
+image never inherits a neighboring run's link (confirmed live, both directions), so an unlinked
+image gets no clearing request.
+
+Inserts that share a position, such as adjacent images with nothing between them, each land in
+front of whatever is already there, so the later one in the document has to be inserted first.
+The descending pass sorts on `(position, node order, item order)`, all descending; sorting by
+position alone kept source order within a tie and wrote adjacent images reversed (PR #992 QA
+round 1). A table and the image right after it share a position the same way, and still come out
+table first.
+
+The retry treats the pair as one unit. `ast_to_requests(image_links=...)` records each
+`id(insert request) -> link request` as it builds them, and `_apply_doc_content` uses that record
+rather than matching request shapes. `_drop_failed_image` pops the link request with its failed
+insert, since a stranded link would land on whatever character now sits at that position.
+`_positional_insert_tail_start` counts a recorded link request as part of the tail, so the K≥2
+split still applies. A `#slug` image link goes
+through the heading-anchor pass like a text link: `_walk_headings_and_anchor_runs` reads the
+`inlineObjectElement`'s link too, so it's resolved or stripped.
 
 ## Known, deliberate gap: table-cell images
 
