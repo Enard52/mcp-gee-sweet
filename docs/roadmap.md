@@ -369,6 +369,10 @@ Follows the design in [`docs/decisions/decision-comments-first-class.md`](decisi
 - [ ] `_parse_a1_notation` rejects `A:B5`, which the Sheets values API accepts as `A5:B` — decided 2026-10-11: keep rejecting (a destructive GridRange tool acting on "row 5 onward" is worse than an error); document in the docstring that this is deliberately stricter than Sheets. Found in PR #986 — lane A; moved from v0.9.2 2026-10-11 (docstring only, current behavior is the safe one) ([#987](https://github.com/khuisman/mcp-gee-sweet/issues/987))
 - [x] `html_parser`: the `</a>` of an href-less anchor nested in a linked one pops the outer link, so text or an image after it is written unlinked. Found in PR #992's QA, which sent back the same bug in its new `_bare_link_url` stack; may close with PR #992 — lane A; moved from v0.9.2 2026-10-11 (pre-existing, invalid nested HTML only) (PR #992) ([#994](https://github.com/khuisman/mcp-gee-sweet/issues/994))
 
+**Release process**
+
+- [ ] Release-scoping rules in `kai.md`: a version is a named feature set plus a locked 10–15-item fill, ships when the feature set is done; `planned: <name>` labels until in flight; feature-placement order; `needs-version-call` circuit breaker. Process ticket, v0.9.3 by the release-gate test: v0.9.3's fill is to be set under these rules. Kai writes it, Bob reviews (prompt-QA). The backlog re-triage is separate and maintainer-led ([#1085](https://github.com/khuisman/mcp-gee-sweet/issues/1085))
+
 **Gmail sending safety** _(user decision 2026-10-17: ships in v0.9.3)_
 
 - [ ] Safe-by-default sending: `send_message`/`reply_to_message`/`send_draft` don't deliver without explicit confirmation (drafts-first or elicitation), flag external-domain and over-threshold recipients, documented opt-out. Behavior change, needs a `CHANGELOG.md` note. **Held from lanes** until a review of existing practice settles the mechanism, thresholds and opt-out ([#1081](https://github.com/khuisman/mcp-gee-sweet/issues/1081))
