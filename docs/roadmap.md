@@ -365,7 +365,7 @@ Feature set and fill set by the maintainer 2026-10-18, under the release-scoping
 - [ ] HTML input: whitespace between list tags becomes stray bullet paragraphs ([#1074](https://github.com/khuisman/mcp-gee-sweet/issues/1074))
 - [ ] A bare '-' (empty list item) isn't recognized in Markdown ([#1075](https://github.com/khuisman/mcp-gee-sweet/issues/1075))
 - [ ] Markdown strikethrough (~~text~~) and HTML <del> aren't converted ([#1077](https://github.com/khuisman/mcp-gee-sweet/issues/1077))
-- [ ] Blockquote indent invisible on single-line quotes (no `indentFirstLine`) — `wrong/narrow, observed`; #1044-relevant — lane B ([#1056](https://github.com/khuisman/mcp-gee-sweet/issues/1056))
+- [x] Blockquote indent invisible on single-line quotes (no `indentFirstLine`) — `wrong/narrow, observed`; #1044-relevant — lane B ([#1056](https://github.com/khuisman/mcp-gee-sweet/issues/1056)) (PR #1089)
 - [ ] Loose list items (<li><p>…</p></li>) lose their bullet — lane A, html_parser cluster ([#1111](https://github.com/khuisman/mcp-gee-sweet/issues/1111))
 - [ ] Markdown soft line breaks become paragraph breaks — html_parser cluster ([#1093](https://github.com/khuisman/mcp-gee-sweet/issues/1093))
 - [ ] Write side: <br> in a prose paragraph becomes a paragraph break, not a soft break — html_parser cluster ([#1091](https://github.com/khuisman/mcp-gee-sweet/issues/1091))
@@ -469,6 +469,7 @@ Fill candidates moved from v0.9.3 and the decision-needed backlog on 2026-10-18.
 
 **Triaged in 2026-10-18**
 
+- [ ] `create_paragraph_bullets` drops a blockquoted paragraph's quote indent — `wrong/narrow`, observed; from PR #1089's review, after v0.9.3's lock ([#1090](https://github.com/khuisman/mcp-gee-sweet/issues/1090))
 - [ ] DocContentCache.store has no epoch guard; a pre-edit fetch can overwrite an edit's mark_dirty — `wrong/rare` ([#1032](https://github.com/khuisman/mcp-gee-sweet/issues/1032))
 - [ ] Doc-edit tools outside content/images leave the doc cache stale when cancelled mid-edit — `wrong/rare` ([#1030](https://github.com/khuisman/mcp-gee-sweet/issues/1030))
 - [ ] pre-commit's ruff-format hook skips Markdown, but CI's ruff format --check . formats it ([#1087](https://github.com/khuisman/mcp-gee-sweet/issues/1087))
