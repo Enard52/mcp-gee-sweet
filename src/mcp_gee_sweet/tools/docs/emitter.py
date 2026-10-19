@@ -45,9 +45,20 @@ class _SegmentMeta:
     doc_start: int
     doc_end: int
     skip_len: int
-    tabs_through: int
+    own_tabs: int  # this node's own synthetic depth-tabs (0 unless a BulletItem)
+    tabs_through: int  # synthetic depth-tabs up to and including this node's own
     runs: list[Run | Image]
     order: int  # index in the top-level node list, as _PendingTable.order
+
+
+def _after_bullet_pass(position: int, tabs_before: int) -> int:
+    """Map a doc index in the freshly inserted text to where it sits once the whole
+    bullet pass has run. Every createParagraphBullets call removes its paragraphs'
+    synthetic depth-tabs, so the index moves back by `tabs_before`: the number of
+    those tabs that sat ahead of it. The one place this mapping lives, for every
+    request ordered after the bullet pass (table/image inserts, quoted-bullet
+    styling)."""
+    return position - tabs_before
 
 
 def _strip_bullet_leading_tabs(runs: list[Run | Image]) -> list[Run | Image]:
@@ -287,6 +298,7 @@ def ast_to_requests(
                     doc_start=doc_start,
                     doc_end=doc_end,
                     skip_len=utf16_len(tabs) + utf16_len(prefix),
+                    own_tabs=utf16_len(tabs),
                     tabs_through=cumulative_tabs,
                     runs=offset_runs,
                     order=order,
@@ -349,7 +361,10 @@ def ast_to_requests(
             # regardless of node type (Heading/Paragraph/NamedBlock/BulletItem can all be
             # blockquote content) since Google Docs has no native blockquote paragraph
             # style to set instead — see docs/design/blockquote-representation.md.
-            if node.blockquote_depth > 0:
+            # A BulletItem's waits until after the bullet pass below:
+            # createParagraphBullets overwrites both paragraph indents with the list
+            # preset's own, so a quote indent set here was lost (#1056).
+            if node.blockquote_depth > 0 and not isinstance(node, BulletItem):
                 requests.append(_blockquote_style_request(rng, node.blockquote_depth))
 
             # Inline run styles for non-table content (bold, italic, links, font_family, etc.)
@@ -366,7 +381,7 @@ def ast_to_requests(
                 if isinstance(item, Image):
                     uri = image_uris.get(id(item))
                     if uri is not None:
-                        image_position = doc_start + offset - seg.tabs_through
+                        image_position = _after_bullet_pass(doc_start + offset, seg.tabs_through)
                         image_requests = _image_insert_requests(item, uri, image_position)
                         if image_links is not None and len(image_requests) == 2:
                             image_links[id(image_requests[0])] = image_requests[1]
@@ -460,6 +475,24 @@ def ast_to_requests(
         for _, grouped in sorted(bullet_run_requests, key=lambda item: item[0], reverse=True):
             requests.extend(grouped)
 
+        # Blockquote styling for quoted list items (#1056) runs after the whole bullet
+        # pass: createParagraphBullets overwrites both paragraph indents. Every tab has
+        # been consumed by then, so ranges map through _after_bullet_pass like the
+        # table/image inserts below; paragraph styling shifts nothing for them.
+        for seg in segment_meta:
+            if isinstance(seg.node, BulletItem) and seg.node.blockquote_depth > 0:
+                rng = {
+                    "startIndex": _after_bullet_pass(
+                        seg.doc_start, seg.tabs_through - seg.own_tabs
+                    ),
+                    "endIndex": _after_bullet_pass(seg.doc_end, seg.tabs_through),
+                }
+                requests.append(
+                    _blockquote_style_request(
+                        rng, seg.node.blockquote_depth, list_level=seg.node.depth
+                    )
+                )
+
     # Queue each table's insertTable request into the same positional_inserts pass
     # images use above. Position is adjusted for any nested-bullet leading tabs already
     # consumed ahead of it (those requests precede this combined pass in the array, so by
@@ -468,7 +501,7 @@ def ast_to_requests(
     for pending in pending_tables:
         num_rows = len(pending.node.rows)
         num_cols = max((sum(c.colspan for c in row.cells) for row in pending.node.rows), default=0)
-        position = pending.position - pending.tab_offset
+        position = _after_bullet_pass(pending.position, pending.tab_offset)
         positional_inserts.append(
             (
                 (position, pending.order, 0),
@@ -516,21 +549,45 @@ _BLOCKQUOTE_BORDER = {
 }
 
 
-def _blockquote_style_request(rng: dict, depth: int) -> dict:
+# Paragraph indents createParagraphBullets gives a list item at nesting level n, for
+# both presets ast_to_requests uses (confirmed live, #1056): first line (glyph) at
+# 18 + 36n pt, wrapped text at 36 + 36n pt. Docs caps nestingLevel at 8: an item
+# with more leading tabs lands at level 8 (confirmed live, PR #1089 QA round 1).
+_LIST_INDENT_PT_PER_LEVEL = 36
+_LIST_INDENT_START_PT = 36
+_LIST_INDENT_FIRST_LINE_PT = 18
+_MAX_LIST_NESTING_LEVEL = 8
+
+
+def list_level_indents(level: int) -> tuple[int, int]:
+    """(indentFirstLine, indentStart), in points, of a list item at nesting level
+    `level` in the presets ast_to_requests uses, with `level` capped as Docs caps it."""
+    level_indent = _LIST_INDENT_PT_PER_LEVEL * min(level, _MAX_LIST_NESTING_LEVEL)
+    return _LIST_INDENT_FIRST_LINE_PT + level_indent, _LIST_INDENT_START_PT + level_indent
+
+
+def _blockquote_style_request(rng: dict, depth: int, list_level: int | None = None) -> dict:
     """updateParagraphStyle request giving a blockquote paragraph a left border and an
     indent scaled by nesting depth — Google Docs has no native blockquote paragraph
-    style, so this is the closest visual equivalent the API's ParagraphStyle exposes."""
+    style, so this is the closest visual equivalent the API's ParagraphStyle exposes.
+
+    Both indents are set: indentFirstLine is absolute, not relative to indentStart, so
+    leaving it unset put a single-line quote's only line at the margin (#1056). A list
+    item (`list_level` given) keeps its glyph's hanging indent, shifted by the quote
+    indent; the request must run after the item's createParagraphBullets."""
+    quote_indent = _BLOCKQUOTE_INDENT_PT_PER_LEVEL * depth
+    first_line, start = list_level_indents(list_level) if list_level is not None else (0, 0)
+    first_line += quote_indent
+    start += quote_indent
     return {
         "updateParagraphStyle": {
             "range": rng,
             "paragraphStyle": {
-                "indentStart": {
-                    "magnitude": _BLOCKQUOTE_INDENT_PT_PER_LEVEL * depth,
-                    "unit": "PT",
-                },
+                "indentStart": {"magnitude": start, "unit": "PT"},
+                "indentFirstLine": {"magnitude": first_line, "unit": "PT"},
                 "borderLeft": _BLOCKQUOTE_BORDER,
             },
-            "fields": "indentStart,borderLeft",
+            "fields": "indentStart,indentFirstLine,borderLeft",
         }
     }
 
