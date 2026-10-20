@@ -411,6 +411,7 @@ Feature set and fill set by the maintainer 2026-10-18, under the release-scoping
 
 **Release process**
 
+- [ ] Publish dev and stable releases from one workflow file, so PyPI stops flagging every stable release with a "Change of provenance" warning. Added to the locked fill by the maintainer 2026-10-19; lane A after #1052; maintainer adds the new trusted publisher on PyPI before merge ([#1124](https://github.com/khuisman/mcp-gee-sweet/issues/1124))
 - [x] Release-scoping rules in `kai.md`: a version is a named feature set plus a locked 10–15-item fill, ships when the feature set is done; `planned: <name>` labels until in flight; feature-placement order; `needs-version-call` circuit breaker. Process ticket, v0.9.3 by the release-gate test: v0.9.3's fill is to be set under these rules. Kai writes it, Bob reviews (prompt-QA). The backlog re-triage is separate and maintainer-led ([#1085](https://github.com/khuisman/mcp-gee-sweet/issues/1085)) (PR #1106)
 
 **Shipped this cycle**
