@@ -20,8 +20,10 @@
 | `CACHE_VALIDATE_MODIFIED_TIME` | Validate sheet/doc cache hits against Drive's `modifiedTime` before serving them, catching edits from other sessions without waiting out the TTL. Costs one extra Drive API call per cache lookup | `true` |
 | `MAX_TOOL_RESPONSE_CHARS` | Safety cap on response size, in characters, for tools that can return large inline payloads (`get_sheet_data`, `get_multiple_sheet_data`, `get_multiple_spreadsheet_summary`, `find_in_spreadsheet`, `get_doc_content`, `find_in_doc`, `list_doc_comments`, `list_file_activity`, `export_file`, `sync_folder`, `list_all_events`, `list_calendar_acl`, `get_message`, `get_thread`). Defense-in-depth against MCP clients that don't degrade gracefully on an oversized tool response — see [decision-response-size-cap-reevaluation-519.md](decisions/decision-response-size-cap-reevaluation-519.md) for why the default was raised and what it does and doesn't protect against | `1000000` |
 | `LIST_ALL_EVENTS_MAX_CONCURRENCY` | Most calendars `list_all_events` queries at once, shared across every concurrent `list_all_events` call on the server, to stay under the Calendar API's per-user rate limit. Raise it for faster fan-out on accounts subscribed to many calendars; lower it for a stricter rate-limit posture. Values below 1 are treated as 1 | `20` |
-| `HOST` (or `FASTMCP_HOST`) | Bind address for SSE transport. `FASTMCP_HOST` is a fallback if `HOST` isn't set | `0.0.0.0` |
-| `PORT` (or `FASTMCP_PORT`) | Port for SSE transport. `FASTMCP_PORT` is a fallback if `PORT` isn't set | `8000` |
+| `HOST` (or `FASTMCP_HOST`) | Bind address for the SSE and streamable HTTP transports. `FASTMCP_HOST` is a fallback if `HOST` isn't set. Any address other than loopback needs `MCP_SERVER_TOKEN`. See [HTTP transport authentication](#http-transport-authentication) | `127.0.0.1` |
+| `PORT` (or `FASTMCP_PORT`) | Port for the SSE and streamable HTTP transports. `FASTMCP_PORT` is a fallback if `PORT` isn't set | `8000` |
+| `MCP_SERVER_TOKEN` | Bearer token every SSE and streamable HTTP request must send. See [HTTP transport authentication](#http-transport-authentication) | — |
+| `ALLOW_UNAUTHENTICATED_HTTP` | `1` or `true` lets a non-loopback `HOST` serve with no token, for a deployment behind an authenticating reverse proxy. Ignored when `MCP_SERVER_TOKEN` is set | — |
 | `DEBUG_LEVEL` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` — controls package and access logs | — |
 | `LOG_FILE` | Write server logs to this file path (requires `DEBUG_LEVEL`) | — |
 | `ACCESS_LOG_FILE` | Write tool access logs to this file path (requires `DEBUG_LEVEL`) | — |
@@ -115,6 +117,44 @@ list_messages,get_message,list_threads,get_thread,list_labels,send_message,creat
 
 See [Tools](tools.md) for the full list of tool names.
 
+## HTTP transport authentication
+
+Under `--transport sse` or `--transport streamable-http`, the server listens on `127.0.0.1` by default, so only this machine can reach it. stdio is unaffected by everything in this section.
+
+To serve on any other address (`HOST=0.0.0.0`, a LAN address, a hostname), set `MCP_SERVER_TOKEN` to a long random value, for example from `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`. Every request must then send it:
+
+```
+Authorization: Bearer <token>
+```
+
+A request with a missing or wrong token gets `401 Unauthorized` with `WWW-Authenticate: Bearer`, the same response either way. The server logs the client address and path of each rejected request, and never logs the token or the `Authorization` header. A token set on a loopback `HOST` is enforced there too.
+
+**Refusing to start.** The server stops at startup, before it serves, with a one-line message naming the setting to fix when:
+
+- `HOST` isn't a loopback address (`127.0.0.0/8`, `::1`, or `localhost`) and `MCP_SERVER_TOKEN` is unset or empty, or
+- `ALLOW_UNAUTHENTICATED_HTTP` is set to anything other than `1` or `true`.
+
+`mcp-gee-sweet auth` still runs either way.
+
+**With no token, the server still fails closed per request**, however it was launched (`uvicorn mcp_gee_sweet.server:app` directly included). It serves a request only when the connection arrived on a loopback address and its `Host` header is `localhost` or a loopback IP such as `127.0.0.1` or `[::1]` (with or without a port), or, on a non-loopback `HOST`, when `ALLOW_UNAUTHENTICATED_HTTP` is `1` or `true`. Everything else gets the same `401`. The `Host` check stops a web page from reaching a local server through DNS rebinding. The first such rejection is logged as a warning naming `MCP_SERVER_TOKEN`, and later ones only at `DEBUG`.
+
+**Behind an authenticating reverse proxy**, set `ALLOW_UNAUTHENTICATED_HTTP=1` to serve a non-loopback `HOST` without a token. The server then accepts every request it receives, so make sure only the proxy can reach it. It also has no DNS-rebinding protection on a non-loopback `HOST`. The setting does nothing on a loopback `HOST`, and is ignored, with a warning, when `MCP_SERVER_TOKEN` is set.
+
+**A proxy forwarding to a loopback `HOST`**, with or without a token, must pass `Host` as `localhost` or `127.0.0.1` (with the port). mcp checks the `Host` and `Origin` headers itself when `HOST` is `127.0.0.1`, `localhost` or `::1`, and answers anything else with `421 Invalid Host header`; with no token, the server also answers `401` to a `Host` that isn't `localhost` or a loopback IP.
+
+**Docker.** The image sets `HOST=0.0.0.0` so a published port reaches the server, so a container needs `MCP_SERVER_TOKEN`:
+
+```bash
+docker run --rm -p 127.0.0.1:8000:8000 \
+  -e MCP_SERVER_TOKEN=<token> \
+  -e CREDENTIALS_CONFIG=<base64> \
+  mcp-gee-sweet
+```
+
+`docker-compose.yml` reads `MCP_SERVER_TOKEN` from a `.env` file next to it, falling back to `src/mcp_gee_sweet/.env` when that one doesn't set it, and publishes port 47000 on `127.0.0.1` only. See [Client Setup](client-setup.md#sse-docker) for the matching client config.
+
+A token doesn't change [local file access](#local-file-access): an HTTP transport still defaults to `off`.
+
 ## Local file access
 
 Some tools read or write files on the machine the server runs on: uploads, downloads, `sync_folder`, `create_doc_from_file`, Gmail attachments, local images in Markdown, and the `local_path` destination that large results can be written to. `LOCAL_FILE_ACCESS` decides which files they may use:
@@ -138,8 +178,9 @@ During a folder walk (`upload_local_folder`, `download_folder`, `sync_folder`), 
 Docker example, with the host's `./data` directory as the only one tools may use:
 
 ```bash
-docker run --rm -p 8000:8000 \
+docker run --rm -p 127.0.0.1:8000:8000 \
   -v "$PWD/data:/data" \
+  -e MCP_SERVER_TOKEN=<token> \
   -e LOCAL_FILE_ACCESS=roots \
   -e LOCAL_FILE_ROOTS=/data \
   -e CREDENTIALS_CONFIG=<base64> \

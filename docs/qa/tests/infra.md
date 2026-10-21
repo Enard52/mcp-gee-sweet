@@ -1752,6 +1752,91 @@ Needs SSE, a LOCAL_FILE_ACCESS change, an invalid startup setting, or an HTTP tr
 
 ---
 
+### TC-I61: with `MCP_SERVER_TOKEN` set, SSE and streamable HTTP reject every request without the bearer token (GHSA-mpw3-mr4r-6cqh) ⚠️ local-filesystem
+
+**Background:** the SSE and streamable HTTP transports used to accept any request, on every interface by default, so a network peer could call every tool as the configured Google identity. `BearerAuth` (`http_auth.py`) now sits inside `SingleResponseGuard` on both apps (`server.app` and `_streamable_http_app()`), and checks every HTTP request against `MCP_SERVER_TOKEN`. A missing and a wrong token get the same 401. The token is read per request and never logged. The same wrapping covers `--reload`, which serves those apps by import string.
+
+**Setup:** a token `T` from `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`. A free port. Google access isn't needed: `AUTH_METHOD=oauth` with a nonexistent `CREDENTIALS_PATH` and `TOKEN_PATH` starts degraded, which still answers `initialize` and `list_tools`. Find this machine's LAN address (`ipconfig getifaddr en0` on macOS). Run each server in its own process group, stdout and stderr to one log (`docs/qa/run.md` §"Running server-startup and CLI cases").
+
+**Action**
+1. Start `uv run mcp-gee-sweet --transport sse` with `HOST=0.0.0.0`, `PORT=<port>`, `MCP_SERVER_TOKEN=T`, `AUTH_METHOD=oauth`, `CREDENTIALS_PATH=<nonexistent>`, `TOKEN_PATH=<nonexistent>`, `DEBUG_LEVEL=INFO`, `PYTHONUNBUFFERED=1`. Against `http://<LAN address>:<port>`, with `http.client` or `urllib`:
+   a. `GET /sse` with no `Authorization` header
+   b. `GET /sse` with `Authorization: Bearer wrong`
+   c. `GET /sse` with `Authorization: Bearer T` followed by one extra character
+   d. `POST /messages/?session_id=00000000000000000000000000000000` with no header
+   e. With the SDK's `sse_client(url, headers={"Authorization": "Bearer T"})` + `ClientSession`: `initialize`, then `list_tools`
+   f. Same as e with `"bearer T"` (lowercase scheme)
+   SIGTERM the server.
+2. Start `uv run mcp-gee-sweet --transport streamable-http` with the same environment. Against `http://<LAN address>:<port>/mcp`:
+   a. `POST /mcp` with a JSON-RPC `initialize` request and `Accept: application/json, text/event-stream`, with no `Authorization` header
+   b. With the SDK's `streamable_http_client` and the `Authorization: Bearer T` header: `initialize`, then `list_tools`
+   SIGTERM the server.
+3. Repeat step 1a and 1e once with `--transport sse --reload`.
+4. `grep -c` the token `T` in every log from steps 1–3.
+
+**Checks**
+- 1a–1d, 2a: each gets `401` with `WWW-Authenticate: Bearer`, and 1a, 1b, 1c and 1d have byte-identical status, headers (apart from `date`) and body
+- 1e, 1f, 2b: `initialize` succeeds and `list_tools` returns the full tool list
+- 1: the log has one `Rejected an unauthenticated request` warning per rejected request, each naming the client's address and the path (`/sse`, `/messages/`), and no `Authorization` header value
+- 3: same as 1a (401) and 1e (tools listed) under the reloader
+- 4: `0` in every log
+
+**Cleanup:** SIGTERM any server still running (by pid, never `pkill -f`). Delete the logs.
+
+**Note for the probe:** an in-process probe of `server._streamable_http_app()` (Starlette `TestClient`) gets `401` with or without `MCP_SERVER_TOKEN`: with no token the middleware serves only a loopback local address (`scope["server"]`) naming a loopback `Host`, and `TestClient`'s default `testserver` is neither.
+
+**Result (2026-10-19) ✅ PASS — Kit, GHSA-mpw3 fork PR #1 @ 46ce96b1**
+Real servers on `0.0.0.0`, driven over the LAN address, token from `secrets.token_urlsafe(32)`. Steps 1a–1d and a non-ASCII `Bearer é` header all got `401` + `WWW-Authenticate: Bearer`, and 1a–1d were byte-identical (status, headers minus `date`, body `Unauthorized`). 1e, 1f and 2b listed 130 tools. 2a got `401`. Under `--reload` (step 3), 401 without the header and 130 tools with it. The log had 5 `Rejected an unauthenticated request` warnings for 5 rejections, each naming the LAN client and `/sse` or `/messages/`, and no `Authorization` value. Step 4: the token appears in no log or stdout capture. Joy's in-process repro (`_streamable_http_app()`, LAN client and Host) got `401` on `initialize` and `tools/list`, with `MCP_SERVER_TOKEN` set and unset alike, 0 tools exposed.
+
+**Result (2026-10-19) ✅ PASS — Kit, GHSA-mpw3 fork PR #1 @ 15638736 (round 2)**
+Steps 1–4 rerun on real servers after `BearerAuth` gained its `host` argument; every check matched round 1 (byte-identical `401`s, 130 tools for 1e/1f/2b and under `--reload`, one warning per rejection, token in no log).
+
+---
+
+### TC-I62: an HTTP transport on a non-loopback address with no token refuses to start; the default address is loopback (GHSA-mpw3-mr4r-6cqh) ⚠️ local-filesystem
+
+**Background:** `main()` runs `http_auth.check_startup()` for `--transport sse` and `--transport streamable-http`, with or without `--reload`, before serving. A non-loopback `HOST` (anything but `127.0.0.0/8`, `::1` or `localhost`) with `MCP_SERVER_TOKEN` unset or blank stops the server, unless `ALLOW_UNAUTHENTICATED_HTTP` is `1` or `true`. Any other opt-out value stops it on every address. `HOST` now defaults to `127.0.0.1`. stdio and `mcp-gee-sweet auth` never run the check.
+
+**Setup:** a free port for each step. `HOST`, `FASTMCP_HOST`, `MCP_SERVER_TOKEN` and `ALLOW_UNAUTHENTICATED_HTTP` unset in the environment and in `src/mcp_gee_sweet/.env`, except where a step sets them. `AUTH_METHOD=oauth`, nonexistent `CREDENTIALS_PATH`/`TOKEN_PATH`, `PYTHONUNBUFFERED=1`, stdout and stderr captured. Stop a server that starts with SIGTERM after 3 seconds.
+
+**Action**
+1. `--transport sse` with `HOST=0.0.0.0`
+2. `--transport streamable-http --reload` with `HOST=0.0.0.0`, `MCP_SERVER_TOKEN=` (empty)
+3. `--transport sse` with `HOST=<LAN address>`, `MCP_SERVER_TOKEN="   "`
+4. `--transport sse` with `HOST=127.0.0.1`, `ALLOW_UNAUTHENTICATED_HTTP=yes`
+5. `--transport sse` with `HOST=0.0.0.0`, `ALLOW_UNAUTHENTICATED_HTTP=1`. While it runs, `GET http://127.0.0.1:<port>/sse` with no header
+6. `--transport sse` with `HOST=0.0.0.0`, `MCP_SERVER_TOKEN=T`, `ALLOW_UNAUTHENTICATED_HTTP=true`. While it runs, `GET /sse` with no header
+7. `--transport sse` with no `HOST`. While it runs: `lsof -nP -iTCP:<port> -sTCP:LISTEN`, then `GET http://127.0.0.1:<port>/sse` with no header, then `GET http://<LAN address>:<port>/sse`
+8. stdio (`uv run mcp-gee-sweet`, no `--transport`) with `HOST=0.0.0.0` and `ALLOW_UNAUTHENTICATED_HTTP=bogus`: send an `initialize` request on stdin. Point `CREDENTIALS_PATH` at a file that exists (a dummy `{"installed": {...}}` client JSON is enough): under stdio a missing client JSON exits at startup (#790's fail-fast), which isn't what this step checks
+9. `uv run mcp-gee-sweet auth --help` with `HOST=0.0.0.0`
+10. Launch without `main()`: `uv run uvicorn mcp_gee_sweet.server:app --host 0.0.0.0 --port <port>` with no token and no opt-out. While it runs: `GET http://<LAN address>:<port>/sse`; `GET http://127.0.0.1:<port>/sse`; the same loopback GET with `Host: evil.example:<port>`; the same with `X-Forwarded-For: 127.0.0.1` sent to the LAN address. Then `grep -c 'MCP_SERVER_TOKEN is unset'` the log. Then relaunch the same command twice more: with `HOST=0.0.0.0` and `ALLOW_UNAUTHENTICATED_HTTP=1`, `GET http://<LAN address>:<port>/sse`; with `ALLOW_UNAUTHENTICATED_HTTP=yes` (no `HOST`), the LAN GET and the plain loopback GET
+11. Optional, if Docker is available: `docker build -t mcp-gee-sweet-qa .`, then `docker run --rm -p 127.0.0.1:<port>:8000 mcp-gee-sweet-qa` with no `-e MCP_SERVER_TOKEN`
+12. `--transport sse` with `HOST=127.0.0.2`, no token (macOS only answers on `127.0.0.1` until `sudo ifconfig lo0 alias 127.0.0.2 up`; remove it after with `sudo ifconfig lo0 -alias 127.0.0.2`. Without that, check the same requests in-process: Starlette `TestClient(server.app, base_url="http://127.0.0.2:8000")` with `HOST=127.0.0.2` set before import). While it runs, `GET http://127.0.0.2:<port>/sse`. Then relaunch with `ALLOW_UNAUTHENTICATED_HTTP=1` added, and send the same GET twice: once plain, once with `Host: attacker.example:<port>`
+13. `--transport sse` with `HOST=0.0.0.0` and `MCP_SERVER_TOKEN=` (set but empty, as docker-compose passes it when its own `.env` lacks it), with `MCP_SERVER_TOKEN=T` in `src/mcp_gee_sweet/.env`. While it runs, `GET http://<LAN address>:<port>/sse` with no header, then with `Authorization: Bearer T`
+
+**Checks**
+- 1, 2, 3: exit 1 with one line, `mcp-gee-sweet: refusing to serve --transport <transport> on <host> without authentication: ...`, naming `MCP_SERVER_TOKEN`, `HOST` and `ALLOW_UNAUTHENTICATED_HTTP`. No traceback, nothing listens on the port, and 2 never logs `Started reloader process`
+- 4: exit 1 with one line naming `ALLOW_UNAUTHENTICATED_HTTP` and `1 or true`, without echoing `yes`
+- 5: starts; the log has a warning that it is serving `0.0.0.0` without authentication; the GET gets `200` and `event: endpoint`
+- 6: starts; the log has `ALLOW_UNAUTHENTICATED_HTTP is ignored because MCP_SERVER_TOKEN is set`; the GET gets `401`
+- 7: `lsof` shows a listener on `127.0.0.1:<port>` only; the loopback GET gets `200`; the LAN GET fails to connect
+- 8: the server answers `initialize`; no refusal
+- 9: prints the `auth` usage and exits 0
+- 10: it starts (no `main()`, so no startup check). The LAN GET gets `401` with `WWW-Authenticate: Bearer`; the plain loopback GET gets `200` and `event: endpoint`; the `evil.example` Host and the `X-Forwarded-For` request get `401`. The grep counts `1`: one warning however many requests were refused. With `HOST=0.0.0.0` and the opt-out, the LAN GET gets `200` and `event: endpoint` (without `HOST`, the app is built for the `127.0.0.1` default, where the opt-out does nothing, so the LAN GET gets `401`). With the invalid opt-out, the LAN GET gets `401`, the loopback GET `200`, and the server keeps running with no traceback
+- 11: the container exits at once with the step-1 message for `0.0.0.0`
+- 12: both launches start. The plain GET gets `200` and `event: endpoint` both times (any `127.0.0.0/8` bind that starts is reachable). The `attacker.example` Host gets `401`: the opt-out does nothing on a loopback `HOST`
+- 13: starts (the blank variable doesn't hide the `.env` token); the plain GET gets `401`, the bearer GET `200` and `event: endpoint`
+
+**Cleanup:** SIGTERM any server still running (by pid). `docker rmi mcp-gee-sweet-qa` if step 11 ran. Remove the step-13 line from `src/mcp_gee_sweet/.env`.
+
+**Result (2026-10-19) ✅ PASS — Kit, GHSA-mpw3 fork PR #1 @ 46ce96b1**
+Steps 1–3: exit 1, one `refusing to serve` line naming all three settings, no traceback, nothing listening; step 2 never started the reloader. Step 4: exit 1 naming `1 or true`, `yes` not echoed. Step 5: started, serving-without-authentication warning, loopback GET `200` + `event: endpoint`. Step 6: ignored-opt-out warning, GET `401`. Step 7: `lsof` showed `127.0.0.1:<port>` only; loopback GET `200`, LAN GET connection refused. Step 8: `initialize` answered (first attempt used a nonexistent `CREDENTIALS_PATH` and hit #790's stdio fail-fast; the step now says to use a dummy client file). Step 9: usage, exit 0. Step 10: LAN `401`, loopback `200` + `event: endpoint`, `evil.example` Host `401`, `X-Forwarded-For: 127.0.0.1` to the LAN address `401`; one `MCP_SERVER_TOKEN is unset` warning over 8 rejections. Step 10's relaunches: with the opt-out and no `HOST`, the LAN GET got mcp's `421` (Host check built for the `127.0.0.1` default); with `HOST=0.0.0.0` and the opt-out, `200`; with `ALLOW_UNAUTHENTICATED_HTTP=yes`, LAN `401`, loopback `200`, no crash or traceback. Step 11: the container exited 1 about 6 s after start with the step-1 line for `0.0.0.0`.
+
+**Result (2026-10-19) ✅ PASS — Kit, GHSA-mpw3 fork PR #1 @ 15638736 (round 2)**
+Steps 1–10 rerun on real servers, all matching round 1 except the intended change in step 10: with the opt-out and no `HOST`, the LAN GET now gets our `401` (the opt-out does nothing on the loopback default), and with `HOST=0.0.0.0` and the opt-out it still gets `200`. Step 12 ran in-process (no `lo0` alias, so no sudo): with `HOST=127.0.0.2`, `check_startup` passed, the built `BearerAuth` layer had `host` `127.0.0.2`, a `127.0.0.2:8000` Host passed through, and `attacker.example:8000` got `401` + `WWW-Authenticate: Bearer`, with and without `ALLOW_UNAUTHENTICATED_HTTP=1`. Step 13: with `MCP_SERVER_TOKEN=` in the environment and the token in `src/mcp_gee_sweet/.env`, the server started on `0.0.0.0`; plain GET `401`, bearer GET `200` + `event: endpoint`; `.env` restored. Step 11 not rerun: the Dockerfile is unchanged since round 1 and the container sets no token.
+
+---
+
 ### TC-I65: the first calls after a long idle don't fail on a stale connection (issue #1052)
 
 **Background:** `thread_http` caches one transport per worker thread, and a thread's pooled keep-alive connection sits unused while the server is idle. Before #1052, the first request on a connection Google had since dropped failed with no retry: `[Errno 54] Connection reset by peer` at once, or `[Errno 60] Operation timed out` after 50–200 s. In a wide `get_multiple_sheet_data` call that showed up as one per-query `error` among otherwise correct results. Now a pooled connection idle longer than `_IDLE_RECONNECT_SECONDS` (wall-clock time, so a laptop's sleep counts) is closed before reuse, a connection that fails is closed rather than left pooled, and a read (GET, HEAD, or a method-override GET) or a token refresh that still hits a dead connection is resent once. Writes are never resent, so step 3 checks that a write after idle succeeds on its first attempt. The mocked unit tests can't show what Google's front end actually does to an idle connection, so this needs a live server and real idle time.
