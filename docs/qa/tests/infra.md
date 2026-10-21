@@ -82,7 +82,7 @@ Set `CACHE_DB_PATH=/tmp/qa_test_cache.db` and restart the server.
 
 **Checks**
 - File `/tmp/qa_test_cache.db` is created (check with `ls /tmp/qa_test_cache.db`)
-- Default path `/tmp/mcp_gee_sweet.db` is NOT used
+- The default path (`mcp-gee-sweet/cache.db` in the user's cache directory; `/tmp/mcp_gee_sweet.db` before 0.9.3) is NOT used
 - Restore `CACHE_DB_PATH` to default after this test
 
 **Result (2026-09-04) ⏭️ SKIP**
@@ -1834,6 +1834,81 @@ Steps 1–3: exit 1, one `refusing to serve` line naming all three settings, no 
 
 **Result (2026-10-19) ✅ PASS — Kit, GHSA-mpw3 fork PR #1 @ 15638736 (round 2)**
 Steps 1–10 rerun on real servers, all matching round 1 except the intended change in step 10: with the opt-out and no `HOST`, the LAN GET now gets our `401` (the opt-out does nothing on the loopback default), and with `HOST=0.0.0.0` and the opt-out it still gets `200`. Step 12 ran in-process (no `lo0` alias, so no sudo): with `HOST=127.0.0.2`, `check_startup` passed, the built `BearerAuth` layer had `host` `127.0.0.2`, a `127.0.0.2:8000` Host passed through, and `attacker.example:8000` got `401` + `WWW-Authenticate: Bearer`, with and without `ALLOW_UNAUTHENTICATED_HTTP=1`. Step 13: with `MCP_SERVER_TOKEN=` in the environment and the token in `src/mcp_gee_sweet/.env`, the server started on `0.0.0.0`; plain GET `401`, bearer GET `200` + `event: endpoint`; `.env` restored. Step 11 not rerun: the Dockerfile is unchanged since round 1 and the container sets no token.
+
+---
+
+### TC-I63: two Google identities sharing one cache DB never see each other's entries (GHSA-8jqx-w7j8-6xwm) ⚠️ local-filesystem
+
+**Background:** every cache row carries the Google identity it was fetched as (`drive:<permissionId>`, else `sa:<service account email>`), and every read filters on it. Invalidation doesn't: `refresh_cache` and write-side invalidation reach every identity's rows. A cached sheet list is served stale only on a 5xx, 429 or network failure, never in place of a 403/404. Run the servers from this lane's own worktree, not the shared `-oauth`/`-sa` MCP servers, which serve main-checkout code.
+
+**Setup:** a fresh scratch path `C=<tmp>/qa-cache/cache.db`, with `<tmp>/qa-cache` created (empty) before each run. An explicit `CACHE_DB_PATH` never creates its parent directory, on `develop` or the fix: with it missing, both servers log `falling back to :memory:`, share nothing, and the case passes vacuously. Check each log has no `not usable`/`unusable` line before reading any result. Two stdio servers, each driven by an SDK `stdio_client` + `ClientSession` script per `docs/qa/run.md` §"Running server-startup and CLI cases in a scoped lane pass", both with `CACHE_DB_PATH=$C`, `DEBUG_LEVEL=DEBUG` and their own `LOG_FILE`: server **A** with `AUTH_METHOD=oauth` (the fixture OAuth account), server **B** with `AUTH_METHOD=service_account`. `{SPREADSHEET_ID}` below is a scratch spreadsheet that only A can open, *not* the fixture `TEST_SPREADSHEET_ID`, which the service account can read (it's on the Shared Drive). Create it in A's My Drive root with a fresh-interpreter script (`drive.files().create(body={"name": ..., "mimeType": "application/vnd.google-apps.spreadsheet"})` on `auth._oauth_creds()`, per CLAUDE.md "MCP restart"), not with `create_spreadsheet`, which puts it in `DRIVE_FOLDER_ID`. B's service account must also have no access to A's calendars. Run steps 1–2 on the fork's `develop` first (before resetting to the fix branch), then the whole case on the fix branch.
+
+**Action**
+1. A: `list_calendars()`; record the calendar IDs. Then B: `list_calendars()`.
+2. A: `list_sheets(spreadsheet_id="{SPREADSHEET_ID}")`. Then B: `list_sheets(spreadsheet_id="{SPREADSHEET_ID}")`. Then A: `refresh_cache(spreadsheet_id="{SPREADSHEET_ID}")`, and B: `list_sheets(spreadsheet_id="{SPREADSHEET_ID}")` again.
+3. With both servers stopped: `sqlite3 $C "SELECT DISTINCT principal, namespace FROM cache"`.
+4. Restart A only. `list_sheets(spreadsheet_id="{SPREADSHEET_ID}")` twice; grep A's log for `Cache hit`.
+5. With A still running, start B and call `refresh_cache()` (no arguments). Then A: `list_sheets(spreadsheet_id="{SPREADSHEET_ID}")`; grep A's log again.
+
+**Checks**
+- On `develop` (the defect): B's step-1 `list_calendars` returns A's calendars, or B's step-2 `list_sheets` returns A's sheet names instead of an error. Record which.
+- On the fix branch:
+  - 1: B's list contains none of A's calendar IDs (only calendars B itself is subscribed to, possibly none).
+  - 2: both of B's `list_sheets` calls return an error (403/404 permission text), never A's sheet names, including after A's `refresh_cache` left A's row dirty (the old stale fallback).
+  - 3: two distinct `principal` values, each `drive:...` or `sa:...`; no row has an empty principal.
+  - 4: the second call logs `Cache hit` (A's own entry is still served to A).
+  - 5: A's call after B's flush logs no new `Cache hit` for `{SPREADSHEET_ID}` (B's invalidation reached A's row) and still returns the sheet names.
+
+**Cleanup:** stop both servers; `rm -rf <tmp>/qa-cache`; delete the scratch spreadsheet.
+
+**Result (2026-10-20, GHSA-8jqx fork PR #1 round 1 @ 9e6f4d06, Kit) ✅ PASS**
+Two-server SDK driver from the Kit worktree, A-only scratch spreadsheet (2 sheets) in A's My Drive. Fork `develop` @ b009e72d, steps 1–2 (defect reproduced, both ways): B's `list_calendars` returned all 3 of A's calendar IDs (B itself has 0); B's `list_sheets` returned A's sheet names, and again after A's `refresh_cache` (stale fallback). A first `develop` run with `<tmp>/qa-cache` missing fell back to `:memory:` on both servers and showed no leak, hence the setup fix above. Fix branch, directory created first, no `not usable` lines: 1: B got 0 calendars, overlap with A 0. 2: both B calls 403 `The caller does not have permission`. 3: 2 distinct principals, both `drive:...` (the SA resolves its own `permissionId`), 0 empty; rows `calendar` ×2, `sheet_structure`. 4: after restart the first call re-fetched (row still dirty from step 2's refresh), the second logged `Cache hit: 2 sheets`. 5: after B's `refresh_cache()` (`invalidated: all`), A's call logged `Cached 2 sheets` and no new `Cache hit`, sheet names returned. DB file `-rw-------`. Scratch spreadsheet deleted, scratch dirs removed.
+
+**Result (2026-10-20, GHSA-8jqx fork PR #1 round 2 @ 18a0e4bc, Kit) ✅ PASS**
+Same driver, fresh A-only scratch spreadsheet, `<tmp>/qa-cache` created first, no `not usable` lines in either log. 1: B 0 calendars, overlap with A 0. 2: both B calls 403. 3: 2 distinct `drive:` principals, 0 empty. 4: second call `Cache hit: 2 sheets`. 5: after B's `refresh_cache()`, A re-fetched (`Cached 2 sheets`), no new hit. The `cache opened` lines now appear only when a cache is first used, and name the real path. Scratch spreadsheet deleted, scratch dirs removed.
+
+**Result (2026-10-20, GHSA-8jqx fork PR #1 round 4 @ 295b5118, Kit) ✅ PASS**
+Rerun after merging `develop` and the GHSA-mpw3 branch in. Same driver, fresh A-only scratch spreadsheet, no `not usable` lines. 1: B 0 calendars, overlap with A 0. 2: both B calls 403. 3: 2 distinct `drive:` principals, 0 empty. 4: second call `Cache hit: 2 sheets`. 5: after B's `refresh_cache()` (`invalidated: all`), A re-fetched (`Cached 2 sheets`), no new hit. DB `-rw-------`. Outside the case, over SSE with `MCP_SERVER_TOKEN` set: an unauthenticated `GET /sse` got `401` before any cache DB existed; two authenticated connections both bound the same `drive:` principal, and the second was served from the first's entry. Scratch spreadsheet deleted, scratch dirs removed.
+
+---
+
+### TC-I64: the default cache location is per-user and owner-only; a symlinked cache isn't used (GHSA-8jqx-w7j8-6xwm) ⚠️ local-filesystem
+
+**Background:** with `CACHE_DB_PATH` unset, the DB is `~/Library/Caches/mcp-gee-sweet/cache.db` (macOS), or `$XDG_CACHE_HOME` / `~/.cache` plus `mcp-gee-sweet/cache.db` (Linux). The directory is `0700`, the DB and its `-wal`/`-shm` files `0600`. A directory or file owned by another user, or a symlink in place of one, makes the server warn and cache in memory. The old `/tmp/mcp_gee_sweet.db` is tightened to `0600` if it's ours, never deleted. Importing the package creates nothing.
+
+**Setup:** a scratch `HOME=<tmp>/home` (created, empty), `XDG_CACHE_HOME` unset, `CACHE_DB_PATH` unset in the environment and in `src/mcp_gee_sweet/.env`, `umask 022`. A stdio server driven by an SDK client script (as in TC-I63), `AUTH_METHOD=oauth` with `TOKEN_PATH`/`CREDENTIALS_PATH` pointing at the fixture files, `DEBUG_LEVEL=DEBUG`, `LOG_FILE` set. `D` below is the platform's default cache directory under the scratch home.
+
+**Action**
+1. `HOME=<tmp>/home uv run python -c "import mcp_gee_sweet.server"`, then `find <tmp>/home`.
+2. Start the server; `list_sheets(spreadsheet_id="{SPREADSHEET_ID}")`; stop it. `stat -f '%Sp %N' D D/cache.db*` (Linux: `stat -c '%A %n'`).
+3. `chmod 755 D`; start the server, make one call, stop it; `stat` `D`.
+4. Unless a `/tmp/mcp_gee_sweet.db` already exists (then record its owner and mode, and skip the rest of this step): create it, owned by you, mode `0644`. Start the server, make one call, stop it; `stat` it.
+5. `rm -rf D`, then `ln -s <tmp>/elsewhere D` (`<tmp>/elsewhere` an empty directory). Start the server, `list_sheets` twice, stop it.
+6. `rm D`. Set `CACHE_DB_PATH=<tmp>/explicit/cache.db`, after creating `<tmp>/explicit` with mode `0755` and an empty `cache.db` in it with mode `0644`. Start, one call, stop; `stat` the directory and the file.
+7. `CACHE_DB_PATH=:memory:`: start, one call, stop; `find <tmp>/home <tmp>/explicit -newer <tmp>/explicit/cache.db`.
+8. `CACHE_DB_PATH` unset again, `LOCAL_FILE_ACCESS=full`: start, then `upload_local_file(local_path="D/cache.db", parent_folder_id="{FOLDER_ID}")` (`parent_folder_id` is required; without it the call fails argument validation before the policy check runs).
+
+**Checks**
+- 1: `find` lists only `<tmp>/home` itself: nothing created at import.
+- 2: `D` is `drwx------`; `cache.db` (and any `-wal`/`-shm`) is `-rw-------`.
+- 3: `D` is `drwx------` again.
+- 4: `/tmp/mcp_gee_sweet.db` is `-rw-------` and still exists.
+- 5: the log has `Cache file not usable (... isn't a directory), falling back to :memory:`; both calls succeed; `<tmp>/elsewhere` stays empty.
+- 6: the file is `-rw-------`; its directory is still `drwxr-xr-x`.
+- 7: `find` prints nothing; the call succeeds.
+- 8: refused with `... is one of this server's own credential, config, cache, or log files and can't be read by a tool`; nothing uploaded.
+- Another user's directory or file needs a second uid, so it's unit-tested only (`tests/test_cache_isolation.py::TestPermissions`).
+
+**Cleanup:** `rm -rf <tmp>/home <tmp>/elsewhere <tmp>/explicit`. If step 4 created `/tmp/mcp_gee_sweet.db`, delete it and its `-wal`/`-shm`.
+
+**Result (2026-10-20, GHSA-8jqx fork PR #1 round 1 @ 9e6f4d06, Kit) ✅ PASS (step 4 skipped)**
+SDK driver from the Kit worktree, macOS, `umask 022`, scratch `HOME` (with `UV_CACHE_DIR` pointed at the real uv cache so `uv` itself writes nothing under it). 1: `find` lists only `<tmp>/home`. 2: `D` `drwx------`, `cache.db` `-rw-------` (no sidecars left after stop). 3: `D` chmod'd to `drwxr-xr-x`, back to `drwx------` after one call. 4: skipped, `/tmp/mcp_gee_sweet.db` already exists, ours, already `-rw-------`; tightening covered by unit tests only this round. 5: log `Cache file not usable (<tmp>/home/Library/Caches/mcp-gee-sweet isn't a directory), falling back to :memory:`; both calls returned the sheet names; `<tmp>/elsewhere` empty. 6: `cache.db` `-rw-------`, `<tmp>/explicit` still `drwxr-xr-x`. 7: call succeeded, `find -newer` printed nothing. 8: first run without `parent_folder_id` failed pydantic validation (step text fixed above); rerun refused with `... is one of this server's own credential, config, cache, or log files and can't be read by a tool`, nothing uploaded. Scratch dirs removed.
+
+**Result (2026-10-20, GHSA-8jqx fork PR #1 round 2 @ 18a0e4bc, Kit) ✅ PASS (step 4 skipped)**
+Same driver, all 8 steps. 1: nothing created at import. 2: `D` `drwx------`, `cache.db` `-rw-------`. 3: `drwxr-xr-x` tightened back to `drwx------`. 4: skipped, same `/tmp/mcp_gee_sweet.db` (ours, `-rw-------`). 5: `Cache file not usable (... isn't a directory), falling back to :memory:`, and the only `cache opened` line reads `sheet_structure cache opened: :memory:` (round 1 logged the refused path here); both calls succeeded; `<tmp>/elsewhere` empty. 6: file `-rw-------`, directory still `drwxr-xr-x`. 7: `find -newer` empty. 8: refused by the deny-list, nothing uploaded. Outside the case: `check_read` now refuses `/tmp/mcp_gee_sweet.db` and `-wal` (round 1 allowed them), and in `python:3.12-slim-bullseye` (glibc 2.31) both an explicit and the default cache open and write, with the file `-rw-------` and directory `drwx------` (round 1 raised `NotImplementedError`). Scratch dirs removed.
+
+**Result (2026-10-20, GHSA-8jqx fork PR #1 round 4 @ 295b5118, Kit) ✅ PASS (step 4 skipped)**
+Rerun after merging `develop` and the GHSA-mpw3 branch in. Same driver, all 8 steps, every check matching round 2. 1: nothing created at import. 2: `D` `drwx------`, `cache.db` `-rw-------`. 3: tightened back to `drwx------`. 4: skipped, same `/tmp/mcp_gee_sweet.db` (ours, `-rw-------`). 5: `not usable ... falling back to :memory:`, `cache opened: :memory:`, both calls succeeded, `<tmp>/elsewhere` empty. 6: file `-rw-------`, directory still `drwxr-xr-x`. 7: `find -newer` empty. 8: refused by the deny-list. Scratch dirs removed.
 
 ---
 

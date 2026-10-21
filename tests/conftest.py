@@ -1,6 +1,18 @@
 import pytest
 
-from mcp_gee_sweet import auth, reauth
+from mcp_gee_sweet import auth, cache, reauth
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cache_db(monkeypatch, tmp_path):
+    """Every cache a test opens without its own db_path (a SpreadsheetContext's
+    defaults, a lifespan's rebinding) goes to this test's own file, never the
+    developer's real cache directory or the legacy shared /tmp file."""
+    path = str(tmp_path / "cache.db")
+    monkeypatch.setenv("CACHE_DB_PATH", path)
+    monkeypatch.setattr(cache, "CACHE_DB_PATH", path)
+    monkeypatch.setattr(cache, "_legacy_db_checked", True)
+    return path
 
 
 @pytest.fixture(autouse=True)
