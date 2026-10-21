@@ -401,7 +401,7 @@ Feature set and fill set by the maintainer 2026-10-18, under the release-scoping
 
 **Fill** _(rank order, locked 2026-10-18)_
 
-- [ ] Stale per-thread HTTP connection fails the first call after idle (`Errno 54`/`Errno 60`), with no retry. Placed in v0.9.3 by the user 2026-10-17; re-read 2026-10-18 as `severe` (a call can hang for minutes), observed: urgent in-flight, exempt from the fill lock; lane A after #1057 ([#1052](https://github.com/khuisman/mcp-gee-sweet/issues/1052))
+- [x] Stale per-thread HTTP connection fails the first call after idle (`Errno 54`/`Errno 60`), with no retry. Placed in v0.9.3 by the user 2026-10-17; re-read 2026-10-18 as `severe` (a call can hang for minutes), observed: urgent in-flight, exempt from the fill lock; lane A after #1057 ([#1052](https://github.com/khuisman/mcp-gee-sweet/issues/1052)) (PR #1126)
 - [ ] transfer.py interpolates folder IDs unescaped into Drive queries ([#1084](https://github.com/khuisman/mcp-gee-sweet/issues/1084))
 - [ ] get_doc_structure hides inline images, so an image's index can't be found ([#1070](https://github.com/khuisman/mcp-gee-sweet/issues/1070))
 - [ ] create_paragraph_bullets adds the requested nesting level to an item's current level instead of setting it ([#1069](https://github.com/khuisman/mcp-gee-sweet/issues/1069))
