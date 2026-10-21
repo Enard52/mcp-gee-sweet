@@ -25,8 +25,7 @@ from .ast import (
     Run,
     Table,
 )
-from .emitter import _BLOCKQUOTE_INDENT_PT_PER_LEVEL
-from .indices import decode_code_run_text
+from .emitter import _BLOCKQUOTE_INDENT_PT_PER_LEVEL, list_level_indents
 
 _HEADING_LEVELS = {f"HEADING_{i}": i for i in range(1, 7)}
 
@@ -57,9 +56,11 @@ def _paragraph_to_node(para: dict, document: dict) -> DocNode | None:
     pstyle = para.get("paragraphStyle", {})
     named_style = pstyle.get("namedStyleType", "NORMAL_TEXT")
     runs = _paragraph_runs(para, document)
-    blockquote_depth = _infer_blockquote_depth(pstyle)
-
     bullet = para.get("bullet")
+    blockquote_depth = _infer_blockquote_depth(
+        pstyle, _list_level_indent_start(bullet, document) if bullet else 0
+    )
+
     if bullet:
         checked = None
         if runs and isinstance(runs[0], Run):
@@ -86,10 +87,9 @@ def _paragraph_to_node(para: dict, document: dict) -> DocNode | None:
     return Paragraph(runs=runs, blockquote_depth=blockquote_depth)
 
 
-def _bullet_is_ordered(bullet: dict, document: dict) -> bool:
-    """Mirrors style.py's create_paragraph_bullets `infer_preset` — a list's
-    nesting-level glyph info is the only signal for ordered vs. unordered,
-    since `bullet` itself carries no preset field of its own."""
+def _nesting_level(bullet: dict, document: dict) -> dict | None:
+    """The doc's `lists` entry for this list item's own nesting level, or None if
+    the doc doesn't define it."""
     levels = (
         document.get("lists", {})
         .get(bullet.get("listId"), {})
@@ -97,23 +97,44 @@ def _bullet_is_ordered(bullet: dict, document: dict) -> bool:
         .get("nestingLevels", [])
     )
     level = bullet.get("nestingLevel", 0)
-    if level >= len(levels):
-        return False
-    return "glyphType" in levels[level]
+    return levels[level] if level < len(levels) else None
 
 
-def _infer_blockquote_depth(pstyle: dict) -> int:
+def _bullet_is_ordered(bullet: dict, document: dict) -> bool:
+    """Mirrors style.py's create_paragraph_bullets `infer_preset` — a list's
+    nesting-level glyph info is the only signal for ordered vs. unordered,
+    since `bullet` itself carries no preset field of its own."""
+    level = _nesting_level(bullet, document)
+    return level is not None and "glyphType" in level
+
+
+def _list_level_indent_start(bullet: dict, document: dict) -> float:
+    """indentStart, in points, that a list item's own list level gives it, before any
+    blockquote indent emitter.py adds on top (#1056). Read from the doc's `lists`
+    map, falling back to the presets emitter.py writes."""
+    level = _nesting_level(bullet, document)
+    if level is not None and "indentStart" in level:
+        return level["indentStart"].get("magnitude", 0)
+    return list_level_indents(bullet.get("nestingLevel", 0))[1]
+
+
+def _infer_blockquote_depth(pstyle: dict, base_indent: float = 0) -> int:
     """Best-effort inverse of emitter.py's _blockquote_style_request: a
     paragraph carrying both our own borderLeft styling and a nonzero
     indentStart is treated as a blockquote at the depth that indent implies.
     indentStart alone (no borderLeft) is not enough — plenty of ordinary
-    paragraphs use indentation for reasons unrelated to a quote."""
+    paragraphs use indentation for reasons unrelated to a quote.
+
+    base_indent is the indentStart the paragraph would have without the quote:
+    a list item's own level indent, 0 otherwise. A bordered list item at or
+    below it (written before #1056, when the bullets call overwrote the quote
+    indent) still reads as depth 1."""
     if not pstyle.get("borderLeft"):
         return 0
     indent = pstyle.get("indentStart", {}).get("magnitude", 0)
     if indent <= 0:
         return 0
-    return max(1, round(indent / _BLOCKQUOTE_INDENT_PT_PER_LEVEL))
+    return max(1, round((indent - base_indent) / _BLOCKQUOTE_INDENT_PT_PER_LEVEL))
 
 
 def _paragraph_runs(para: dict, document: dict) -> list[Run | Image]:
@@ -177,7 +198,11 @@ def _text_run_to_run(text: str, ts: dict, link_url: str | None = None) -> Run:
     fg = ts.get("foregroundColor", {}).get("color", {}).get("rgbColor")
     bg = ts.get("backgroundColor", {}).get("color", {}).get("rgbColor")
     baseline = ts.get("baselineOffset")
-    text = decode_code_run_text(text, ts)
+    # A soft break ("\v") is a line break inside the paragraph, whatever
+    # wrote it: emitter.py's code-block line breaks (#719) or
+    # insert_softbreak_paragraph in prose (#1057). The AST spells a line break
+    # inside a run "\n", the same as html_parser.py's <br>.
+    text = text.replace("\v", "\n")
     return Run(
         text=text,
         bold=ts.get("bold"),

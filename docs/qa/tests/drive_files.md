@@ -95,6 +95,9 @@ Created 'QA-Cache-Check' in FOLDER_ID; immediately visible in list_files(FOLDER_
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 1 (kai-oauth), throwaway folder under the Shared Drive.
 
+**Result (2026-10-20) ✅ PASS — v0.9.3 post-advisory re-check @ c90b88d3**
+`kai-oauth` (OAuth): `create_spreadsheet("QA-Cache-Check")` logged `Marked drive folder cache dirty`; next `list_files` re-fetched (`Cached 8 files`) and listed it. File trashed.
+
 ---
 
 ### TC-D06: Resulting spreadsheet has expected title ⚠️ requires-oauth
@@ -132,9 +135,20 @@ list_spreadsheets(default) returns a valid list, each entry has name+ID. BUT doe
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 1 (kai-oauth), throwaway folder under the Shared Drive.
 
+**Result (2026-10-19) ⚠️ PARTIAL — v0.9.3 release pass**
+`kai-sa`: `list_spreadsheets()` returned `[]` with no error, on the service account and on an OAuth server (kit): the default folder is the Shared Drive root, which holds no spreadsheets. Not checked: "each entry has a name and ID" (no entries).
+
+**Result (2026-10-20) ⚠️ PARTIAL — v0.9.3 post-advisory re-check @ c90b88d3**
+`kai-sa` (service account) and `kai-oauth` (OAuth): `list_spreadsheets()` → `[]`, no error (no spreadsheets in the Shared Drive root); per-entry checks had nothing to run on.
+
 ---
 
 ### TC-D14: List from explicit folder ID
+
+**Setup (#1054):**
+1. `create_spreadsheet(title="QA-Trashed-1054", folder_id={FOLDER_ID})`; note its id.
+2. Positive control: `list_spreadsheets(folder_id={FOLDER_ID})` and `search_spreadsheets(query="QA-Trashed-1054")` must each return an entry with that id. Drive's search index can lag a new file, so retry until both do; a negative check run before this proves nothing.
+3. `delete_file(file_id=<its id>, permanent=False)`. `get_file_metadata(file_id=<its id>)` must report `trashed: true` before you continue.
 
 **Prompt**
 > "List spreadsheets in folder {FOLDER_ID}"
@@ -142,12 +156,24 @@ Run 1 (kai-oauth), throwaway folder under the Shared Drive.
 **Checks**
 - Returns spreadsheets from that specific folder
 - Results scoped to the given folder
+- No result has `QA-Trashed-1054`'s id (#1054: trashed files were returned)
+
+**Cleanup:** `delete_file(file_id=<QA-Trashed-1054 id>, permanent=True)`, or leave it in the trash for a later `empty_trash` run. TC-D29 reuses it if run in the same pass, so clean up after TC-D29.
 
 **Result (2026-09-04) ✅ PASS**
 list_spreadsheets(FOLDER_ID) returns exactly the 3 spreadsheets in that folder (fixtures + QA-Cache-Check + QA-Create-Explicit), scoped correctly.
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
+**Result (2026-10-17) ✅ PASS — PR #1083 round 1 (Sky, `47db02a`)**
+OAuth, fixture folder on the Shared Drive. Positive control first: before trashing, `list_spreadsheets({FOLDER_ID})` listed `QA-Trashed-1054` (plus `QA-Trashed-1054-Sheet` and the fixture). After `delete_file(permanent=False)`, with `get_file_metadata` reporting `trashed: true`, the same call returned only `mcp-gee-sweet-qa-fixtures`. Cleaned up with `delete_file(permanent=True)`.
+
+**Result (2026-10-17) ✅ PASS — PR #1083 round 2 (Sky, `35a1839`)**
+Ran the revised 3-step setup with fresh fixtures. Step 2 positive control: `list_spreadsheets({FOLDER_ID})` and `search_spreadsheets('QA-Trashed-1054')` both returned the new id on the first try. After trashing (`trashed: true`), no `list_spreadsheets({FOLDER_ID})` result had that id; only the fixture remained.
+
+**Result (2026-10-19) ✅ PASS — v0.9.3 release pass**
+`kai-sa`: Setup: `QA-Trashed-1054` created in the run folder. Positive controls returned its id on the first try: `list_spreadsheets(run folder)` and `search_spreadsheets("QA-Trashed-1054")`. It was then trashed (`trashed: true` confirmed). After trashing: `list_spreadsheets({FOLDER_ID})` returned only the fixture (scoped correctly), and `list_spreadsheets(run folder)` returned [], so the trashed id is absent.
 
 ---
 
@@ -302,18 +328,32 @@ Run 1 (kai-oauth).
 
 ### TC-D29: Basic name search
 
+**Setup (#1054):** the trashed `QA-Trashed-1054` spreadsheet from TC-D14's setup, whose positive control already covers `search_spreadsheets`. If TC-D14 didn't run in this pass, run its setup (all three steps).
+
 **Prompt**
 > "Search for spreadsheets with 'qa-fixtures' in the name"
 
 **Checks**
 - Returns at least one result including 'mcp-gee-sweet-qa-fixtures'
 - Each result has a name and ID
+- No result of `search_spreadsheets(query="QA-Trashed-1054")` has `QA-Trashed-1054`'s id (#1054: trashed files were returned). Match by id, not by an empty result: fullText search also matches any live doc that mentions the name, such as a QA run log.
+
+**Cleanup:** `delete_file(file_id=<QA-Trashed-1054 id>, permanent=True)`, or leave it in the trash for a later `empty_trash` run.
 
 **Result (2026-09-04) ✅ PASS**
 search_spreadsheets('qa-fixtures') returned 1 result: 'mcp-gee-sweet-qa-fixtures' with id + name + metadata.
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
+**Result (2026-10-17) ✅ PASS — PR #1083 round 1 (Sky, `47db02a`)**
+`search_spreadsheets('qa-fixtures')` → the fixture. Positive control: before trashing, `search_spreadsheets('QA-Trashed-1054')` returned both new spreadsheets. After trashing (`trashed: true` confirmed), it returned `[]`.
+
+**Result (2026-10-17) ✅ PASS — PR #1083 round 2 (Sky, `35a1839`)**
+`search_spreadsheets('qa-fixtures')` → the fixture. With TC-D14's setup (positive control passed), no `search_spreadsheets('QA-Trashed-1054')` result had the trashed id after trashing (it returned `[]`).
+
+**Result (2026-10-19) ✅ PASS — v0.9.3 release pass**
+`kai-sa`: `search_spreadsheets("qa-fixtures")` returned the fixture with id and name. After trashing, `search_spreadsheets("QA-Trashed-1054")` returned [], so no trashed id.
 
 ---
 
@@ -458,6 +498,12 @@ list_files(FOLDER_ID) unfiltered returned both spreadsheets and Google Docs (qa-
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 1 (kai-oauth), throwaway folder under the Shared Drive.
 
+**Result (2026-10-19) ✅ PASS — v0.9.3 release pass**
+`kai-sa`: `list_files({FOLDER_ID})` returned the spreadsheet, 2 docs and the run folder, each with id/name/mime_type. No trashed items.
+
+**Result (2026-10-20) ✅ PASS — v0.9.3 post-advisory re-check @ c90b88d3**
+`kai-sa` (service account) and `kai-oauth` (OAuth): `list_files(TEST_FOLDER_ID)` returned 6 entries with id/name/mime_type, no trashed items.
+
 ---
 
 ### TC-D37: Filter by MIME type
@@ -489,14 +535,18 @@ Run 1 (kai-oauth), throwaway folder under the Shared Drive.
 - Second call returns same results
 - Logs show `cache hit` for the second call
 
-**Result (2026-09-04) ✅ PASS**
+**Result (2026-09-04) ❌ FAIL**
 Two consecutive list_files(FOLDER_ID) calls returned byte-identical results (cache hit). CAVEAT: see TC-D40 — folder cache key omits max_results, so a prior small-max_results fetch poisoned the cache and both calls returned a truncated 2-item list until refresh_cache.
+**Corrected (2026-10-17, #1044 audit):** the CAVEAT records a real defect seen in this case: the folder cache served a truncated 2-item list. Fixed the next day by PR #697 (#688); see the 2026-09-05 result.
 
 **Result (2026-09-05) ✅ PASS** — re-verified against PR #697 (issue #688)
 Caveat resolved — see TC-D40. Two consecutive list_files(FOLDER_ID) calls with no intervening small-max_results fetch still return byte-identical results.
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
+**Result (2026-10-20) ✅ PASS — v0.9.3 post-advisory re-check @ c90b88d3**
+`kai-sa` (service account) and `kai-oauth` (OAuth): `Cached 6 files for folder …` then `Drive folder cache hit: …`. The OAuth server's first call missed although the service account had cached the same folder 45 s earlier: rows are now per identity (GHSA-8jqx).
 
 ---
 
@@ -606,6 +656,9 @@ Created 'QA-ListFilesCache' in FOLDER_ID; immediately present in list_files(FOLD
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 1 (kai-oauth), throwaway folder under the Shared Drive.
+
+**Result (2026-10-20) ✅ PASS — v0.9.3 post-advisory re-check @ c90b88d3**
+`kai-oauth` (OAuth): warm listing, then `create_spreadsheet` logged `Marked drive folder cache dirty`, and the next `list_files` re-fetched (`Cached 7 files`) with the new file listed. File trashed.
 
 ---
 
@@ -1185,18 +1238,35 @@ empty_trash on a whole trash; not run during a shared pass.
 
 ### TC-D75: Search by name across all MIME types
 
+**Setup (#1054):**
+1. `create_spreadsheet(title="QA-Trashed-1054-Sheet", folder_id={FOLDER_ID})` and `create_folder(name="QA-Trashed-1054-Folder", parent_folder_id={FOLDER_ID})`; note both ids.
+2. Positive control: `search_files(query="QA-Trashed-1054")`, `search_files(query="QA-Trashed-1054", mime_type="application/vnd.google-apps.folder")`, and `search_files(query="QA-Trashed-1054", folder_id={FOLDER_ID})` must each return the ids they should (both; the folder; both). Drive's search index can lag a new file, so retry until they do; a negative check run before this proves nothing.
+3. `delete_file(file_id=<id>, permanent=False)` on each. `get_file_metadata` must report `trashed: true` for both before you continue.
+
 **Prompt**
 > "Search files for 'QA' — no MIME type filter"
 
 **Checks**
 - Returns a mix of docs, spreadsheets, and folders created during QA
 - Each result has `id`, `name`, `mimeType`, `modified_time`, and `web_link`
+- No result of `search_files(query="QA-Trashed-1054")` or `search_files(query="QA-Trashed-1054", mime_type="application/vnd.google-apps.folder")` has either trashed fixture's id (#1054). Match by id, not by an empty result: fullText search also matches any live doc that mentions the name, such as a QA run log.
+
+**Cleanup:** `delete_file(file_id=<id>, permanent=True)` on both, or leave them in the trash for a later `empty_trash` run. TC-D77 reuses them if run in the same pass, so clean up after TC-D77.
 
 **Result (2026-09-04) ✅ PASS**
 search_files('QA') no filter → mix of spreadsheets, docs, folders, text/plain; each entry has id, name, mimeType, modified_time, web_link (also owners=[], parent).
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
+
+**Result (2026-10-17) ✅ PASS — PR #1083 round 1 (Sky, `47db02a`)**
+`search_files('QA')` → a mix of spreadsheets, docs, and a folder, each with id/name/mimeType/modified_time/web_link. Positive control: before trashing, `search_files('QA-Trashed-1054', folder_id={FOLDER_ID})` returned the sheet, the folder, and TC-D14's sheet. After trashing, `search_files('QA-Trashed-1054')` (unscoped) and the same call with `mime_type='application/vnd.google-apps.folder'` both returned `[]`.
+
+**Result (2026-10-17) ✅ PASS — PR #1083 round 2 (Sky, `35a1839`)**
+Revised setup with fresh fixtures. Step 2 positive controls returned the expected ids on the first try: unscoped → both (plus TC-D14's sheet), `mime_type=folder` → the folder, `folder_id={FOLDER_ID}` → both. After trashing (`trashed: true` on both), no result of the unscoped or `mime_type=folder` search had either id.
+
+**Result (2026-10-19) ❌ FAIL — v0.9.3 release pass**
+`kai-sa`: The #1054 checks pass: positive controls found both QA-Trashed-1054 fixtures, and after trashing neither appears in `search_files("QA-Trashed-1054")` (also with mime_type=folder). Failing check: "Returns a mix of docs, spreadsheets, and folders": under the service account, unscoped `search_files("QA")` returned only the fixture spreadsheet; the folder-scoped search finds them all, and an OAuth server finds them unscoped. Not a regression (no `corpora` before or after #1054). Tracked in #1127.
 
 ---
 
@@ -1222,18 +1292,33 @@ Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
 
 ### TC-D77: Search with folder filter
 
+**Setup (#1054):** the trashed `QA-Trashed-1054-Sheet` and `QA-Trashed-1054-Folder` from TC-D75's setup, whose positive control already covers the `folder_id` search. If TC-D75 didn't run in this pass, run its setup (all three steps).
+
 **Prompt**
 > "Search for files with 'QA' in the name, but only in {FOLDER_ID}"
 
 **Checks**
 - All results have `parent` matching `{FOLDER_ID}`
 - Files from other folders excluded
+- No result of `search_files(query="QA-Trashed-1054", folder_id={FOLDER_ID})` has either trashed fixture's id (#1054: trashed files were returned)
+- A quote in `folder_id` can't reopen the query (#1054 round 1): `search_files(query="QA-Trashed-1054", folder_id="x' in parents or trashed=true or 'y")` returns either `[]` or an `{"error": ...}` item, and no result has either trashed fixture's id. Before the fix, the raw `'` closed the folder string and the `or trashed=true` brought the trashed fixtures back.
+
+**Cleanup:** `delete_file(file_id=<id>, permanent=True)` on both, or leave them in the trash for a later `empty_trash` run.
 
 **Result (2026-09-04) ✅ PASS**
 search_files('QA', folder_id=FOLDER_ID) → every result has parent = FOLDER_ID; files from other folders excluded.
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
+
+**Result (2026-10-17) ✅ PASS — PR #1083 round 1 (Sky, `47db02a`)**
+`search_files('QA', folder_id={FOLDER_ID})` → 3 results, all with `parent` = `{FOLDER_ID}`. `search_files('QA-Trashed-1054', folder_id={FOLDER_ID})` returned all 3 fixtures before trashing and `[]` after.
+
+**Result (2026-10-17) ✅ PASS — PR #1083 round 2 (Sky, `35a1839`)**
+`search_files('QA', folder_id={FOLDER_ID})` → 3 results, all with `parent` = `{FOLDER_ID}`. No result of the `folder_id` search for `QA-Trashed-1054` had either trashed id. Injection check: `folder_id="x' in parents or trashed=true or 'y"` returned a single `{"error": "Search failed: <HttpError 404 … File not found: .>"}` item. The request URL shows the escaped query (`'x\' in parents or trashed=true or \'y' in parents`), so Drive read the whole value as one folder ID, and no trashed fixture came back. `list_spreadsheets` with the same `folder_id` raised the same 404 as a tool error (that tool has no try/except, which is pre-existing).
+
+**Result (2026-10-19) ✅ PASS — v0.9.3 release pass**
+`kai-sa`: `search_files("QA", folder_id={FOLDER_ID})` returned 4 results, all with parent = FOLDER_ID. `search_files("QA-Trashed-1054", folder_id=run folder)` returned [] after trashing. The injection `folder_id="x' in parents or trashed=true or 'y"` returned one `{"error": "Search failed: HttpError 404 File not found"}` item. The URL shows the escaped query, and no trashed id came back.
 
 ---
 
@@ -1272,6 +1357,12 @@ get_file_metadata(SPREADSHEET_ID): mimeType spreadsheet; name/parents/created_ti
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
+
+**Result (2026-10-19) ✅ PASS — v0.9.3 release pass**
+`kai-sa`: `get_file_metadata(fixture)`: mimeType is spreadsheet. name, parents, created_time, modified_time, owners ([] on the Shared Drive) and web_link are all present. No `size`; `trashed` is false.
+
+**Result (2026-10-20) ✅ PASS — v0.9.3 post-advisory re-check @ c90b88d3**
+`kai-sa` (service account) and `kai-oauth` (OAuth): spreadsheet metadata with name, parents, created/modified time, owners `[]` (Shared Drive), web_link; no `size`.
 
 ---
 
@@ -1449,11 +1540,18 @@ Standing unit-test-only (docs/qa/runs/README.md pre-approved list).
 
 **Result (2026-06-21) ✅** OAuth: 50 files returned across types (spreadsheets, folders, docs, PDFs, images, videos). All have `id`, `name`, `mime_type`, `modified_time`, `owners` (flat email list), `web_link`. Ordered by `modifiedTime desc`. SA: 5 files returned — files explicitly shared with the service account (Budget & Savings spreadsheet plus 4 folders).
 
-**Result (2026-09-04) ✅ PASS**
+**Result (2026-09-04) ⚠️ PARTIAL**
 list_shared_with_me() → `[]` cleanly, no error. The OAuth identity here is a Workspace-org QA account (kevin@mcpsuite.io, per get_storage_quota), which has no files shared directly with it — [] is a valid result, not a tool fault. Field/ordering checks vacuous. Aziz may want to seed a shared file to exercise the non-empty path.
+**Corrected (2026-10-17, #1044 audit):** the fixture had no shared files, so the field and ordering checks weren't exercised.
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 1 (kai-oauth).
+
+**Result (2026-10-19) ⚠️ PARTIAL — v0.9.3 release pass**
+`kai-sa`: `list_shared_with_me()` returned [] with no error, which is expected for a service account. With nothing returned, the field and owners checks had nothing to check. The "query includes sharedWithMe/trashed" check can't be seen from the tool surface.
+
+**Result (2026-10-20) ⚠️ PARTIAL — v0.9.3 post-advisory re-check @ c90b88d3**
+`kai-sa` (service account) and `kai-oauth` (OAuth): `list_shared_with_me()` → `[]`, no error; per-entry checks had nothing to run on.
 
 ---
 
@@ -1469,8 +1567,9 @@ Run 1 (kai-oauth).
 
 **Result (2026-06-21) ✅** OAuth: 8 spreadsheets returned, all `application/vnd.google-apps.spreadsheet`. No other MIME types present.
 
-**Result (2026-09-04) ✅ PASS**
+**Result (2026-09-04) ⚠️ PARTIAL**
 list_shared_with_me(mime_type=spreadsheet) → `[]` cleanly. Same env characteristic as TC-D152.
+**Corrected (2026-10-17, #1044 audit):** the fixture had no shared files, so the filter check wasn't exercised.
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 1 (kai-oauth).
@@ -1489,8 +1588,9 @@ Run 1 (kai-oauth).
 
 **Result (2026-06-21) ✅** OAuth: exactly 3 items returned — Budget & Savings, 2025 medical expenses, Tax Documents folder. Correct top-3 by `modifiedTime desc`.
 
-**Result (2026-09-04) ✅ PASS**
+**Result (2026-09-04) ⚠️ PARTIAL**
 list_shared_with_me(max_results=3) → `[]` cleanly (≤3 trivially). Same env characteristic as TC-D152.
+**Corrected (2026-10-17, #1044 audit):** the fixture had no shared files, so the cap check wasn't exercised.
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 1 (kai-oauth).
@@ -1654,6 +1754,12 @@ get_storage_quota() → email "kevin@mcpsuite.io", display_name "Kevin Huisman",
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 1 (kai-oauth).
+
+**Result (2026-10-19) ✅ PASS — v0.9.3 release pass**
+`kai-sa`: `get_storage_quota()` returned email and display_name as the SA address, `limit_bytes` 0, and the usage fields as the int 0. All keys present.
+
+**Result (2026-10-20) ✅ PASS — v0.9.3 post-advisory re-check @ c90b88d3**
+`kai-sa` (service account): SA address, all byte fields int 0. `kai-oauth` (OAuth): the fixture account, limit 32212254720, usage fields int.
 
 ---
 

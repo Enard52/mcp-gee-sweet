@@ -21,7 +21,7 @@ The incidents behind the rules in this file are in [`docs/decisions/role-file-hi
    - Community intake on outside-contributor PRs and issues: labels only, per "Community intake" below.
    - Roadmap grooming (`docs/roadmap.md` + whichever roadmap-planning memory is currently active — check the memory index rather than assuming a specific version-numbered file)
    - Live/manual tool testing — only possible here (or in a QA agent's own worktree, once it's checked out a branch — see `/team-member`)
-   - Merging PRs that carry the `qa-approved` label (`merge-pr`) — do not merge one that's missing it, and do not perform the review/QA yourself; send it back to the relevant QA agent instead
+   - Merging PRs that carry the `qa-approved` label (`merge-pr`) — do not merge one that's missing it, and do not perform the review/QA yourself; send it back to the relevant QA agent instead. Aziz's release-QA sign-off PR (`qa/vX.Y.Z-release-pass`) has no QA partner to label it: it merges only on a user go-ahead that names that PR or merging it (a request to cut the release isn't one). Record it by applying `qa-approved` and commenting on the PR with the user's words quoted. Ask for that go-ahead in your state report; don't wait for a label nobody is assigned to add (v0.9.2, PR #1051).
    - Assigning one QA reviewer to each non-lane code PR (Joy's, or Aziz's/Amy's when one touches `src/`). `qa.md`'s pickup only finds the partner Dev's PRs, so nobody else would. Pick whichever of Sky or Kit has no partner PR in review (if both do, ask the user which one), and ask the user to tell that QA session to verify the PR, since `qa.md` needs the user's go-ahead for a non-partner PR. Don't route it to a second reviewer as well (PR #1016 had both Aziz and Kit).
    - Team-process PRs (edits to `CLAUDE.md`, `.claude/team-roles/*.md`, `.claude/commands/*.md`) are Bob's own merge track, not Kai's — Bob reviews, labels `prompt-qa-approved`, and merges those himself (see `.claude/team-roles/bob.md` step 4). This used to be Kai's job too; per direct user instruction, 2026-07-21, it isn't anymore. A code-doc hunk (`merge-pr.md` step 2) is the exception: it rides with its code PR, needs only `qa-approved`, and Kai merges it.
    - Cutting a release once Aziz has signed off (`/release`)
@@ -40,11 +40,43 @@ The incidents behind the rules in this file are in [`docs/decisions/role-file-hi
 
 **`good first issue` and a lane label (`lane-a`/`lane-b`) are mutually exclusive — never let a ticket carry both.** They're opposite signals: `good first issue` invites outside contribution, a lane label reserves the ticket for that lane's automated pickup. A ticket carrying both is a bug the moment you see it — fix on sight rather than re-deriving from context: if a contributor already claimed it, strip the lane label and pick the lane's actual next-in-order ticket fresh; otherwise drop `good first issue`. Check both directions before applying either label, and again as a pre-flight step when launching a lane (`make lane-a`), since a prior session's mislabel can sit stale in the queue undetected until the lane starts pulling from it (#724).
 
-**A role-routed label (`joy`/`bob`/`aziz`) and a version label are not mutually exclusive — don't let one imply the absence of the other.** They answer different questions: who scopes/does the work, versus whether a release actually depends on it landing. Apply the same release-gate test used for every other ticket: does the *next* targeted release actually need this to ship cleanly? If yes — e.g. a release-process fix Bob owns that the next `/release` run would visibly break without — it gets the version label alongside the person label. If the work is genuinely open-ended with no release tie, it stays version-less regardless of who it's routed to (#602). One past role-routed ticket correctly staying version-less is not a rule that they all do.
+**A role-routed label (`joy`/`bob`/`aziz`) and a version label are not mutually exclusive — don't let one imply the absence of the other.** They answer different questions: who scopes/does the work, versus whether a release actually depends on it landing. Apply the same release-gate test used for every other ticket: does the in-flight release, or the next version, need this to ship cleanly? If yes — e.g. a release-process fix Bob owns that the next `/release` run would visibly break without — it gets that version's label (`vX.Y.Z` or `planned: <name>`) alongside the person label. If the work is genuinely open-ended with no release tie, it stays version-less regardless of who it's routed to (#602). One past role-routed ticket correctly staying version-less is not a rule that they all do.
+
+## Release scoping
+
+What a release contains and when it's done. The maintainer decided these rules on 2026-10-18 (#1085); the impact × reach rubric below still places defects.
+
+"Next version", in this section and the rubric below, means the first queued `planned:` version. If none is queued, the ticket gets `needs-version-call` instead.
+
+1. **A version is a named feature set.** The maintainer defines it: a theme plus the feature tickets that deliver it. It ships when the feature set is done and passes release QA. There's no target date.
+2. **Plus a locked fill.** When a version goes in flight, it gets a fill of the next highest-priority defects (ranked by the impact × reach rubric) and improvements: about 10–15 items, more if they're all small, fewer if one is large. The maintainer sets the fill and **locks** it at that point. After that, only urgent fixes join it: the rubric's in-flight cases (`severe` at any reach, `wrong/common`, anything breaking install, auth, or first run, a regression since the last stable tag) and security fixes. A fill item still unfinished when the feature set is done moves to the next version: relabel it `planned: <next>` and comment that it moved. The move needs no decision. There it's a fill candidate, and the maintainer counts it when setting that version's fill (maintainer, 2026-10-18).
+3. **Named versions until in flight.**
+   - A queued version carries a `planned: <name>` label (e.g. `planned: ankylosaurus`) and a `docs/roadmap.md` section under that name, not a number. Queued versions can be reordered freely. Create the label when the version is first queued, once the maintainer has approved its name, not ahead of time.
+   - **Names are dinosaur genera** (maintainer, 2026-10-18), lowercase in the label, never reused. Pick one whose character fits the version's theme (the first, `ankylosaurus`, is the armored one, for a hardening release). Don't assign them alphabetically: queued versions get reordered, so a letter sequence would read as an order that isn't real. The maintainer approves each name. The name stays with the version after it gets its number: the release is titled `vX.Y.Z — <Name>`, and its notes open with a synopsis of the dinosaur (`release.md` step 5).
+   - Only the in-flight version carries a number label (`vX.Y.Z`). When a version goes in flight, swap its `planned:` label for the number label on every ticket, delete the `planned:` label, and retitle its `docs/roadmap.md` section `vX.Y.Z — <Name>`, which is where `/release` reads the name.
+   - The number is whatever the next tag in sequence is. Dev builds are unaffected: their numbers come from the last git tag only.
+   - A hotfix takes the next patch number, and its tag is merged back into `develop` (`release.md` step 8), or dev builds keep the pre-hotfix number and sort below it (#317).
+4. **Feature placement, first match wins:**
+   1. Part of a version's feature set: that version.
+   2. A prerequisite of a feature-set ticket: that version's feature set.
+   3. A review follow-up on an in-flight ticket: in flight if the parent ticket's acceptance criteria can't pass without it, otherwise a fill candidate for the next version. The rubric still decides a defect follow-up.
+   4. On the roadmap's core feature map: a fill candidate for the version the map names.
+   5. Anything else: `needs-version-call`.
+5. **Circuit breaker: `needs-version-call`.** Apply it when:
+   - rule 4 reaches step 5
+   - a ticket would join a feature set after its version went in flight
+   - a non-urgent ticket is proposed for a locked fill
+   - a rule names the next version and no version is queued
+   - the rubric already says to ask (`loud/common` that doesn't break install, auth, or first run)
+
+   While a ticket carries it: no version or `planned:` label, no `ready-for-development`, no lane label. Comment on the ticket with this template, signed per `team-member.md` §5:
+   > **Version call needed.** Rule that didn't settle it: *(rule and why)*. Options: *(2–3 candidate versions, or "not planned")*. Recommendation: *(one, with a sentence of reasoning)*.
+
+   The maintainer decides. Then apply the chosen label and remove `needs-version-call`. It's separate from `decision-needed`, which is about how something behaves, not which version it goes in; a ticket can carry both.
 
 ## Version labels: impact × reach
 
-**A defect or hygiene ticket's version label comes from its impact × reach cell, however it reaches triage:** backlog triage, a `/retro` ticket, a Dev's follow-up (`dev.md` step 6), or a review finding (`qa.md` step 3). Features, docs, test/QA, and process tickets aren't placed by this rubric: features follow the roadmap's version plan, and a role-routed or process ticket uses the release-gate test under "Ticket triage and labeling". Thresholds approved by the maintainer on 2026-10-13 (#1024); background in `docs/decisions/decision-impact-reach-triage.md`.
+**A defect or hygiene ticket's version label comes from its impact × reach cell, however it reaches triage:** backlog triage, a `/retro` ticket, a Dev's follow-up (`dev.md` step 6), or a review finding (`qa.md` step 3). Features, docs, test/QA, and process tickets aren't placed by this rubric: features follow "Release scoping" above, and a role-routed or process ticket uses the release-gate test under "Ticket triage and labeling". Thresholds approved by the maintainer on 2026-10-13 (#1024); background in `docs/decisions/decision-impact-reach-triage.md`.
 
 Impact, the worst that fits:
 - **severe**: data loss, data exposure, a hang, or the tool unusable.

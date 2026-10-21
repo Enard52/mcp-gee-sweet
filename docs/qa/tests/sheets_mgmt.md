@@ -26,6 +26,12 @@ list_sheets → Sales/Empty/Notes & Misc (3 tabs), no error
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
+**Result (2026-10-19) ✅ PASS — v0.9.3 release pass**
+`kai-sa`: `list_sheets` returned Sales / Notes & Misc / Empty (3 tabs), no error.
+
+**Result (2026-10-20) ✅ PASS — v0.9.3 post-advisory re-check @ c90b88d3**
+`kai-sa` (service account) and `kai-oauth` (OAuth): Sales / Notes & Misc / Empty, no error.
+
 ---
 
 ### TC-S02: Cache hit on second call
@@ -43,6 +49,9 @@ Run 2 (kai-oauth): every check matched; visual cases checked under the Playwrigh
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
+**Result (2026-10-20) ✅ PASS — v0.9.3 post-advisory re-check @ c90b88d3**
+`kai-sa` (service account) and `kai-oauth` (OAuth): both calls logged `Cache hit: N sheets for <copy>`.
+
 ---
 
 ### TC-S03: Cache invalidated after rename
@@ -59,6 +68,9 @@ Empty→WasEmpty, list_sheets reflects rename immediately (mark_dirty confirmed)
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+**Result (2026-10-20) ✅ PASS — v0.9.3 post-advisory re-check @ c90b88d3**
+`kai-sa` (service account) and `kai-oauth` (OAuth): `rename_sheet(Empty→WasEmpty)` logged `Marked cache dirty`, and the next `list_sheets` re-fetched and showed WasEmpty. On `kai-oauth` (OAuth) that `list_sheets` took 9.8 s (every other one under 1 s); the log shows no cause, not reproduced.
 
 ---
 
@@ -408,6 +420,12 @@ create_sheet(title="BrandNew") → {sheetId(int), title, index(int), spreadsheet
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
+**Result (2026-10-19) ✅ PASS — v0.9.3 release pass**
+`kai-sa`: `create_sheet("BrandNew")` returned sheetId 917700788, title, index 3 and spreadsheetId. The next `list_sheets` included BrandNew.
+
+**Result (2026-10-20) ✅ PASS — v0.9.3 post-advisory re-check @ c90b88d3**
+`kai-sa` (service account) and `kai-oauth` (OAuth): `create_sheet("BrandNew")` returned sheetId/title/index 3; `Marked cache dirty`, then the next `list_sheets` re-fetched 4 sheets.
+
 ---
 
 ### TC-S16: Duplicate tab title
@@ -527,6 +545,12 @@ refresh_cache(spreadsheet_id) → {"invalidated":["spreadsheet:<id>"]}, scoped c
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
+**Result (2026-10-19) ⚠️ PARTIAL — v0.9.3 release pass**
+`kai-sa`: `refresh_cache(spreadsheet_id)` returned `{"invalidated":["spreadsheet:<id>"]}`, and a following `list_sheets` returned the current tabs. Not run: the "next call is a cache miss in the logs" check, because the rules forbid reading logs.
+
+**Result (2026-10-20) ✅ PASS — v0.9.3 post-advisory re-check @ c90b88d3**
+`kai-sa` (service account) and `kai-oauth` (OAuth): `refresh_cache(spreadsheet_id)` → `invalidated: [spreadsheet:<copy>]`, both caches marked dirty, next `list_sheets` a miss (`Cached 4 sheets`).
+
 ---
 
 ### TC-S21: Refresh by doc ID only
@@ -578,6 +602,9 @@ refresh_cache() no args → {"invalidated":"all"}
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
 
+**Result (2026-10-20) ✅ PASS — v0.9.3 post-advisory re-check @ c90b88d3**
+`kai-sa` (service account): `refresh_cache()` → `invalidated: all`; the log names all five caches (sheet_structure, sheet_data, drive_folder, doc_content, calendar), and the next `list_sheets`, `get_doc_content` and `list_files` each re-fetched. Stale wording: five caches now, not four.
+
 ---
 
 ### TC-S24: Cache re-populated after refresh
@@ -594,6 +621,9 @@ refresh_cache(spreadsheet_id) then get_multiple_spreadsheet_summary → correct 
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
+
+**Result (2026-10-20) ✅ PASS — v0.9.3 post-advisory re-check @ c90b88d3**
+`kai-sa` (service account): after `refresh_cache(spreadsheet_id)` a summary re-fetched (`Cached 4 sheets`, then `Cached sheet data …` per tab) and returned current data.
 
 ---
 
@@ -827,8 +857,9 @@ Run 2 (kai-oauth): every check matched; visual cases checked under the Playwrigh
 **Result (2026-07-14) ✅ PASS**
 `hide_rows(spreadsheet_id, sheet="Sales", start_row=4)` → `{"replies":[{}]}`. Playwright screenshot confirmed row headers skip from 4 straight to 6 with expand chevrons at the boundary.
 
-**Result (2026-09-04) ✅ PASS**
+**Result (2026-09-04) ⚠️ PARTIAL**
 hide_rows(start_row=4) → rowMetadata[4].hiddenByUser=true (API-verified, no Playwright per shard instructions)
+**Corrected (2026-10-17, #1044 audit):** the visual check wasn't run (API-only per shard instructions).
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 2 (kai-oauth): every check matched; visual cases checked under the Playwright mutex.
@@ -1808,10 +1839,12 @@ Error text now repr-quotes the range; TC wording stale.
 - Selecting a cell in A1:A5 in the Sheets UI shows a dropdown arrow with exactly those three options
 - Calling `get_data_validation(range="A1:A5")` afterward returns one `{cell, rule}` entry per cell in the range, each with `condition.type == "ONE_OF_LIST"` and the same three values
 
-**Result (2026-07-17) ✅ PASS (direct tool call, not Playwright UI)** — ran against a scratch range on the fixture's `Empty` sheet rather than `Sales`, but the tool logic is sheet-agnostic. `add_data_validation(condition_type="ONE_OF_LIST", values=["Yes","No","Maybe"])` succeeded; `get_data_validation` read back all 5 cells with `condition.type == "ONE_OF_LIST"` and the exact same 3 values. UI dropdown rendering not independently verified via Playwright this pass.
+**Result (2026-07-17) ⚠️ PARTIAL (direct tool call, not Playwright UI)** — ran against a scratch range on the fixture's `Empty` sheet rather than `Sales`, but the tool logic is sheet-agnostic. `add_data_validation(condition_type="ONE_OF_LIST", values=["Yes","No","Maybe"])` succeeded; `get_data_validation` read back all 5 cells with `condition.type == "ONE_OF_LIST"` and the exact same 3 values. UI dropdown rendering not independently verified via Playwright this pass.
+**Corrected (2026-10-17, #1044 audit):** the dropdown rendering wasn't checked.
 
-**Result (2026-09-04) ✅ PASS**
+**Result (2026-09-04) ⚠️ PARTIAL**
 add_data_validation(Empty!A1:A5, ONE_OF_LIST, [Yes,No,Maybe]) → succeeded; get_data_validation read back all 5 cells with matching condition.type/values (API-verified, not Playwright per shard instructions)
+**Corrected (2026-10-17, #1044 audit):** the dropdown rendering wasn't checked.
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run on the Empty sheet; dropdown/checkbox rendering seen, values confirmed via API read-back.
@@ -2413,13 +2446,14 @@ Run 2 (kai-oauth): every check matched; visual cases checked under the Playwrigh
 
 Matches `update_borders`'s validation depth (missing-key + isinstance + enum-membership) for the analogous `"style"` field (`structure.py`, `_VALID_BORDER_STYLES`) — this tool now applies the same pattern via `_VALID_SORT_ORDERS` for both `column_index` and `order`.
 
-**Result (2026-07-28) ⚠️ PASS (fix works) but same defect class left open on sibling fields.** Live-verified against `mcp-gee-sweet-qa-fixtures` (`BrandNew` sheet), via `mcp-gee-sweet-sky`:
+**Result (2026-07-28) ❌ FAIL (fix works) but same defect class left open on sibling fields.** Live-verified against `mcp-gee-sweet-qa-fixtures` (`BrandNew` sheet), via `mcp-gee-sweet-sky`:
 - `sort_order=[{"column_index": 0, "order": 5}]` → clean `{"error": "Sort spec for column_index 0 has a non-string 'order' value"}`. This PR's own fix works as intended.
 - `sort_order=[{"order": "ASCENDING"}]` (column_index omitted) → raw `KeyError: 'column_index'` leaks as a tool execution error, not `{"error": ...}` — the same crash class this PR claims to fix, one field over. `column_index` is accessed via `s["column_index"]` (structure.py:1652) with no key-existence check, unlike `update_borders`'s analogous 3-part validation (missing-key + isinstance + enum) at lines 1129–1138 of the same file.
 - `sort_order=[{"column_index": "0", "order": "ASCENDING"}]` (string column_index) → raw `TypeError: unsupported operand type(s) for +: 'int' and 'str'` leaks (no type check on `column_index`).
 - `sort_order=[{"column_index": 0, "order": "banana"}]` (invalid enum value) → raw `HttpError 400` from the Sheets API leaks instead of a clean local error (pre-existing gap, not a new regression, but the same enum-membership check `update_borders` already has for `style`).
 - `sort_order=[{"column_index": 0, "order": "ASCENDING"}, "banana"]` (non-dict list element) — reviewed as a potential `AttributeError`, but live-tested and actually rejected upstream by MCP's own pydantic schema validation (`sort_order: list[dict]`) before the function body ever runs, so this path is not exploitable through the tool interface. Not a live defect, unlike the three above.
 - Sent back to Dev (see PR #452 comment) rather than approved — the fix is narrower than the established sibling pattern and leaves the identical crash class open on `column_index` and the `order` enum.
+**Corrected (2026-10-17, #1044 audit):** the round was sent back for raw `KeyError`/`TypeError`/`HttpError` leaks in the same validation; fixed in round 2 (`5648a91`), re-confirmed 2026-09-04.
 
 **Result (2026-07-28, round 2) ✅ PASS — all findings closed.** Fix commit `5648a91` adds missing-key + isinstance (with explicit `bool` exclusion) + enum-membership checks for both `column_index` and `order`, matching `update_borders`'s depth. Re-verified live against `mcp-gee-sweet-qa-fixtures` (`BrandNew` sheet), via `mcp-gee-sweet-sky`, after `/mcp reconnect`:
 - `sort_order=[{"order": "ASCENDING"}]` → `{"error": "Sort spec at index 0 is missing required 'column_index' key"}` — clean, no `KeyError`.
@@ -2537,6 +2571,7 @@ Run 2 (kai-oauth): every check matched; visual cases checked under the Playwrigh
 - **sheetId lands on the named tab, not sheet 0:** on a temporary non-first tab (`sky-pr986-r2`, index 3, deleted afterward), `format_cells("B1:C2", bold)`, `merge_cells("E1:F2")`, `add_data_validation("H1:H3", ONE_OF_LIST)` and `update_borders("J1:J2", top SOLID)` each landed exactly there, and the `Sales` tab (sheet 0) showed no bold, merges, borders or validation. `unmerge_cells("E1:F2")` removed the merge; `clear_data_validation("H1:H2")` left only H3.
 - **`sort_range`'s rebuilt sort specs:** `sort_range("B1:C4", [{"column_index": 1, "order": "DESCENDING"}])` sorted by column C (`dimensionIndex` = start column B + 1), giving c/4, a/3, d/2, b/1.
 - Side note (pre-existing, sent back to the Dev in round 2): `add_data_validation` with `condition_type="BLANK"` or `"NOT_BLANK"` reaches the API and fails with `HttpError 400 … ConditionType 'NOT_BLANK' is not supported in data validation`. TC-S133 step 6 still works because the range is rejected before the request is built.
+**Corrected (2026-10-17, #1044 audit):** outcome of the BLANK/NOT_BLANK finding: round 3 (`44f9360`) removed both from the condition-type enum, and TC-S134 verifies the clean local error.
 
 **Result (2026-10-11, PR #986 round 3, `44f9360`) ✅ PASS.** Live via `mcp-gee-sweet-sky` after `/mcp reconnect`:
 - 1–5, 7 → the same `Invalid A1 notation` errors as round 1, word for word.
