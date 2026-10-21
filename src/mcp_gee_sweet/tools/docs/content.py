@@ -1736,8 +1736,7 @@ def register(tool):
             - startIndex, endIndex
             Paragraphs also include namedStyleType, text, headingId (Google's internal
             ID for this heading, present only when namedStyleType is HEADING_1..6 —
-            e.g. "h.abc123"; null otherwise), a runs list (each run has text,
-            bold, italic, underline, strikethrough, font_size, link_url), and
+            e.g. "h.abc123"; null otherwise), a runs list, and
             bullet (null for a non-list paragraph; otherwise {listId,
             nestingLevel} — nestingLevel is 0 for a top-level list item, absent
             from the raw API response in that case, normalized to 0 here so
@@ -1745,6 +1744,14 @@ def register(tool):
             markdown-to-Doc conversion that flattened an intended nested list —
             sibling paragraphs that should differ in depth but share
             the same nestingLevel — then fix it with create_paragraph_bullets.
+            Every entry in runs carries a "type": a "textRun" has text, bold,
+            italic, underline, strikethrough, font_size, link_url; an
+            "inlineObject" is an embedded image, which occupies index positions
+            but contributes no text, so it reports inline_object_id plus its own
+            start_index/end_index (and link_url when the image is hyperlinked) —
+            use those indices for edits near an image instead of guessing which
+            position it holds (#1070). text joins only the textRun content, so it
+            stays what the paragraph reads, not what it occupies.
             Tables include rows, columns, and a cells list (each cell has row, col,
             startIndex, endIndex, paragraphStartIndex, text).
 
@@ -1787,10 +1794,34 @@ def register(tool):
                 for pe in para.get("elements", []):
                     tr = pe.get("textRun")
                     if not tr:
+                        # An inline image occupies index positions in the paragraph
+                        # but carries no textRun, so skipping it hid the object
+                        # completely: callers could not tell which index the image
+                        # sat at, and an index-based edit aimed at a neighbouring
+                        # character deleted it (#1070). Surface it with its own
+                        # identity and index range instead.
+                        ioe = pe.get("inlineObjectElement")
+                        if ioe:
+                            runs.append(
+                                {
+                                    "type": "inlineObject",
+                                    "inline_object_id": ioe.get("inlineObjectId"),
+                                    "start_index": pe.get("startIndex"),
+                                    "end_index": pe.get("endIndex"),
+                                    "text": "",
+                                    "bold": None,
+                                    "italic": None,
+                                    "underline": None,
+                                    "strikethrough": None,
+                                    "font_size": None,
+                                    "link_url": ioe.get("textStyle", {}).get("link", {}).get("url"),
+                                }
+                            )
                         continue
                     ts = tr.get("textStyle", {})
                     runs.append(
                         {
+                            "type": "textRun",
                             "text": decode_code_run_text(tr.get("content", ""), ts),
                             "bold": ts.get("bold"),
                             "italic": ts.get("italic"),

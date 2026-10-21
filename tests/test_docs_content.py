@@ -4909,3 +4909,106 @@ class TestPositionalInsertTailStart:
 
     def test_empty(self):
         assert _positional_insert_tail_start([]) == 0
+
+
+class TestGetDocStructureInlineObjects:
+    """#1070: a paragraph holding an inline image reported neither the image nor
+    the index it occupies — the paragraph came back as text "\t\n" three indices
+    wide, so index-based edits around the image were guesswork and one wrong guess
+    deleted it. Inline objects now appear in runs with their own identity and
+    range, and every run carries a type so callers can tell them apart."""
+
+    def _ctx(self, docs_svc):
+        return _make_ctx(docs_service=docs_svc)
+
+    def _para(self, elements, start=1, end=4):
+        return {
+            "documentId": "doc1",
+            "title": "Doc",
+            "body": {
+                "content": [
+                    {
+                        "startIndex": start,
+                        "endIndex": end,
+                        "paragraph": {
+                            "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                            "elements": elements,
+                        },
+                    }
+                ]
+            },
+        }
+
+    def _tab(self):
+        return {"startIndex": 1, "endIndex": 2, "textRun": {"content": "\t", "textStyle": {}}}
+
+    def _newline(self):
+        return {"startIndex": 3, "endIndex": 4, "textRun": {"content": "\n", "textStyle": {}}}
+
+    def _img(self, inline_object_id="io.77", style=None):
+        return {
+            "startIndex": 2,
+            "endIndex": 3,
+            "inlineObjectElement": {
+                "inlineObjectId": inline_object_id,
+                "textStyle": style if style is not None else {},
+            },
+        }
+
+    async def _runs(self, docs_svc, doc):
+        docs_svc.documents.return_value.get.return_value.execute.return_value = doc
+        result = await _docs_tools["get_doc_structure"](doc_id="doc1", ctx=self._ctx(docs_svc))
+        return result["elements"][0]
+
+    async def test_inline_image_is_reported_with_its_own_index_range(self):
+        docs_svc = MagicMock()
+        elem = await self._runs(docs_svc, self._para([self._tab(), self._img(), self._newline()]))
+
+        assert elem["text"] == "\t\n"
+        assert [r["type"] for r in elem["runs"]] == ["textRun", "inlineObject", "textRun"]
+        image = elem["runs"][1]
+        assert image["inline_object_id"] == "io.77"
+        assert image["start_index"] == 2
+        assert image["end_index"] == 3
+
+    async def test_image_link_url_is_surfaced(self):
+        # A linked image carries its link on the inlineObjectElement's own
+        # textStyle (#977), so the caller can see it without another fetch.
+        docs_svc = MagicMock()
+        style = {"link": {"url": "https://example.com/chart"}}
+        elem = await self._runs(docs_svc, self._para([self._img(style=style), self._newline()]))
+
+        assert elem["runs"][0]["type"] == "inlineObject"
+        assert elem["runs"][0]["link_url"] == "https://example.com/chart"
+
+    async def test_text_runs_keep_their_formatting_and_gain_a_type(self):
+        docs_svc = MagicMock()
+        run = {
+            "startIndex": 1,
+            "endIndex": 3,
+            "textRun": {
+                "content": "Hi\n",
+                "textStyle": {"bold": True, "fontSize": {"magnitude": 12}},
+            },
+        }
+        elem = await self._runs(docs_svc, self._para([run]))
+
+        assert elem["runs"] == [
+            {
+                "type": "textRun",
+                "text": "Hi\n",
+                "bold": True,
+                "italic": None,
+                "underline": None,
+                "strikethrough": None,
+                "font_size": 12,
+                "link_url": None,
+            }
+        ]
+
+    async def test_paragraph_without_images_is_unchanged(self):
+        docs_svc = MagicMock()
+        elem = await self._runs(docs_svc, self._para([self._tab(), self._newline()]))
+
+        assert [r["type"] for r in elem["runs"]] == ["textRun", "textRun"]
+        assert all("inline_object_id" not in r for r in elem["runs"])
