@@ -28,13 +28,40 @@ class TestStorableLinkUrl:
         ):
             assert _storable_link_url(url) == url
 
+    def test_scheme_case_and_other_schemes_pass_through(self):
+        # A scheme is case-insensitive and not a closed list (RFC 3986), so an
+        # allow-list of lowercase web schemes would drop links that resolve.
+        for url in (
+            "HTTPS://Example.com/Guide",
+            "Mailto:someone@example.com",
+            "tel:+905350000000",
+            "ftps://example.com/f",
+            "file:///tmp/report.pdf",
+            "vscode://file/tmp/report.pdf",
+        ):
+            assert _storable_link_url(url) == url
+
+    def test_padded_target_loses_the_padding(self):
+        # HTML input like <a href=" https://example.com/x "> is a valid link;
+        # the spaces are not part of the target and must not reach the API.
+        assert _storable_link_url(" https://example.com/x ") == "https://example.com/x"
+        assert _storable_link_url("\t#heading\n") == "#heading"
+
     def test_heading_anchor_passes_through(self):
         # Same-document '#slug' anchors are in-doc links, not relative paths;
         # _resolve_heading_anchors (#409) turns the accepted ones into full URLs.
         assert _storable_link_url("#heading") == "#heading"
 
     def test_relative_targets_are_not_storable(self):
-        for url in ("./guide.md", "guide.md", "/guide.md", "//example.com/x", "?q=1"):
+        # Padding does not turn a relative path into a storable target.
+        for url in (
+            "./guide.md",
+            "guide.md",
+            "/guide.md",
+            "//example.com/x",
+            "?q=1",
+            " ./guide.md ",
+        ):
             assert _storable_link_url(url) is None
 
     def test_none_stays_none(self):

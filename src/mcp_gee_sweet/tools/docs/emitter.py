@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, replace
 
 from ...auth import execute_in_thread
@@ -618,7 +619,10 @@ def _image_insert_requests(image: Image, uri: str, position: int) -> list[dict]:
     return [request, _image_link_request(link_url, position)]
 
 
-_STORABLE_LINK_PREFIXES = ("http://", "https://", "mailto:", "ftp://")
+# RFC 3986: a scheme is case-insensitive and an open registry, so acceptance is
+# structural rather than a list that drops working targets every time a new
+# scheme shows up in a document.
+_STORABLE_LINK_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 
 
 def _storable_link_url(link_url: str | None) -> str | None:
@@ -631,14 +635,20 @@ def _storable_link_url(link_url: str | None) -> str | None:
     LK-12/EP-8 in the Markdown-fidelity baseline (#1120). A scheme-less target is
     therefore not storable: the text stays, the broken link is dropped.
 
+    Any scheme counts, not a fixed list: "HTTPS://...", "tel:", "ftps://",
+    "file://" and app links such as "vscode://" are working links today, so a
+    lowercase allow-list would strip the target from links that do resolve.
+
     "#..." is allowed through because same-document heading anchors are
-    resolved into full URLs by _resolve_heading_anchors before/after this point
-    (#409), and a "#slug" is a working in-doc link, not a relative file path.
+    resolved into full URLs by the _resolve_heading_anchors pass, which runs
+    after the write (#409), and a "#slug" is a working in-doc link, not a
+    relative file path.
     """
     if link_url is None:
         return None
-    if link_url.startswith("#") or link_url.startswith(_STORABLE_LINK_PREFIXES):
-        return link_url
+    url = link_url.strip()
+    if url.startswith("#") or _STORABLE_LINK_SCHEME.match(url):
+        return url
     return None
 
 
