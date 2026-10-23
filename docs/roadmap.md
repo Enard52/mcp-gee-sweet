@@ -385,7 +385,7 @@ Feature set and fill set by the maintainer 2026-10-18, under the release-scoping
 - [ ] Markdown strikethrough (~~text~~) and HTML <del> aren't converted ([#1077](https://github.com/khuisman/mcp-gee-sweet/issues/1077))
 - [ ] get_doc_as_markdown indents a numbered sub-list under a numbered item by only 2 spaces, so it re-imports flat. Found in the 0.9.3 release-QA pass ([#1128](https://github.com/khuisman/mcp-gee-sweet/issues/1128))
 - [ ] search_files/search_spreadsheets/list_spreadsheets miss Shared Drive files under a service account when no folder is given. `wrong/narrow`, observed in the 0.9.3 release-QA pass; v0.9.3's fill is locked ([#1127](https://github.com/khuisman/mcp-gee-sweet/issues/1127))
-- [ ] Loose list items (<li><p>…</p></li>) lose their bullet — lane A, html_parser cluster ([#1111](https://github.com/khuisman/mcp-gee-sweet/issues/1111))
+- [ ] Loose list items (<li><p>…</p></li>) lose their bullet — community PR #1164 (pulled from lane A), html_parser cluster ([#1111](https://github.com/khuisman/mcp-gee-sweet/issues/1111))
 - [ ] Markdown soft line breaks become paragraph breaks — html_parser cluster ([#1093](https://github.com/khuisman/mcp-gee-sweet/issues/1093))
 - [ ] Write side: <br> in a prose paragraph becomes a paragraph break, not a soft break — html_parser cluster ([#1091](https://github.com/khuisman/mcp-gee-sweet/issues/1091))
 - [ ] A fenced code block or second paragraph inside a list item breaks the list — html_parser cluster; fence half may fold into #1112 ([#1094](https://github.com/khuisman/mcp-gee-sweet/issues/1094))
