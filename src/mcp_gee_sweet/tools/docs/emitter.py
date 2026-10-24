@@ -175,6 +175,7 @@ def ast_to_requests(
     """
     if image_uris is None:
         image_uris = {}
+    nodes, separators = _with_quote_separators(nodes)
     text_parts: list[str] = []
     utf16_offset = 0
     segment_meta: list[_SegmentMeta] = []
@@ -326,6 +327,7 @@ def ast_to_requests(
     if full_text:
         requests.append({"insertText": {"location": {"index": start_index}, "text": full_text}})
 
+        spacing = _block_spacing(nodes, separators)
         for seg in segment_meta:
             node = seg.node
             doc_start, doc_end = seg.doc_start, seg.doc_end
@@ -367,6 +369,13 @@ def ast_to_requests(
             # preset's own, so a quote indent set here was lost (#1056).
             if node.blockquote_depth > 0 and not isinstance(node, BulletItem):
                 requests.append(_blockquote_style_request(rng, node.blockquote_depth))
+
+            # Block spacing and quote separators (#1098). A BulletItem's spacing waits for
+            # the bullet pass, like its quote styling above.
+            if id(node) in separators:
+                requests.extend(_collapse_paragraph_requests(rng))
+            elif seg.order in spacing and not isinstance(node, BulletItem):
+                requests.extend(_spacing_requests(rng, *spacing[seg.order]))
 
             # Inline run styles for non-table content (bold, italic, links, font_family, etc.)
             # skip_len skips past any leading nesting tabs and checkbox glyph so run
@@ -493,6 +502,8 @@ def ast_to_requests(
                         rng, seg.node.blockquote_depth, list_level=seg.node.depth
                     )
                 )
+                if seg.order in spacing:
+                    requests.extend(_spacing_requests(rng, *spacing[seg.order]))
 
     # Queue each table's insertTable request into the same positional_inserts pass
     # images use above. Position is adjusted for any nested-bullet leading tabs already
@@ -591,6 +602,137 @@ def _blockquote_style_request(rng: dict, depth: int, list_level: int | None = No
             "fields": "indentStart,indentFirstLine,borderLeft",
         }
     }
+
+
+# Space above and below a code block, and around a quote where it meets other content
+# (#1098). Docs' NORMAL_TEXT has none, so without it a quote or code block touched the
+# paragraphs around it and two code blocks in a row read as one.
+_BLOCK_SPACING_PT = 8
+
+
+def _quoted(node: DocNode) -> bool:
+    return not isinstance(node, Table) and node.blockquote_depth > 0
+
+
+def _has_named_spacing(node: DocNode) -> bool:
+    """Whether the emitter gives `node` a named style with spacing of its own."""
+    if isinstance(node, Heading):
+        return True
+    return isinstance(node, NamedBlock) and node.style_type != "NORMAL_TEXT"
+
+
+def _with_quote_separators(nodes: list[DocNode]) -> tuple[list[DocNode], set[int]]:
+    """Return `nodes` with an empty separator Paragraph between each two adjacent quoted
+    nodes that belong to separate quotes, plus the separators' ids.
+
+    Docs joins the left borders of adjacent paragraphs with the same border and indents
+    into one bar, whatever their spacing, so two quotes in a row rendered as one (#1098).
+    Only an unbordered (or differently indented) paragraph between them breaks the join,
+    confirmed live; a slightly different border color or width doesn't. Two nodes are in
+    one quote when one's blockquote_path is a prefix of the other's (see ast.py). The
+    separator is unquoted even between two quotes nested in one outer quote: given the
+    outer quote's border, its near-zero height left a stray dash of that bar (confirmed
+    live), and the outer bar is already broken around the deeper-indented nested ones.
+    _collapse_paragraph_requests shrinks it.
+    """
+    result: list[DocNode] = []
+    separators: set[int] = set()
+    prev: DocNode | None = None
+    for node in nodes:
+        if prev is not None and _quoted(prev) and _quoted(node):
+            a, b = prev.blockquote_path, node.blockquote_path
+            if a[: len(b)] != b and b[: len(a)] != a:
+                separator = Paragraph(runs=[])
+                result.append(separator)
+                separators.add(id(separator))
+        result.append(node)
+        prev = node
+    return result, separators
+
+
+def _block_spacing(nodes: list[DocNode], separators: set[int]) -> dict[int, tuple[int, int]]:
+    """Map a node's index in `nodes` to the (spaceAbove, spaceBelow) it needs (#1098):
+    a code block gets both, and a quoted node gets space on each side where its quote
+    meets content outside it (an unquoted node, a table, or the edge). Nodes inside one
+    quote get none between them, so the quote stays one block.
+
+    A separator gets space on one side only, below the quote before it: spaced on both,
+    two quotes sat twice as far apart as a quote and a paragraph (PR #1199 QA round 1).
+    A Heading or a TITLE/SUBTITLE NamedBlock gets no quote-edge space: an explicit
+    value would replace its named style's own spacing (HEADING_1's 20pt above, say)."""
+
+    def outside_quote(i: int, *, count_separator: bool) -> bool:
+        if i < 0 or i >= len(nodes):
+            return True
+        if id(nodes[i]) in separators:
+            return count_separator
+        return not _quoted(nodes[i])
+
+    spacing: dict[int, tuple[int, int]] = {}
+    for i, node in enumerate(nodes):
+        if isinstance(node, Table) or id(node) in separators:
+            continue
+        above = below = 0
+        if _is_code_paragraph(node):
+            above = below = _BLOCK_SPACING_PT
+        if _quoted(node) and not _has_named_spacing(node):
+            if outside_quote(i - 1, count_separator=False):
+                above = _BLOCK_SPACING_PT
+            if outside_quote(i + 1, count_separator=True):
+                below = _BLOCK_SPACING_PT
+        if above or below:
+            spacing[i] = (above, below)
+    return spacing
+
+
+def _spacing_requests(rng: dict, above: int, below: int) -> list[dict]:
+    """spaceAbove on the first paragraph of a node's range and spaceBelow on its last.
+    A node whose text holds a "\\n" becomes several Docs paragraphs (#1093); spacing the
+    whole range put a gap inside it (confirmed live)."""
+    start, end = rng["startIndex"], rng["endIndex"]
+    requests = []
+    for field, magnitude, sub_range in (
+        ("spaceAbove", above, {"startIndex": start, "endIndex": start + 1}),
+        ("spaceBelow", below, {"startIndex": end - 1, "endIndex": end}),
+    ):
+        if magnitude:
+            requests.append(
+                {
+                    "updateParagraphStyle": {
+                        "range": sub_range,
+                        "paragraphStyle": {field: {"magnitude": magnitude, "unit": "PT"}},
+                        "fields": field,
+                    }
+                }
+            )
+    return requests
+
+
+def _collapse_paragraph_requests(rng: dict) -> list[dict]:
+    """Shrink an empty paragraph to near-zero height: no spacing, 1% line spacing, 1pt
+    font. Shared by the quote separators (#1098) and the blank paragraph before a
+    table."""
+    paragraph_style = {
+        "spaceAbove": {"magnitude": 0, "unit": "PT"},
+        "spaceBelow": {"magnitude": 0, "unit": "PT"},
+        "lineSpacing": 1,
+    }
+    return [
+        {
+            "updateParagraphStyle": {
+                "range": rng,
+                "paragraphStyle": paragraph_style,
+                "fields": ",".join(paragraph_style),
+            }
+        },
+        {
+            "updateTextStyle": {
+                "range": rng,
+                "textStyle": {"fontSize": {"magnitude": 1, "unit": "PT"}},
+                "fields": "fontSize",
+            }
+        },
+    ]
 
 
 def _image_insert_requests(image: Image, uri: str, position: int) -> list[dict]:
@@ -1478,16 +1620,17 @@ def _build_width_requests(live_doc: dict, ast_tables: list[Table]) -> list[dict]
 
 
 def _build_blank_para_before_table_collapses(live_doc: dict) -> list[dict]:
-    """Return updateParagraphStyle + updateTextStyle requests that collapse empty paragraphs
-    immediately before tables to zero visual height.
+    """Return requests that reset empty paragraphs immediately before tables to a plain
+    paragraph and collapse them to zero visual height.
 
     Phase-1 insertText displaces the doc's initial empty paragraph, leaving a blank line
     stranded between the preceding content and the table.  deleteContentRange is rejected by
     the Docs API for these paragraphs (a paragraph before a table is structurally required),
     so we shrink them instead: spaceAbove/Below = 0, lineSpacing = 1 (1% of normal),
     fontSize = 1 pt, namedStyleType = NORMAL_TEXT (the displaced paragraph inherits the
-    preceding heading's style, #1092).  Only paragraphs whose sole content is a newline are
-    affected.
+    preceding heading's style, #1092), no bullet and no indent or border (see below).  Only
+    paragraphs whose sole content is a newline are affected, and one sitting between two
+    tables is reset but keeps its height (#1098).
     """
     content = live_doc.get("body", {}).get("content", [])
     requests: list[dict] = []
@@ -1507,29 +1650,27 @@ def _build_blank_para_before_table_collapses(live_doc: dict) -> list[dict]:
         if start is None or end is None:
             continue
         rng = {"startIndex": start, "endIndex": end}
+        # insertTable gives the paragraph it adds the style of the paragraph at the
+        # insertion point, the block after the table (#1097): a following list's bullet
+        # (a visible empty item, and the list numbered from 2 or 3), a following quote's
+        # indent and border. Reset all of it. deleteParagraphBullets adds indent to keep
+        # a paragraph's visual level, so the indent reset must come after it.
+        requests.append({"deleteParagraphBullets": {"range": rng}})
         requests.append(
             {
                 "updateParagraphStyle": {
                     "range": rng,
-                    "paragraphStyle": {
-                        "spaceAbove": {"magnitude": 0, "unit": "PT"},
-                        "spaceBelow": {"magnitude": 0, "unit": "PT"},
-                        "lineSpacing": 1,
-                        "namedStyleType": "NORMAL_TEXT",
-                    },
-                    "fields": "spaceAbove,spaceBelow,lineSpacing,namedStyleType",
+                    # Named in fields but absent from paragraphStyle: reset to default.
+                    "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                    "fields": "namedStyleType,indentStart,indentFirstLine,borderLeft",
                 }
             }
         )
-        requests.append(
-            {
-                "updateTextStyle": {
-                    "range": rng,
-                    "textStyle": {"fontSize": {"magnitude": 1, "unit": "PT"}},
-                    "fields": "fontSize",
-                }
-            }
-        )
+        if i >= 2 and "table" in content[i - 2]:
+            # The only thing between two tables: collapsed, the tables touched and read
+            # as one (#1098). Left at full height, it's the blank line between them.
+            continue
+        requests.extend(_collapse_paragraph_requests(rng))
     return requests
 
 
