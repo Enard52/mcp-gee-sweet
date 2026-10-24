@@ -126,6 +126,14 @@ Friction Dev (Ash/Jay) typically hits after finishing a ticket, and where it goe
 
 - **Before widening a fix into files outside the ticket's original scope, check open PRs touching those files.** PR #1006, round 3: #1008's bar-2 rule pulled #1009 into the PR, and the fix grew to all 13 quota-error sites across `transfer.py`, `files.py`, `docs/content.py` and `docs/images.py`. PR #1011 (#916, lane A) was open at the same time, rewriting the same sites' quota check into `tools/http_errors.is_storage_quota_error`. It even showed up in this session's TC-ID collision check against `drive_transfer.md`, but nobody looked at its other files. #1011 merged first. #1006 went CONFLICTING in four files, CI skipped "Lint and test", and the merge had to be redone onto #916's helper, dropping this PR's own `_is_quota_error`. One `gh pr list ... files` check before writing the cross-cutting change would have surfaced the overlap while it was cheap to agree on one predicate.
 
+### Step 5: a reviewer-caught TC-ID collision is merged, not rebased (2026-10-18)
+
+- PR #1089 (#1056) added TC-DOC228 after step 5's checks found no open PR touching `docs_content.md`. #1088, opened in the window before #1089 itself was, also added a TC-DOC228 and merged first, so #1089 went CONFLICTING in round 2. Step 5's reviewer-caught bullet said to rebase onto `develop` and force-push. That contradicts "Never rebase" in the non-fast-forward bullet: the branch already carried two of Kit's Result commits. Jay merged `develop` instead, kept #1088's case at TC-DOC228, and renumbered its own to TC-DOC229 with Kit's results moved under it. The bullet now says to merge, and which side keeps the number. Its pointer to `aziz.md`'s playbook went too: that playbook rebases, which only fits a branch nobody else has pushed to.
+
+### Step 6: every GitHub post's full text is shown before it's sent (2026-10-18)
+
+- On PR #1089, the PR body, follow-up ticket #1090 and the round-2 reply were each "previewed" as a path to a draft file, so the user approved text they'd have had to open themselves. #1111 was filed straight from "make a new ticket" without its body ever being shown, then edited twice the same way. The user's global `CLAUDE.md`, loaded in every session, already requires a preview of the full title, body and destination plus explicit permission before any external post, and memory adds that the full draft belongs in the first ask so one answer covers it. Neither says that a path to a draft file isn't a preview, which is the case that was missed. Step 6 now says it directly, carries the one-approval point, and covers every later post and edit on the ticket.
+
 ## `qa.md`
 
 ### Opening paragraph: dedicated server and reconnect
@@ -446,6 +454,22 @@ Friction Kai typically hits during coordination, and where it goes — see `/ret
 - **The README check covered images only.** Before tagging v0.9.2 (2026-10-17), the user asked whether anyone had checked docs links and media. `release.md` step 4's check, added after #706, passed: both images were absolute. But four repo-relative links (`CONTRIBUTING.md`, `docs/qa/runs`, `docs/qa/README.md`, `LICENSE`) would have 404'd on the PyPI page, which can't be changed after publish. They were caught by hand and fixed in PR #1063 (#1062) before the `main` merge. `release.md` now checks every link and image, and runs the check in step 1 on `develop`, where a fix is one PR. Step 4 keeps it as the backstop on `main`.
 - **Aziz's sign-off PR had no label path.** PR #1051 carried no `qa-approved`, and nobody is assigned to add one: Aziz has no QA partner, and it doesn't touch `src/`. `kai.md` said not to merge without the label, and `merge-pr.md` step 2 only requires it on lane branches. Kai asked the user, who approved. `kai.md` now says the user's go-ahead is the approval, recorded by Kai applying the label.
 - **The merge-back fast-forwarded.** Nothing landed on `develop` between the release PR merge and step 8, so `git merge origin/main` fast-forwarded with no merge commit. `git describe --tags origin/develop` printed exactly `v0.9.2`, which step 9's example (`vX.Y.Z-N-g<hash>`) didn't cover. `release.md` steps 8–10 now name that case as correct.
+
+### v0.9.3 release coordination cost
+
+Moved from `kai.md`'s "Coordinating sessions" and Release scoping rule 2 when PR #1159 added them (Bob's round 1 review).
+
+- **The rules came from the v0.9.3 release (2026-10-20/21):** five `/clear`s, four relaunches, and about 40 Kai hand-offs for two advisories and two small tickets.
+- **Send a promised hand-off:** in v0.9.3 a QA session that bootstrapped with no brief picked an already-approved PR and wasted its session.
+- **One ticket per session limits a session, not a lane:** in v0.9.3 #1124 waited about 25 hours behind #1052 and then took 12 minutes, and a "won't collide" claim made from memory was wrong.
+- **Release scoping rule 2's single summary:** v0.9.3 took five additions after its lock through one-line approvals.
+- **The rubric's trust-boundary definition of data exposure** came after GHSA-8jqx.
+
+### v0.9.4 hotfix: a cherry-pick routed through three roles
+
+- **The v0.9.4 hotfix (2026-10-22) shipped community PR #1161's Pillow 13 change from the v0.9.3 tag.** Kai filed the backport as a lane-A ticket (#1169), and planned Ash to port it, Sky to QA it, and Aziz to sign off. The maintainer first switched it to a cherry-pick ("cherry pick, don't recreate"), then ruled the hand-offs unnecessary: "I don't believe a cherry-pick is an authorship", "ash and sky were entirely unnecessary. You could have done it." Ash also ran the full Dev process (checklist, self-review, local full pytest) on the cherry-pick until Kai trimmed it. Hence `release.md` §"Hotfix from the last tag" and the `kai.md` line that a release cherry-pick isn't ticket implementation.
+- **The displaced feature set.** Kai first proposed relabelling the old v0.9.4 work `v0.9.5`, a number for a version no longer in flight. The maintainer pointed back at the naming rule, and it was queued as `planned: ornithomimus`. Hence the `kai.md` Release scoping bullet on a displaced version.
+- **Auto mode refused three release steps:** removing a required check from `develop`'s branch protection, a read-only `gh release view v0.9.1`, and a bulk `git branch -D`. Each went back to the maintainer. The MCP registry token had also expired, so the registry publish failed with a 401 after PyPI already had the release. Hence `release.md`'s two up-front preconditions.
 
 ## `bob.md`
 
