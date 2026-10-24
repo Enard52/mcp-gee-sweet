@@ -22,9 +22,19 @@ class _PendingTable:
     append to only one or two of without anything enforcing equal length."""
 
     node: Table
-    position: int  # doc index where this table starts, before tab-consumption adjustment
+    position: int  # its placeholder paragraph's doc index, before tab-consumption adjustment
     tab_offset: int  # cumulative synthetic bullet-tabs consumed ahead of it by insertTable time
     order: int  # index in the top-level node list; breaks same-position ties (see below)
+    rows: int  # the insertTable grid, computed once: the placeholder delete depends on it
+    columns: int
+
+
+def _inserted_table_length(rows: int, columns: int) -> int:
+    """Indices an insertTable request adds: the newline it puts in front of the table,
+    plus the table element, which spans 2 + rows * (1 + 2 * columns) (a start index,
+    one per row, two per cell for the cell and its empty paragraph, and an end index).
+    Confirmed live for 2x2 (13) and 2x3 (17) (#1097)."""
+    return 1 + 2 + rows * (1 + 2 * columns)
 
 
 @dataclass
@@ -199,8 +209,19 @@ def ast_to_requests(
                 # doc, and a table with no insertTable request never shows up there.
                 continue
             pending_tables.append(
-                _PendingTable(node, start_index + utf16_offset, cumulative_tabs, order)
+                _PendingTable(
+                    node, start_index + utf16_offset, cumulative_tabs, order, num_rows, num_cols
+                )
             )
+            # A placeholder paragraph to insert the table at, deleted right after it
+            # (#1097). insertTable gives the table and its empty cells the style at the
+            # insertion point: inserted at the next block, a list or quote indented the
+            # table (an indent the API can't reset afterward) and that block's first
+            # character's text style (bold, Courier New, a heading's color) went into
+            # every cell. The placeholder is reset to plain after the bullet pass (below),
+            # so the table starts plain.
+            text_parts.append("\n")
+            utf16_offset += 1
         else:
             doc_start = start_index + utf16_offset
             # Leading tab characters encode a bullet's nesting depth for
@@ -505,15 +526,29 @@ def ast_to_requests(
                 if seg.order in spacing:
                     requests.extend(_spacing_requests(rng, *spacing[seg.order]))
 
+        # Each table's placeholder, reset to plain after the bullet pass, since a table
+        # between two same-preset list items sits inside their one createParagraphBullets
+        # range (the run skips Table nodes, so both items stay one list). Mapped through
+        # _after_bullet_pass like the inserts below.
+        for pending in pending_tables:
+            position = _after_bullet_pass(pending.position, pending.tab_offset)
+            requests.extend(_table_placeholder_requests(position, pending.node.blockquote_depth))
+
     # Queue each table's insertTable request into the same positional_inserts pass
     # images use above. Position is adjusted for any nested-bullet leading tabs already
     # consumed ahead of it (those requests precede this combined pass in the array, so by
     # the time it runs, that many characters have already been removed from in front of
     # this table).
+    #
+    # The table goes in at its placeholder, which insertTable pushes to just after the
+    # table; the deleteContentRange right after removes it. Everything later in the doc
+    # was inserted earlier in this descending pass, so the delete shifts nothing still
+    # to come. content.py's _positional_insert_tail_start counts the delete as part of
+    # this pass by its position right after an insertTable.
     for pending in pending_tables:
-        num_rows = len(pending.node.rows)
-        num_cols = max((sum(c.colspan for c in row.cells) for row in pending.node.rows), default=0)
+        num_rows, num_cols = pending.rows, pending.columns
         position = _after_bullet_pass(pending.position, pending.tab_offset)
+        placeholder_after = position + _inserted_table_length(num_rows, num_cols)
         positional_inserts.append(
             (
                 (position, pending.order, 0),
@@ -524,7 +559,15 @@ def ast_to_requests(
                             "columns": num_cols,
                             "location": {"index": position},
                         }
-                    }
+                    },
+                    {
+                        "deleteContentRange": {
+                            "range": {
+                                "startIndex": placeholder_after,
+                                "endIndex": placeholder_after + 1,
+                            }
+                        }
+                    },
                 ],
             )
         )
@@ -732,6 +775,33 @@ def _collapse_paragraph_requests(rng: dict) -> list[dict]:
                 "fields": "fontSize",
             }
         },
+    ]
+
+
+def _table_placeholder_requests(position: int, blockquote_depth: int) -> list[dict]:
+    """Reset a table's placeholder paragraph (#1097) to plain before its insertTable,
+    since the table takes its indent and every empty cell its text style. Plain means
+    no bullet (a table between two list items sits inside their bullet range), every
+    paragraph field at its default (`*`: the doc's surviving final paragraph mark can
+    carry a heading's style into new content), and no text style. A table inside a
+    quote keeps the quote's indent, with no border, which a table doesn't take.
+    Bullets go first: deleteParagraphBullets adds indent, which the reset clears."""
+    rng = {"startIndex": position, "endIndex": position + 1}
+    paragraph_style: dict = {"namedStyleType": "NORMAL_TEXT"}
+    if blockquote_depth > 0:
+        indent = {"magnitude": _BLOCKQUOTE_INDENT_PT_PER_LEVEL * blockquote_depth, "unit": "PT"}
+        paragraph_style["indentStart"] = indent
+        paragraph_style["indentFirstLine"] = indent
+    return [
+        {"deleteParagraphBullets": {"range": rng}},
+        {
+            "updateParagraphStyle": {
+                "range": rng,
+                "paragraphStyle": paragraph_style,
+                "fields": "*",
+            }
+        },
+        {"updateTextStyle": {"range": rng, "textStyle": {}, "fields": "*"}},
     ]
 
 
@@ -1651,10 +1721,11 @@ def _build_blank_para_before_table_collapses(live_doc: dict) -> list[dict]:
             continue
         rng = {"startIndex": start, "endIndex": end}
         # insertTable gives the paragraph it adds the style of the paragraph at the
-        # insertion point, the block after the table (#1097): a following list's bullet
-        # (a visible empty item, and the list numbered from 2 or 3), a following quote's
-        # indent and border. Reset all of it. deleteParagraphBullets adds indent to keep
-        # a paragraph's visual level, so the indent reset must come after it.
+        # insertion point. That's the table's plain placeholder now (#1097), but before
+        # it was the block after the table: a following list's bullet (a visible empty
+        # item, and the list numbered from 2 or 3), a following quote's indent and
+        # border. Reset all of it anyway, as a backstop. deleteParagraphBullets adds
+        # indent to keep a paragraph's visual level, so the indent reset must come after.
         requests.append({"deleteParagraphBullets": {"range": rng}})
         requests.append(
             {
