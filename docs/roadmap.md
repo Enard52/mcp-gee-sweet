@@ -432,7 +432,7 @@ Feature set and fill set by the maintainer 2026-10-18, under the release-scoping
 **Feature set: Gmail sending safety**
 
 - [ ] Safe-by-default sending: `send_message`/`reply_to_message`/`send_draft` don't deliver without explicit confirmation (drafts-first or elicitation), flag external-domain and over-threshold recipients, documented opt-out. Behavior change, needs a `CHANGELOG.md` note. **Held from lanes** until a review of existing practice settles the mechanism, thresholds and opt-out ([#1081](https://github.com/khuisman/mcp-gee-sweet/issues/1081))
-- [ ] Gmail: list, get, update and delete drafts, so a drafts-first flow can be managed end to end. Added 2026-10-24 ([#1205](https://github.com/khuisman/mcp-gee-sweet/issues/1205))
+- [x] Gmail: list, get, update and delete drafts, so a drafts-first flow can be managed end to end. Added 2026-10-24 ([#1205](https://github.com/khuisman/mcp-gee-sweet/issues/1205)) (PR #1227)
 
 **Feature set: launch readiness**
 
