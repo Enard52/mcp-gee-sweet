@@ -380,7 +380,7 @@ Security hotfix cut from the v0.9.3 tag, with nothing else from `develop` (maint
 
 Security hotfix cut from the v0.9.4 tag, with nothing else from `develop` (maintainer decision 2026-10-24). The eMudhra/emSign CA incident makes any certifi older than `2026.10.19` trust forgeable TLS chains. v0.9.4's lock pins `2026.5.20`, and `pyproject.toml` sets no minimum. The fix lands on `develop` first, then is cherry-picked onto the tag (`release.md` §"Hotfix from the last tag").
 
-- [ ] Require `certifi>=2026.10.19` and ship it as the v0.9.5 hotfix. `severe/narrow` — lane A, after #1069 ([#1217](https://github.com/khuisman/mcp-gee-sweet/issues/1217))
+- [x] Require `certifi>=2026.10.19` and ship it as the v0.9.5 hotfix. `severe/narrow` — lane A, after #1069 ([#1217](https://github.com/khuisman/mcp-gee-sweet/issues/1217)) (PR #1218; shipped in v0.9.5 via PR #1219)
 
 ### ornithomimus — launch release: Markdown fidelity, Gmail sending safety, launch readiness _(queued, label [`planned: ornithomimus`](https://github.com/khuisman/mcp-gee-sweet/issues?q=is%3Aissue+label%3A%22planned%3A+ornithomimus%22); gets a number when it goes in flight)_
 
