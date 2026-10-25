@@ -5,6 +5,7 @@ import io
 import json
 import threading
 from functools import partial
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import anyio
@@ -2111,6 +2112,166 @@ class TestCreateDocImages:
         result = await _docs_tools["create_doc"](title="Doc", content="<p>plain</p>", ctx=ctx)
         assert "images" not in result
 
+    # #1073: a one-row, two-cell table after a "x" paragraph, as documents().get()
+    # returns it once phase 1 has inserted the table shell.
+    _CELL_IMAGE_HTML = (
+        '<p>x</p><table><tr><td>Logo</td><td><img src="{uri}"> after</td></tr></table>'
+    )
+    _CELL_IMAGE_LIVE_DOC: ClassVar[dict] = {
+        "body": {
+            "content": [
+                {
+                    "startIndex": 1,
+                    "endIndex": 3,
+                    "paragraph": {"elements": [{"textRun": {"content": "x\n"}}]},
+                },
+                {
+                    "startIndex": 3,
+                    "table": {
+                        "tableRows": [
+                            {
+                                "tableCells": [
+                                    {"startIndex": 5, "content": [{"startIndex": 6}]},
+                                    {"startIndex": 8, "content": [{"startIndex": 9}]},
+                                ]
+                            }
+                        ]
+                    },
+                },
+            ]
+        }
+    }
+
+    def _fill_batches(self, docs_svc) -> list[list[dict]]:
+        return [
+            c.kwargs["body"]["requests"]
+            for c in docs_svc.documents.return_value.batchUpdate.call_args_list
+            if any(
+                r.get("insertText", {}).get("text") == "Logo" for r in c.kwargs["body"]["requests"]
+            )
+        ]
+
+    async def test_table_cell_image_embedded_in_its_cell(self):
+        drive_svc, docs_svc = self._make_services()
+        docs_svc.documents.return_value.get.return_value.execute.return_value = (
+            self._CELL_IMAGE_LIVE_DOC
+        )
+        uri = "https://example.com/cell.png"
+        ctx = self._ctx(drive_svc, docs_svc)
+        result = await _docs_tools["create_doc"](
+            title="Doc", content=self._CELL_IMAGE_HTML.format(uri=uri), ctx=ctx
+        )
+        assert result["images"] == [{"src": uri}]
+        [fill] = self._fill_batches(docs_svc)
+        inserts = [r["insertInlineImage"] for r in fill if "insertInlineImage" in r]
+        # The second cell's paragraph starts at 9; the image goes before " after".
+        assert inserts == [{"uri": uri, "location": {"index": 9}}]
+        assert {"insertText": {"location": {"index": 9}, "text": " after"}} in fill
+
+    async def test_unfetchable_table_cell_image_dropped_and_reported(self):
+        # One bad cell image must not lose the whole table fill: the batch is
+        # retried without it, and the image's own entry says why.
+        drive_svc, docs_svc = self._make_services()
+        docs_svc.documents.return_value.get.return_value.execute.return_value = (
+            self._CELL_IMAGE_LIVE_DOC
+        )
+        bad_uri = "https://example.com/bad.png"
+        docs_svc.documents.return_value.batchUpdate.side_effect = self._fail_first_matching(
+            {bad_uri}
+        )
+        ctx = self._ctx(drive_svc, docs_svc)
+        result = await _docs_tools["create_doc"](
+            title="Doc", content=self._CELL_IMAGE_HTML.format(uri=bad_uri), ctx=ctx
+        )
+        assert "error" not in result
+        [entry] = result["images"]
+        assert "doc edit failed" in entry["error"]
+        assert "There was a problem retrieving the image" in entry["error"]
+        failed, retry = self._fill_batches(docs_svc)
+        assert retry == [r for r in failed if "insertInlineImage" not in r]
+        assert any("insertText" in r for r in retry)
+
+    async def test_partial_split_then_other_failure_reports_unplaced_cell_images(self):
+        # PR #1215 QA round 2: after a split, the head of the fill batch has landed; if
+        # the rest then fails for a non-image reason, an image in it must not read as
+        # embedded in the DocEditError's outcome list.
+        drive_svc, docs_svc = self._make_services()
+        docs_svc.documents.return_value.get.return_value.execute.return_value = (
+            self._CELL_IMAGE_LIVE_DOC
+        )
+        good, bad_b, bad_c = (f"https://example.com/{n}.png" for n in ("a", "b", "c"))
+        html = (
+            f'<p>x</p><table><tr><td><img src="{good}">Logo<img src="{bad_b}"></td>'
+            f'<td><img src="{bad_c}"> after</td></tr></table>'
+        )
+
+        def batchupdate_side_effect(documentId, body):
+            m = MagicMock()
+            uris = [r.get("insertInlineImage", {}).get("uri") for r in body["requests"]]
+            bad_index = next((i for i, u in enumerate(uris) if u in (bad_b, bad_c)), None)
+            if bad_index is not None:
+                m.execute.side_effect = self._insert_image_http_error(bad_index)
+            elif uris == [good]:
+                # The tail left after the split: a server error, not an image one.
+                resp = MagicMock()
+                resp.status = 500
+                m.execute.side_effect = HttpError(resp=resp, content=b"{}", uri="x")
+            else:
+                m.execute.return_value = {}
+            return m
+
+        docs_svc.documents.return_value.batchUpdate.side_effect = batchupdate_side_effect
+        ctx = self._ctx(drive_svc, docs_svc)
+        result = await _docs_tools["create_doc"](title="Doc", content=html, ctx=ctx)
+
+        assert "error" in result
+        outcomes = {o["src"]: o for o in result["images"]}
+        assert outcomes[good]["error"] == ("not embedded: the doc edit failed before it was placed")
+        assert outcomes[bad_b]["error"].startswith("doc edit failed:")
+        assert outcomes[bad_c]["error"].startswith("doc edit failed:")
+
+    async def test_body_batch_failure_reports_cell_images_as_unplaced(self):
+        # PR #1215 QA round 3: a failure before the fill (here the phase-1 batch, which
+        # inserts the table shell) must not leave cell images reading as embedded.
+        drive_svc, docs_svc = self._make_services()
+        uri = "https://example.com/cell.png"
+
+        def batchupdate_side_effect(documentId, body):
+            m = MagicMock()
+            if any("insertTable" in r for r in body["requests"]):
+                resp = MagicMock()
+                resp.status = 500
+                m.execute.side_effect = HttpError(resp=resp, content=b"{}", uri="x")
+            else:
+                m.execute.return_value = {}
+            return m
+
+        docs_svc.documents.return_value.batchUpdate.side_effect = batchupdate_side_effect
+        ctx = self._ctx(drive_svc, docs_svc)
+        result = await _docs_tools["create_doc"](
+            title="Doc", content=self._CELL_IMAGE_HTML.format(uri=uri), ctx=ctx
+        )
+        assert "error" in result
+        assert result["images"] == [
+            {"src": uri, "error": "not embedded: the doc edit failed before it was placed"}
+        ]
+
+    async def test_cell_image_the_fill_never_placed_is_reported(self):
+        # PR #1215 QA round 1: a resolved cell image whose cell the fill can't locate
+        # gets no insert, and must not read as embedded.
+        drive_svc, docs_svc = self._make_services()
+        live_doc = json.loads(json.dumps(self._CELL_IMAGE_LIVE_DOC))
+        live_doc["body"]["content"][1]["table"]["tableRows"][0]["tableCells"][1]["content"] = []
+        docs_svc.documents.return_value.get.return_value.execute.return_value = live_doc
+        uri = "https://example.com/cell.png"
+        ctx = self._ctx(drive_svc, docs_svc)
+        result = await _docs_tools["create_doc"](
+            title="Doc", content=self._CELL_IMAGE_HTML.format(uri=uri), ctx=ctx
+        )
+        assert result["images"] == [
+            {"src": uri, "error": "not embedded: its table cell wasn't found in the document"}
+        ]
+
     def _insert_image_http_error(self, index: int) -> HttpError:
         resp = MagicMock()
         resp.status = 400
@@ -3089,6 +3250,11 @@ class TestHasPendingAnchorLinks:
         inner = self._table_with_link("#nested-slug")
         outer = Table(rows=[Row(cells=[Cell(children=[inner])])])
         assert _has_pending_anchor_links([], [outer]) is True
+
+    def test_true_for_table_cell_image_anchor_link(self):
+        # #1073: a cell image's link goes in through the fill too.
+        table = Table(rows=[Row(cells=[Cell(children=[Image(src="a", link_url="#slug")])])])
+        assert _has_pending_anchor_links([], [table]) is True
 
 
 class TestResolveHeadingAnchorsHelper:

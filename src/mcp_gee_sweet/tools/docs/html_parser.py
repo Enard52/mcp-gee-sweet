@@ -70,6 +70,18 @@ def _is_formatting_whitespace(text: str) -> bool:
     return text != "" and all(c in _ASCII_FORMATTING_WHITESPACE for c in text)
 
 
+def _without_line_break_edge(text: str, *, leading: bool) -> str:
+    """`text` without its leading (or trailing) run of ASCII formatting whitespace, when
+    that run holds a line break; unchanged otherwise."""
+    stripped = (
+        text.lstrip(_ASCII_FORMATTING_WHITESPACE)
+        if leading
+        else text.rstrip(_ASCII_FORMATTING_WHITESPACE)
+    )
+    edge = text[: len(text) - len(stripped)] if leading else text[len(stripped) :]
+    return stripped if "\n" in edge else text
+
+
 def _is_resumed_authored_whitespace(resumed: bool, runs: list[Run | Image], raw_text: str) -> bool:
     """True when a resumed block's segment is non-empty and its full,
     unstripped text is whitespace-only per str.strip() but not made up
@@ -234,6 +246,13 @@ class _AstParser(HTMLParser):
         # --- table context ---
         self._table_depth = 0
         self._table_stack: list[_TableBuilder] = []
+        # Line-break whitespace at the end of a table cell's text so far (#1073 QA):
+        # see handle_data. Held as runs with the style and link it was typed under,
+        # written once more content follows in the same segment of the cell, and
+        # dropped if the segment ends first.
+        self._cell_held_runs: list[Run] = []
+        # Open <pre> tags inside a table cell, whose whitespace is never trimmed.
+        self._cell_pre_depth = 0
 
         # --- named block style (data-style on <p>) ---
         self._block_named_style: str | None = None
@@ -613,6 +632,7 @@ class _AstParser(HTMLParser):
                 # this point must be flushed now and attached to the outer cell —
                 # otherwise it bleeds into the nested table's own first cell (#108).
                 self._table_stack[-1].append_runs(self._flush_pending_runs())
+                self._cell_held_runs = []
             self._table_depth += 1
             self._table_stack.append(_TableBuilder())
             return
@@ -642,6 +662,8 @@ class _AstParser(HTMLParser):
                 tb.start_cell(
                     colspan=colspan, rowspan=rowspan, is_header=is_header, width_pt=width_pt
                 )
+                self._cell_held_runs = []
+                self._cell_pre_depth = 0
                 # If it's a header cell, pre-activate bold
                 if is_header:
                     self._bold_depth += 1
@@ -739,6 +761,7 @@ class _AstParser(HTMLParser):
         if self._block_tag or (
             self._table_depth >= 1 and self._table_stack and self._table_stack[-1].in_cell
         ):
+            self._release_cell_whitespace()
             self._flush_run()
             if tag in _INLINE_BOLD:
                 self._bold_depth += 1
@@ -755,27 +778,25 @@ class _AstParser(HTMLParser):
                 self._anchor_pushes.append("block" if href else None)
             elif tag == "code" and not self._in_pre:
                 self._code_depth += 1
+            elif tag == "pre":
+                # Only reachable in a table cell: a body <pre> is handled above.
+                self._cell_pre_depth += 1
             elif tag == "br":
                 self._run_buf.append("\n")
-            elif tag == "img" and self._block_tag and not self._in_pre:
-                # Supported (#333) only at body level (self._block_tag truthy) —
-                # NOT inside a table cell (self._block_tag is always None there,
-                # so this branch can't fire for cell content) and not inside
-                # <pre>, where an embedded image makes no sense. Table-cell
-                # images remain a documented, deliberately out-of-scope gap
-                # (tracked as a follow-up) and fall through unchanged to the
-                # existing silent-no-op behavior any other unsupported tag
-                # already gets in a cell.
+            elif tag == "img" and not self._in_pre:
+                # In an open block (#333) or a table cell (#1073), where it joins the
+                # cell's children in source order; never inside <pre>, where an
+                # embedded image makes no sense.
                 src = attr_dict.get("src")
                 if src:
                     self._pending_runs.append(
                         _make_image(attr_dict, src, self._link_url[-1] if self._link_url else None)
                     )
-                else:
+                elif self._block_tag:
                     self._block_had_unsupported_content = True
             elif self._block_tag:
                 # Anything else reaching this fallthrough (a bare <hr> inside
-                # a block, an <img> inside a table cell or <pre>, or any
+                # a block, an <img> inside <pre>, or any
                 # other tag this parser doesn't specially recognize) is
                 # silently dropped rather than contributing a run — see
                 # self._block_had_unsupported_content.
@@ -789,6 +810,8 @@ class _AstParser(HTMLParser):
     def handle_endtag(self, tag):
         # --- table structure ---
         if tag == "table":
+            # A cell left open has no </td> to drop what it held.
+            self._cell_held_runs = []
             if self._table_stack:
                 tb = self._table_stack.pop()
                 node = tb.build()
@@ -811,6 +834,8 @@ class _AstParser(HTMLParser):
             if tag in ("td", "th"):
                 is_header = tag == "th"
                 runs = self._flush_pending_runs()
+                self._cell_held_runs = []
+                self._cell_pre_depth = 0
                 if is_header:
                     self._bold_depth -= 1
                 tb.end_cell(runs)
@@ -953,8 +978,27 @@ class _AstParser(HTMLParser):
                 self._close_anchor()
             elif tag == "code" and not self._in_pre:
                 self._code_depth = max(0, self._code_depth - 1)
+            elif tag == "pre":
+                self._cell_pre_depth = max(0, self._cell_pre_depth - 1)
         elif tag == "a":
             self._close_anchor()
+
+    def _release_cell_whitespace(self):
+        """Write held cell whitespace (see handle_data) ahead of the content about to
+        be added, as the runs it was held as."""
+        if self._cell_held_runs:
+            self._flush_run()
+            self._pending_runs.extend(self._cell_held_runs)
+            self._cell_held_runs = []
+
+    def _hold_cell_whitespace(self, text: str):
+        """Hold `text` as a run with the current style and link (see handle_data)."""
+        self._flush_run()
+        self._run_buf.append(text)
+        self._flush_run()
+        held = self._pending_runs.pop()
+        assert isinstance(held, Run)  # _flush_run just made it from non-empty text
+        self._cell_held_runs.append(held)
 
     def _close_anchor(self):
         """Pop whatever href the matching <a> start tag pushed, and nothing
@@ -971,8 +1015,25 @@ class _AstParser(HTMLParser):
         # Table-cell text and open-block text are independent triggers that happen
         # to be buffered the same way today; kept as separate branches so either
         # can diverge without first untangling a merged condition (#638).
-        if self._table_depth >= 1 and self._table_stack and self._table_stack[-1].in_cell:  # noqa: SIM114
-            self._run_buf.append(data)
+        if self._table_depth >= 1 and self._table_stack and self._table_stack[-1].in_cell:
+            if self._cell_pre_depth:
+                self._release_cell_whitespace()
+                self._run_buf.append(data)
+                return
+            # Whitespace holding a line break at a segment's edge (the cell's start or
+            # end, or either side of a nested table, as in "<td>\n  Intro\n  <table>")
+            # became empty paragraphs in the cell (#1073 QA). At the segment's start it
+            # is dropped. At the end of the text so far it is held, and written as-is,
+            # with its own style and link, only if more content follows; so everything
+            # else in a cell parses as before (#1221 is the general question).
+            if not (self._run_buf or self._pending_runs):
+                data = _without_line_break_edge(data, leading=True)
+            text = _without_line_break_edge(data, leading=False)
+            if text:
+                self._release_cell_whitespace()
+                self._run_buf.append(text)
+            if len(text) < len(data):
+                self._hold_cell_whitespace(data[len(text) :])
         elif self._block_tag:
             self._run_buf.append(data)
         elif self._table_depth == 0 and self._tag_depth == 0 and data.strip():
