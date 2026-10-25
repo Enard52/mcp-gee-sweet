@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 
 ---
 
-## [0.9.5] — Unreleased
+## [0.9.5] — 2026-10-24
 
 Security hotfix on top of v0.9.4. No new tools.
 
