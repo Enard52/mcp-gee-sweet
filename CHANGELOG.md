@@ -14,6 +14,11 @@ All notable changes to this project are documented in this file.
 
 - Each GitHub Release now carries an MCP Bundle, `mcp-gee-sweet-<version>.mcpb`, which installs the server in Claude Desktop in one click: the install dialog asks for the OAuth client file, and nothing goes into `claude_desktop_config.json` by hand. The bundle uses OAuth only and keeps its token at `~/.mcp-gee-sweet-token.json`. See [Install as a bundle](docs/client-setup.md#install-as-a-bundle) — #1036
 
+### Changed
+
+- **Behavior change: Gmail no longer sends on the agent's call alone.** With the new default `GMAIL_SEND=confirm`, `send_message` and `reply_to_message` save the email as a draft (a reply in its thread) and send it only after the user confirms it in a form the MCP client shows; `send_draft` asks the same way. Declining, cancelling, no answer, or a client that can't show the form leaves the draft unsent and returns `sent: false` with its `draft_id`. Confirmation needs a client on the 2025-11-25 handshake with form elicitation; on 2026-07-28 connections mail stays a draft. The confirmation and the result flag recipients outside a Workspace organization, more than `GMAIL_SEND_WARN_RECIPIENTS` (default 10) recipients, and any Bcc. A client hook that auto-accepts elicitations makes this the same as `direct`. Set `GMAIL_SEND=direct` for the old immediate delivery. Every send result now has a `sent` field — #1081
+- **Claude Code users: sends are held as drafts.** Claude Code currently connects on MCP 2026-07-28, where the server can't ask for confirmation, so under the new default every `send_message` and `reply_to_message` from Claude Code returns `sent: false` with the email saved in Gmail's Drafts folder, and `send_draft` refuses. Send from Drafts, or set `GMAIL_SEND=direct` to keep sending at once. Confirmation on 2026-07-28 connections is tracked in #1235 — #1081
+
 ---
 
 ## [0.9.5] — 2026-10-24
