@@ -426,12 +426,12 @@ Feature set and fill set by the maintainer 2026-10-18, under the release-scoping
 
 **Feature set: Gmail sending safety**
 
-- [ ] Safe-by-default sending: `send_message`/`reply_to_message`/`send_draft` don't deliver without explicit confirmation (drafts-first or elicitation), flag external-domain and over-threshold recipients, documented opt-out. Behavior change, needs a `CHANGELOG.md` note. Spec updated 2026-10-25 from Joy's design pass (detection needs `elicitation.form` and `can_send_request`; catch `NoBackChannelError`; refuse a draft changed after confirmation); hold lifted (maintainer). The 2026-07-28 round trip, #1235, is not planned ([#1081](https://github.com/khuisman/mcp-gee-sweet/issues/1081))
+- [x] Safe-by-default sending: `send_message`/`reply_to_message`/`send_draft` don't deliver without explicit confirmation (drafts-first or elicitation), flag external-domain and over-threshold recipients, documented opt-out. Behavior change, needs a `CHANGELOG.md` note. Spec updated 2026-10-25 from Joy's design pass (detection needs `elicitation.form` and `can_send_request`; catch `NoBackChannelError`; refuse a draft changed after confirmation); hold lifted (maintainer). The 2026-07-28 round trip, #1235, is not planned ([#1081](https://github.com/khuisman/mcp-gee-sweet/issues/1081)) (PR #1249)
 - [x] Gmail: list, get, update and delete drafts, so a drafts-first flow can be managed end to end. Added 2026-10-24 ([#1205](https://github.com/khuisman/mcp-gee-sweet/issues/1205)) (PR #1227)
 
 **Feature set: launch readiness**
 
-- [ ] Ship an MCP Bundle (.mcpb) for one-click install and Smithery listing ([#1036](https://github.com/khuisman/mcp-gee-sweet/issues/1036))
+- [x] Ship an MCP Bundle (.mcpb) for one-click install and Smithery listing ([#1036](https://github.com/khuisman/mcp-gee-sweet/issues/1036)) (PR #1255)
 - [ ] Demo screenshot or GIF for the README — routed to Amy; how the asset gets produced is still open ([#589](https://github.com/khuisman/mcp-gee-sweet/issues/589))
 - [ ] Fact-check and word competitive/benchmark claims once real benchmark numbers exist — routed to Amy, triaged out of `backlog` 2026-09-11 — only if the competitor comparisons come back; otherwise it moves out. Labeled `planned: ornithomimus` 2026-10-24 ([#585](https://github.com/khuisman/mcp-gee-sweet/issues/585))
 - [x] CI tests Python 3.11–3.13 only; add 3.14 and 3.15, and fold in #1171's Python 3.10 leftovers. Added 2026-10-24 ([#1212](https://github.com/khuisman/mcp-gee-sweet/issues/1212)) (PR #1222)
