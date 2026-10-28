@@ -27,7 +27,7 @@ from ...local_files import (
 from ..atomic_write import _check_destination, _is_partial_download, _write_atomically
 from ..http_errors import is_storage_quota_error
 from ..mime_types import guess_mime_type
-from ..pagination import iter_pages
+from ..pagination import PageLimitExceeded, iter_pages
 from ..response_limits import (
     _blocked_destination_error,
     _is_dangling_symlink,
@@ -791,29 +791,23 @@ async def _upload_local_file(
         name_clause = " or ".join(
             "name='{}'".format(n.replace("\\", "\\\\").replace("'", "\\'")) for n in lookup_names
         )
-        existing = await execute_in_thread(
-            drive_service.files()
-            .list(
-                q=f"({name_clause}) and '{_escape_drive_query_value(parent_folder_id)}' in parents and trashed=false",
-                spaces="drive",
-                includeItemsFromAllDrives=True,
-                supportsAllDrives=True,
-                # properties only under convert — nothing else reads the marker.
-                fields=(
-                    "files(id, name, webViewLink, mimeType, properties)"
-                    if convert_mime is not None
-                    else "files(id, name, webViewLink, mimeType)"
-                ),
-            )
-            .execute,
+        hits = await _list_all_files(
             drive_service,
+            q=f"({name_clause}) and '{_escape_drive_query_value(parent_folder_id)}' in parents and trashed=false",
+            spaces="drive",
+            includeItemsFromAllDrives=True,
+            supportsAllDrives=True,
+            # properties only under convert — nothing else reads the marker.
+            file_fields=(
+                "id, name, webViewLink, mimeType, properties"
+                if convert_mime is not None
+                else "id, name, webViewLink, mimeType"
+            ),
         )
-        hits = existing.get("files", [])
-        # pageSize deliberately left at the API default (100), not capped to 1
-        # — Drive allows more than one file to share this name, and the match
-        # (via _find_existing_upload, not necessarily hits[0]) needs every
-        # candidate visible to pick the correct one to report back (#514 QA
-        # round 1, PR #767).
+        # Every page, not capped to 1 result — Drive allows more than one file
+        # to share this name, and the match (via _find_existing_upload, not
+        # necessarily hits[0]) needs every candidate visible to pick the correct
+        # one to report back (#514 QA round 1, PR #767; paged since #1165).
         found = _find_existing_upload(
             convert_mime,
             file_name,
@@ -930,24 +924,64 @@ def _local_md5(path: Path) -> str:
     return h.hexdigest()
 
 
+# A bound on pages, not on files: Drive may return short pages before the end
+# of a listing, so this is at most 100 pages of pageSize results, and in practice only a
+# nextPageToken that never goes falsy reaches it.
+_FILES_LIST_MAX_PAGES = 100
+
+
+async def _list_all_files(drive_service, *, file_fields: str, **list_kwargs) -> list[dict]:
+    """Every file a `files().list()` query matches, across all pages, each
+    `id` once. `file_fields` must include `id`; `pageSize` defaults to 1000.
+
+    Each listing here decides what to upload, download, or skip, so acting on
+    a truncated first page duplicates or drops files (#1165). An error on any
+    page propagates rather than returning the pages already read. A folder
+    that changes while it's being paged can return the same file on two
+    pages; only its first entry is kept, so a single file never reads as a
+    name collision (PR #1261 QA round 1).
+    """
+    list_kwargs.setdefault("pageSize", 1000)
+    files: list[dict] = []
+    seen_ids: set[str] = set()
+    try:
+        async for resp in iter_pages(
+            lambda token: drive_service.files().list(
+                fields=f"nextPageToken, files({file_fields})",
+                pageToken=token,
+                **list_kwargs,
+            ),
+            drive_service,
+            max_pages=_FILES_LIST_MAX_PAGES,
+        ):
+            for f in resp.get("files", []):
+                if f["id"] not in seen_ids:
+                    seen_ids.add(f["id"])
+                    files.append(f)
+    except PageLimitExceeded as e:
+        raise RuntimeError(
+            f"Drive was still returning results after {e.max_pages} pages "
+            f"({len(files)} entries) listing folder contents. Stopped rather than "
+            "act on an incomplete listing. The folder may hold too many matching "
+            "entries to list in one call; split it into subfolders and retry."
+        ) from e
+    return files
+
+
 async def _list_drive_children(drive_service, folder_id: str) -> tuple[list[dict], list[dict]]:
     """Return (files, folders) among the direct children of a Drive folder."""
-    results = await execute_in_thread(
-        drive_service.files()
-        .list(
-            q=f"'{_escape_drive_query_value(folder_id)}' in parents and trashed=false",
-            spaces="drive",
-            includeItemsFromAllDrives=True,
-            supportsAllDrives=True,
-            fields="files(id, name, mimeType, modifiedTime, properties, md5Checksum, size)",
-            pageSize=1000,
-        )
-        .execute,
+    children = await _list_all_files(
         drive_service,
+        q=f"'{_escape_drive_query_value(folder_id)}' in parents and trashed=false",
+        spaces="drive",
+        includeItemsFromAllDrives=True,
+        supportsAllDrives=True,
+        file_fields="id, name, mimeType, modifiedTime, properties, md5Checksum, size",
+        pageSize=1000,
     )
     files: list[dict] = []
     folders: list[dict] = []
-    for f in results.get("files", []):
+    for f in children:
         if f["mimeType"] == "application/vnd.google-apps.folder":
             folders.append(f)
         else:
@@ -3162,24 +3196,18 @@ def register(tool):
             # can tell an already-converted duplicate apart from a same-named file
             # still in its original format — mirrors _upload_local_file's own
             # convert-aware skip_if_exists check (issue #411).
-            existing_resp = await execute_in_thread(
-                drive_service.files()
-                .list(
-                    q=f"'{_escape_drive_query_value(parent_folder_id)}' in parents and trashed=false",
-                    spaces="drive",
-                    includeItemsFromAllDrives=True,
-                    supportsAllDrives=True,
-                    # properties only under convert — nothing else reads the
-                    # conversion marker (PR #800 QA round 1).
-                    fields=(
-                        "files(name, mimeType, properties)" if convert else "files(name, mimeType)"
-                    ),
-                    pageSize=1000,
-                )
-                .execute,
+            existing_files = await _list_all_files(
                 drive_service,
+                q=f"'{_escape_drive_query_value(parent_folder_id)}' in parents and trashed=false",
+                spaces="drive",
+                includeItemsFromAllDrives=True,
+                supportsAllDrives=True,
+                # properties only under convert — nothing else reads the
+                # conversion marker (PR #800 QA round 1).
+                file_fields=("id, name, mimeType, properties" if convert else "id, name, mimeType"),
+                pageSize=1000,
             )
-            for f in existing_resp.get("files", []):
+            for f in existing_files:
                 existing_by_name.setdefault(f["name"], []).append(f)
 
         # One deny-list snapshot for every entry this walk checks (#796).
@@ -3493,19 +3521,15 @@ def register(tool):
             safe = _escape_drive_query_mime_type(mime_type_filter)
             query += f" and mimeType='{safe}'"
 
-        results = await execute_in_thread(
-            drive_service.files()
-            .list(
-                q=query,
-                spaces="drive",
-                includeItemsFromAllDrives=True,
-                supportsAllDrives=True,
-                fields="files(id, name, mimeType, size)",
-                pageSize=1000,
-                orderBy="name",
-            )
-            .execute,
+        listed = await _list_all_files(
             drive_service,
+            q=query,
+            spaces="drive",
+            includeItemsFromAllDrives=True,
+            supportsAllDrives=True,
+            file_fields="id, name, mimeType, size",
+            pageSize=1000,
+            orderBy="name",
         )
 
         downloaded: list[str] = []
@@ -3517,7 +3541,7 @@ def register(tool):
         claimed_dest: set[str] = set()
         # One deny-list snapshot for every entry this walk checks (#796).
         with many_checks():
-            for f in results.get("files", []):
+            for f in listed:
                 fid = f["id"]
                 fname = f["name"]
                 fmime = f.get("mimeType", "")
