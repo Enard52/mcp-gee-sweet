@@ -532,7 +532,7 @@ Fill candidates moved from v0.9.3 and the decision-needed backlog on 2026-10-18.
 
 **Triaged in 2026-10-24**
 
-- [ ] transfer.py folder listings stop at 1,000 children: `download_folder` truncates, `sync_folder` and `upload_local_folder` upload duplicates. `wrong/narrow` ([#1165](https://github.com/khuisman/mcp-gee-sweet/issues/1165))
+- [x] transfer.py folder listings stop at 1,000 children: `download_folder` truncates, `sync_folder` and `upload_local_folder` upload duplicates. `wrong/narrow` ([#1165](https://github.com/khuisman/mcp-gee-sweet/issues/1165)) (PR #1261)
 - [ ] Drive query escaping: the MIME filter skips backslash; consolidate the escape sites. `loud/rare` ([#1166](https://github.com/khuisman/mcp-gee-sweet/issues/1166))
 - [ ] `transfer_ownership` follow-ups: `send_notification` has one valid value (schema change); consumer and shared-drive transfers fail opaquely. `loud/narrow` ([#1181](https://github.com/khuisman/mcp-gee-sweet/issues/1181))
 - [ ] Cache TTL docs and log line say process-wide; under SSE it's per connection. Docs, with the docstring cleanup ([#1187](https://github.com/khuisman/mcp-gee-sweet/issues/1187))
