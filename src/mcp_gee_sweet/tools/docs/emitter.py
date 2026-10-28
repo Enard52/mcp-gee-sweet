@@ -3,13 +3,104 @@
 from __future__ import annotations
 
 import logging
+import re
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
 
 from ...auth import execute_in_thread
 from .ast import BulletItem, Cell, DocNode, Heading, Image, NamedBlock, Paragraph, Row, Run, Table
+from .batch_retry import send_dropping_failed_images
 from .indices import isolated_bullet_run_wrap_requests, utf16_len
 
 logger = logging.getLogger(__name__)
+
+
+class CellImages:
+    """The images a table fill embeds in cells (#1073), and how it sends its batches.
+
+    uris: id(image) -> its resolved URI, for each cell image to embed. An image with no
+    entry is skipped, like an unresolved body image. A dropped image's entry is removed,
+    so a nested table after it in the same cell stops counting it.
+
+    run_batch sends one batchUpdate. failed_request_index reads the index of the
+    insertInlineImage an error names (None for any other error), and on_dropped is told
+    about each image dropped that way. embedded collects id(image) for every image whose
+    insert went out in a batch that succeeded, updated as each batch lands, so the
+    caller can tell which resolved images the fill never placed, even after a raise.
+    """
+
+    def __init__(
+        self,
+        uris: dict[int, str],
+        run_batch: Callable[[list[dict]], Awaitable[None]],
+        failed_request_index: Callable[[Exception], int | None],
+        on_dropped: Callable[[Image, Exception], None],
+    ):
+        self.uris = uris
+        self.embedded: set[int] = set()
+        self._run_batch = run_batch
+        self._failed_request_index = failed_request_index
+        self._on_dropped = on_dropped
+        # id(insert) -> (insert, image, its link request or None) for the batch being
+        # built and sent. It holds the request dicts themselves and is cleared once that
+        # batch settles, so no id() here can belong to a later batch's request.
+        self._pending: dict[int, tuple[dict, Image, dict | None]] = {}
+
+    def insert_requests(self, image: Image, position: int) -> list[dict]:
+        """The insertInlineImage (and link request) for `image`, recorded for the retry."""
+        requests = _image_insert_requests(image, self.uris[id(image)], position)
+        link = requests[1] if len(requests) > 1 else None
+        self._pending[id(requests[0])] = (requests[0], image, link)
+        return requests
+
+    async def execute(self, requests: list[dict]) -> None:
+        """Send one cell-fill batch, dropping each image Google can't fetch
+        (batch_retry.send_dropping_failed_images).
+
+        Dropping an image never moves another request: within a cell the images go
+        after its text, latest first, and cells run latest first, so every request
+        after an image sits at or before it. A split cuts the batch at the failed
+        image: a batchUpdate applies its requests in order, so sending L[:i] and then
+        L[i:] does what sending L would. Splitting anywhere else isn't safe, since an
+        earlier cell's text moves every later position; the body's split (all text,
+        then the images) would misplace every image after the first cell.
+        """
+        try:
+            await send_dropping_failed_images(
+                requests,
+                self._run_batch,
+                self._drop,
+                lambda _remaining, index: index,
+                self._applied,
+            )
+        finally:
+            self._pending.clear()
+
+    def _applied(self, batch: list[dict]) -> None:
+        sent = {id(r) for r in batch}
+        self.embedded.update(
+            id(image) for insert, image, _ in self._pending.values() if id(insert) in sent
+        )
+
+    def _drop(self, requests: list[dict], error: Exception) -> int | None:
+        """Pop the image insert `error` names from `requests`, with its link request,
+        and return the index it was at. None if `error` doesn't name one of this
+        batch's image inserts."""
+        index = self._failed_request_index(error)
+        if index is None or index >= len(requests):
+            return None
+        # _pending holds its requests alive, so an id() match is the request itself.
+        entry = self._pending.get(id(requests[index]))
+        if entry is None:
+            return None
+        insert, image, link = entry
+        requests.pop(index)
+        if link is not None:
+            requests[:] = [r for r in requests if r is not link]
+        del self._pending[id(insert)]
+        self.uris.pop(id(image), None)
+        self._on_dropped(image, error)
+        return index
 
 
 @dataclass
@@ -21,9 +112,19 @@ class _PendingTable:
     append to only one or two of without anything enforcing equal length."""
 
     node: Table
-    position: int  # doc index where this table starts, before tab-consumption adjustment
+    position: int  # its placeholder paragraph's doc index, before tab-consumption adjustment
     tab_offset: int  # cumulative synthetic bullet-tabs consumed ahead of it by insertTable time
     order: int  # index in the top-level node list; breaks same-position ties (see below)
+    rows: int  # the insertTable grid, computed once: the placeholder delete depends on it
+    columns: int
+
+
+def _inserted_table_length(rows: int, columns: int) -> int:
+    """Indices an insertTable request adds: the newline it puts in front of the table,
+    plus the table element, which spans 2 + rows * (1 + 2 * columns) (a start index,
+    one per row, two per cell for the cell and its empty paragraph, and an end index).
+    Confirmed live for 2x2 (13) and 2x3 (17) (#1097)."""
+    return 1 + 2 + rows * (1 + 2 * columns)
 
 
 @dataclass
@@ -113,19 +214,25 @@ def extract_images(nodes: list[DocNode]) -> list[Image]:
     grant, or both — *before* calling ast_to_requests, since that stays a
     synchronous, I/O-free function like the rest of this module (#333).
 
-    Only walks body-level nodes' own `runs` (Heading/Paragraph/BulletItem/
-    NamedBlock). Table cells never actually receive an Image node from
-    html_parser.py today — table-cell images are a deliberately out-of-scope
-    gap (tracked as a follow-up), not a silent omission here.
+    Walks body-level nodes' own `runs` and every table cell's children, recursing
+    into nested tables (#1073).
     """
     images: list[Image] = []
     for node in nodes:
-        if isinstance(node, Table):
-            continue
-        for item in node.runs:
-            if isinstance(item, Image):
-                images.append(item)
+        items = iter_cell_leaves(node) if isinstance(node, Table) else node.runs
+        images.extend(item for item in items if isinstance(item, Image))
     return images
+
+
+def iter_cell_leaves(table: Table) -> Iterator[Run | Image]:
+    """Every Run and Image in `table`'s cells, nested tables included, in document order."""
+    for row in table.rows:
+        for cell in row.cells:
+            for child in cell.children:
+                if isinstance(child, Table):
+                    yield from iter_cell_leaves(child)
+                else:
+                    yield child
 
 
 def ast_to_requests(
@@ -174,6 +281,7 @@ def ast_to_requests(
     """
     if image_uris is None:
         image_uris = {}
+    nodes, separators = _with_quote_separators(nodes)
     text_parts: list[str] = []
     utf16_offset = 0
     segment_meta: list[_SegmentMeta] = []
@@ -197,8 +305,19 @@ def ast_to_requests(
                 # doc, and a table with no insertTable request never shows up there.
                 continue
             pending_tables.append(
-                _PendingTable(node, start_index + utf16_offset, cumulative_tabs, order)
+                _PendingTable(
+                    node, start_index + utf16_offset, cumulative_tabs, order, num_rows, num_cols
+                )
             )
+            # A placeholder paragraph to insert the table at, deleted right after it
+            # (#1097). insertTable gives the table and its empty cells the style at the
+            # insertion point: inserted at the next block, a list or quote indented the
+            # table (an indent the API can't reset afterward) and that block's first
+            # character's text style (bold, Courier New, a heading's color) went into
+            # every cell. The placeholder is reset to plain after the bullet pass (below),
+            # so the table starts plain.
+            text_parts.append("\n")
+            utf16_offset += 1
         else:
             doc_start = start_index + utf16_offset
             # Leading tab characters encode a bullet's nesting depth for
@@ -325,6 +444,7 @@ def ast_to_requests(
     if full_text:
         requests.append({"insertText": {"location": {"index": start_index}, "text": full_text}})
 
+        spacing = _block_spacing(nodes, separators)
         for seg in segment_meta:
             node = seg.node
             doc_start, doc_end = seg.doc_start, seg.doc_end
@@ -366,6 +486,13 @@ def ast_to_requests(
             # preset's own, so a quote indent set here was lost (#1056).
             if node.blockquote_depth > 0 and not isinstance(node, BulletItem):
                 requests.append(_blockquote_style_request(rng, node.blockquote_depth))
+
+            # Block spacing and quote separators (#1098). A BulletItem's spacing waits for
+            # the bullet pass, like its quote styling above.
+            if id(node) in separators:
+                requests.extend(_collapse_paragraph_requests(rng))
+            elif seg.order in spacing and not isinstance(node, BulletItem):
+                requests.extend(_spacing_requests(rng, *spacing[seg.order]))
 
             # Inline run styles for non-table content (bold, italic, links, font_family, etc.)
             # skip_len skips past any leading nesting tabs and checkbox glyph so run
@@ -492,16 +619,32 @@ def ast_to_requests(
                         rng, seg.node.blockquote_depth, list_level=seg.node.depth
                     )
                 )
+                if seg.order in spacing:
+                    requests.extend(_spacing_requests(rng, *spacing[seg.order]))
+
+        # Each table's placeholder, reset to plain after the bullet pass, since a table
+        # between two same-preset list items sits inside their one createParagraphBullets
+        # range (the run skips Table nodes, so both items stay one list). Mapped through
+        # _after_bullet_pass like the inserts below.
+        for pending in pending_tables:
+            position = _after_bullet_pass(pending.position, pending.tab_offset)
+            requests.extend(_table_placeholder_requests(position, pending.node.blockquote_depth))
 
     # Queue each table's insertTable request into the same positional_inserts pass
     # images use above. Position is adjusted for any nested-bullet leading tabs already
     # consumed ahead of it (those requests precede this combined pass in the array, so by
     # the time it runs, that many characters have already been removed from in front of
     # this table).
+    #
+    # The table goes in at its placeholder, which insertTable pushes to just after the
+    # table; the deleteContentRange right after removes it. Everything later in the doc
+    # was inserted earlier in this descending pass, so the delete shifts nothing still
+    # to come. content.py's _positional_insert_tail_start counts the delete as part of
+    # this pass by its position right after an insertTable.
     for pending in pending_tables:
-        num_rows = len(pending.node.rows)
-        num_cols = max((sum(c.colspan for c in row.cells) for row in pending.node.rows), default=0)
+        num_rows, num_cols = pending.rows, pending.columns
         position = _after_bullet_pass(pending.position, pending.tab_offset)
+        placeholder_after = position + _inserted_table_length(num_rows, num_cols)
         positional_inserts.append(
             (
                 (position, pending.order, 0),
@@ -512,7 +655,15 @@ def ast_to_requests(
                             "columns": num_cols,
                             "location": {"index": position},
                         }
-                    }
+                    },
+                    {
+                        "deleteContentRange": {
+                            "range": {
+                                "startIndex": placeholder_after,
+                                "endIndex": placeholder_after + 1,
+                            }
+                        }
+                    },
                 ],
             )
         )
@@ -592,6 +743,164 @@ def _blockquote_style_request(rng: dict, depth: int, list_level: int | None = No
     }
 
 
+# Space above and below a code block, and around a quote where it meets other content
+# (#1098). Docs' NORMAL_TEXT has none, so without it a quote or code block touched the
+# paragraphs around it and two code blocks in a row read as one.
+_BLOCK_SPACING_PT = 8
+
+
+def _quoted(node: DocNode) -> bool:
+    return not isinstance(node, Table) and node.blockquote_depth > 0
+
+
+def _has_named_spacing(node: DocNode) -> bool:
+    """Whether the emitter gives `node` a named style with spacing of its own."""
+    if isinstance(node, Heading):
+        return True
+    return isinstance(node, NamedBlock) and node.style_type != "NORMAL_TEXT"
+
+
+def _with_quote_separators(nodes: list[DocNode]) -> tuple[list[DocNode], set[int]]:
+    """Return `nodes` with an empty separator Paragraph between each two adjacent quoted
+    nodes that belong to separate quotes, plus the separators' ids.
+
+    Docs joins the left borders of adjacent paragraphs with the same border and indents
+    into one bar, whatever their spacing, so two quotes in a row rendered as one (#1098).
+    Only an unbordered (or differently indented) paragraph between them breaks the join,
+    confirmed live; a slightly different border color or width doesn't. Two nodes are in
+    one quote when one's blockquote_path is a prefix of the other's (see ast.py). The
+    separator is unquoted even between two quotes nested in one outer quote: given the
+    outer quote's border, its near-zero height left a stray dash of that bar (confirmed
+    live), and the outer bar is already broken around the deeper-indented nested ones.
+    _collapse_paragraph_requests shrinks it.
+    """
+    result: list[DocNode] = []
+    separators: set[int] = set()
+    prev: DocNode | None = None
+    for node in nodes:
+        if prev is not None and _quoted(prev) and _quoted(node):
+            a, b = prev.blockquote_path, node.blockquote_path
+            if a[: len(b)] != b and b[: len(a)] != a:
+                separator = Paragraph(runs=[])
+                result.append(separator)
+                separators.add(id(separator))
+        result.append(node)
+        prev = node
+    return result, separators
+
+
+def _block_spacing(nodes: list[DocNode], separators: set[int]) -> dict[int, tuple[int, int]]:
+    """Map a node's index in `nodes` to the (spaceAbove, spaceBelow) it needs (#1098):
+    a code block gets both, and a quoted node gets space on each side where its quote
+    meets content outside it (an unquoted node, a table, or the edge). Nodes inside one
+    quote get none between them, so the quote stays one block.
+
+    A separator gets space on one side only, below the quote before it: spaced on both,
+    two quotes sat twice as far apart as a quote and a paragraph (PR #1199 QA round 1).
+    A Heading or a TITLE/SUBTITLE NamedBlock gets no quote-edge space: an explicit
+    value would replace its named style's own spacing (HEADING_1's 20pt above, say)."""
+
+    def outside_quote(i: int, *, count_separator: bool) -> bool:
+        if i < 0 or i >= len(nodes):
+            return True
+        if id(nodes[i]) in separators:
+            return count_separator
+        return not _quoted(nodes[i])
+
+    spacing: dict[int, tuple[int, int]] = {}
+    for i, node in enumerate(nodes):
+        if isinstance(node, Table) or id(node) in separators:
+            continue
+        above = below = 0
+        if _is_code_paragraph(node):
+            above = below = _BLOCK_SPACING_PT
+        if _quoted(node) and not _has_named_spacing(node):
+            if outside_quote(i - 1, count_separator=False):
+                above = _BLOCK_SPACING_PT
+            if outside_quote(i + 1, count_separator=True):
+                below = _BLOCK_SPACING_PT
+        if above or below:
+            spacing[i] = (above, below)
+    return spacing
+
+
+def _spacing_requests(rng: dict, above: int, below: int) -> list[dict]:
+    """spaceAbove on the first paragraph of a node's range and spaceBelow on its last.
+    A node whose text holds a "\\n" becomes several Docs paragraphs (#1093); spacing the
+    whole range put a gap inside it (confirmed live)."""
+    start, end = rng["startIndex"], rng["endIndex"]
+    requests = []
+    for field, magnitude, sub_range in (
+        ("spaceAbove", above, {"startIndex": start, "endIndex": start + 1}),
+        ("spaceBelow", below, {"startIndex": end - 1, "endIndex": end}),
+    ):
+        if magnitude:
+            requests.append(
+                {
+                    "updateParagraphStyle": {
+                        "range": sub_range,
+                        "paragraphStyle": {field: {"magnitude": magnitude, "unit": "PT"}},
+                        "fields": field,
+                    }
+                }
+            )
+    return requests
+
+
+def _collapse_paragraph_requests(rng: dict) -> list[dict]:
+    """Shrink an empty paragraph to near-zero height: no spacing, 1% line spacing, 1pt
+    font. Shared by the quote separators (#1098) and the blank paragraph before a
+    table."""
+    paragraph_style = {
+        "spaceAbove": {"magnitude": 0, "unit": "PT"},
+        "spaceBelow": {"magnitude": 0, "unit": "PT"},
+        "lineSpacing": 1,
+    }
+    return [
+        {
+            "updateParagraphStyle": {
+                "range": rng,
+                "paragraphStyle": paragraph_style,
+                "fields": ",".join(paragraph_style),
+            }
+        },
+        {
+            "updateTextStyle": {
+                "range": rng,
+                "textStyle": {"fontSize": {"magnitude": 1, "unit": "PT"}},
+                "fields": "fontSize",
+            }
+        },
+    ]
+
+
+def _table_placeholder_requests(position: int, blockquote_depth: int) -> list[dict]:
+    """Reset a table's placeholder paragraph (#1097) to plain before its insertTable,
+    since the table takes its indent and every empty cell its text style. Plain means
+    no bullet (a table between two list items sits inside their bullet range), every
+    paragraph field at its default (`*`: the doc's surviving final paragraph mark can
+    carry a heading's style into new content), and no text style. A table inside a
+    quote keeps the quote's indent, with no border, which a table doesn't take.
+    Bullets go first: deleteParagraphBullets adds indent, which the reset clears."""
+    rng = {"startIndex": position, "endIndex": position + 1}
+    paragraph_style: dict = {"namedStyleType": "NORMAL_TEXT"}
+    if blockquote_depth > 0:
+        indent = {"magnitude": _BLOCKQUOTE_INDENT_PT_PER_LEVEL * blockquote_depth, "unit": "PT"}
+        paragraph_style["indentStart"] = indent
+        paragraph_style["indentFirstLine"] = indent
+    return [
+        {"deleteParagraphBullets": {"range": rng}},
+        {
+            "updateParagraphStyle": {
+                "range": rng,
+                "paragraphStyle": paragraph_style,
+                "fields": "*",
+            }
+        },
+        {"updateTextStyle": {"range": rng, "textStyle": {}, "fields": "*"}},
+    ]
+
+
 def _image_insert_requests(image: Image, uri: str, position: int) -> list[dict]:
     """Build the insertInlineImage request for an already-resolved image at `position`,
     followed, for a linked image, by the updateTextStyle that links it (#977).
@@ -612,9 +921,43 @@ def _image_insert_requests(image: Image, uri: str, position: int) -> list[dict]:
         if image.height is not None:
             object_size["height"] = {"magnitude": image.height, "unit": "PT"}
         request["insertInlineImage"]["objectSize"] = object_size
-    if image.link_url is None:
+    link_url = _storable_link_url(image.link_url)
+    if link_url is None:
         return [request]
-    return [request, _image_link_request(image.link_url, position)]
+    return [request, _image_link_request(link_url, position)]
+
+
+# RFC 3986: a scheme is case-insensitive and an open registry, so acceptance is
+# structural rather than a list that drops working targets every time a new
+# scheme shows up in a document.
+_STORABLE_LINK_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
+
+
+def _storable_link_url(link_url: str | None) -> str | None:
+    """Return the link to hand the Docs API, or None to degrade the run to plain text.
+
+    Docs normalises a URL that carries no scheme against its own origin, so a
+    relative href ("./guide.md", "/guide.md", "//example.com/x") that this server
+    passes through unchanged lands as "http://./guide.md" or
+    "http://docs.google.com/guide.md" - a link that goes nowhere, reported as
+    LK-12/EP-8 in the Markdown-fidelity baseline (#1120). A scheme-less target is
+    therefore not storable: the text stays, the broken link is dropped.
+
+    Any scheme counts, not a fixed list: "HTTPS://...", "tel:", "ftps://",
+    "file://" and app links such as "vscode://" are working links today, so a
+    lowercase allow-list would strip the target from links that do resolve.
+
+    "#..." is allowed through because same-document heading anchors are
+    resolved into full URLs by the _resolve_heading_anchors pass, which runs
+    after the write (#409), and a "#slug" is a working in-doc link, not a
+    relative file path.
+    """
+    if link_url is None:
+        return None
+    url = link_url.strip()
+    if url.startswith("#") or _STORABLE_LINK_SCHEME.match(url):
+        return url
+    return None
 
 
 def _image_link_request(link_url: str, position: int) -> dict:
@@ -644,8 +987,9 @@ def _run_style_requests(run: Run, start: int, end: int) -> list[dict]:
             text_style[api_key] = val
             fields.append(api_key)
 
-    if run.link_url is not None:
-        text_style["link"] = {"url": run.link_url}
+    link_url = _storable_link_url(run.link_url)
+    if link_url is not None:
+        text_style["link"] = {"url": link_url}
         fields.append("link")
 
     if run.font_family is not None:
@@ -692,7 +1036,7 @@ def _run_style_requests(run: Run, start: int, end: int) -> list[dict]:
     ]
 
 
-async def fill_tables(docs_service, doc_id: str, tables: list[Table]) -> None:
+async def fill_tables(docs_service, doc_id: str, tables: list[Table], images: CellImages) -> None:
     """Fill table cells and apply inline styles using live cell indices.
 
     Phases:
@@ -710,6 +1054,9 @@ async def fill_tables(docs_service, doc_id: str, tables: list[Table]) -> None:
     Phases 5 and 6 must use a doc fetched after phases 3 and 4: the fill shifts the
     startIndex of every table after the first, and a stale one is a 400 (#1053).
     They share one post-fill fetch, since column-width changes move no indices.
+
+    images: the resolved images to embed in cells, at any nesting depth, and how each
+    fill batch is sent (#1073).
 
     Nested table limitations: no col_widths inside nested tables. colspan/
     rowspan (#109) and text sharing a cell with one or more nested tables
@@ -753,19 +1100,14 @@ async def fill_tables(docs_service, doc_id: str, tables: list[Table]) -> None:
     doc_tables = await _apply_merges(docs_service, doc_id, doc_tables, tables, _top_level_tables)
 
     # Step 3: fill plain cells (no nested table) in one bulk batch
-    fill_requests = _build_fill_requests(doc_tables, tables)
+    fill_requests = _build_fill_requests(doc_tables, tables, images)
     if fill_requests:
-        await execute_in_thread(
-            docs_service.documents()
-            .batchUpdate(documentId=doc_id, body={"requests": fill_requests})
-            .execute,
-            docs_service,
-        )
+        await images.execute(fill_requests)
 
     # Step 4: fill cells that contain a nested table, preserving true content order
     # at any nesting depth
     if has_nested:
-        await _fill_nested_cell_content(docs_service, doc_id, tables)
+        await _fill_nested_cell_content(docs_service, doc_id, tables, images)
 
     # Steps 5 and 6 need each table's startIndex as it is after the fill. Steps 3 and 4
     # inserted text into every earlier table's cells, so step 1's startIndex for any
@@ -876,10 +1218,14 @@ def _cell_para_start_for_cursor(doc_cell: dict, ast_cell: Cell, cursor: int) -> 
     return paragraphs[tables_before].get("startIndex")
 
 
-def _text_offset_since_last_table(children: list[Run | Image | Table], cursor: int) -> int:
-    """Sum of Run text lengths between the nearest preceding *insertable* Table
-    (exclusive) and cursor — a degenerate table is transparent here since it
-    was never actually inserted (see _is_insertable_table).
+def _text_offset_since_last_table(
+    children: list[Run | Image | Table], cursor: int, image_uris: dict[int, str] | None = None
+) -> int:
+    """Sum of Run text lengths, plus one per embedded Image, between the nearest
+    preceding *insertable* Table (exclusive) and cursor — a degenerate table is
+    transparent here since it was never actually inserted (see _is_insertable_table).
+    An Image counts only while it has an entry in `image_uris`: one never resolved, or
+    dropped after its insert failed, isn't in the doc (#1073).
 
     A Table's insertion point is its paragraph's startIndex *plus* this offset,
     since any leading text already inserted into that same paragraph (in an
@@ -893,6 +1239,8 @@ def _text_offset_since_last_table(children: list[Run | Image | Table], cursor: i
             break
         if isinstance(child, Run):
             offset += utf16_len(child.text)
+        elif isinstance(child, Image) and image_uris and id(child) in image_uris:
+            offset += 1
     return offset
 
 
@@ -909,11 +1257,36 @@ def _find_nth_table_in_cell(
     return nested_tables[occurrence]
 
 
-def _run_group_fill_requests(runs: list[Run], para_start: int) -> list[dict]:
-    """Build insertText + updateTextStyle requests for a contiguous run of text."""
+def _run_group_fill_requests(
+    children: Sequence[Run | Image | Table], para_start: int, images: CellImages
+) -> list[dict]:
+    """Build insertText + updateTextStyle requests for a contiguous run of text, then
+    an insertInlineImage for each of its resolved images (#1073). `children` holds no
+    Table: a caller passes a cell's children only up to its next nested table.
+
+    The images go last, latest position first, like ast_to_requests's positional
+    pass: the text and its styles are placed as if no image were there, and each
+    image lands at the offset of the text before it without shifting any image
+    already placed. Two images with no text between them share an offset, so the
+    later one goes in first and the earlier one then lands ahead of it."""
+    runs = [child for child in children if isinstance(child, Run)]
     text = "".join(run.text for run in runs)
-    if not text:
-        return []
+    requests: list[dict] = []
+    if text:
+        requests.extend(_text_fill_requests(runs, text, para_start))
+    placed: list[tuple[int, Image]] = []
+    offset = 0
+    for child in children:
+        if isinstance(child, Run):
+            offset += utf16_len(child.text)
+        elif id(child) in images.uris:
+            placed.append((offset, child))
+    for offset, image in reversed(placed):
+        requests.extend(images.insert_requests(image, para_start + offset))
+    return requests
+
+
+def _text_fill_requests(runs: list[Run], text: str, para_start: int) -> list[dict]:
     requests: list[dict] = [
         {"insertText": {"location": {"index": para_start}, "text": text}},
         # Clear any fontSize inherited from a preceding heading — see _build_fill_requests.
@@ -936,7 +1309,9 @@ def _run_group_fill_requests(runs: list[Run], para_start: int) -> list[dict]:
     return requests
 
 
-async def _fill_nested_cell_content(docs_service, doc_id: str, tables: list[Table]) -> None:
+async def _fill_nested_cell_content(
+    docs_service, doc_id: str, tables: list[Table], images: CellImages
+) -> None:
     """Fill every cell that contains a nested table, preserving true content order.
 
     Cells with no nested table are handled in bulk by _build_fill_requests instead
@@ -947,7 +1322,7 @@ async def _fill_nested_cell_content(docs_service, doc_id: str, tables: list[Tabl
     high→low within the round, then re-fetches before the next round.
     """
     await _fill_children_recursive(
-        docs_service, doc_id, lambda live_doc: _top_level_tables(live_doc), tables
+        docs_service, doc_id, lambda live_doc: _top_level_tables(live_doc), tables, images
     )
 
 
@@ -956,6 +1331,7 @@ async def _fill_children_recursive(
     doc_id: str,
     resolve,
     ast_tables: list[Table],
+    images: CellImages,
     _doc_tables: list[dict] | None = None,
 ) -> None:
     """resolve(live_doc) -> doc_table dicts positionally matching ast_tables.
@@ -1013,7 +1389,9 @@ async def _fill_children_recursive(
                 occurrence = sum(1 for ch in children[:cursor] if _is_insertable_table(ch))
                 # Any text already inserted earlier this round-chain, in the same
                 # paragraph, shifts the table's landing spot past that text.
-                table_start = para_start + _text_offset_since_last_table(children, cursor)
+                table_start = para_start + _text_offset_since_last_table(
+                    children, cursor, images.uris
+                )
                 if num_rows > 0 and num_cols > 0:
                     round_requests.append(
                         (
@@ -1032,18 +1410,18 @@ async def _fill_children_recursive(
                     table_inserts.append((t, r, c, occurrence, child))
                 new_cursor = cursor + 1
             else:
-                # Consume every non-Table child up to the next Table. An Image is
-                # skipped, as _build_fill_requests does for a cell with no nested
-                # table: table-cell images aren't supported (#509). Stopping only at
-                # a Table guarantees j > cursor, so the cell can't stay pending forever.
+                # Consume every non-Table child (text and images, #1073) up to the
+                # next Table. Stopping only at a Table guarantees j > cursor, so the
+                # cell can't stay pending forever (#509).
                 j = cursor
-                run_group: list[Run] = []
-                while j < len(children) and not isinstance(children[j], Table):
+                group: list[Run | Image] = []
+                while j < len(children):
                     next_child = children[j]
-                    if isinstance(next_child, Run):
-                        run_group.append(next_child)
+                    if isinstance(next_child, Table):
+                        break
+                    group.append(next_child)
                     j += 1
-                reqs = _run_group_fill_requests(run_group, para_start)
+                reqs = _run_group_fill_requests(group, para_start, images)
                 if reqs:
                     round_requests.append((para_start, reqs))
                 new_cursor = j
@@ -1058,12 +1436,7 @@ async def _fill_children_recursive(
         if round_requests:
             round_requests.sort(key=lambda x: x[0], reverse=True)
             batch = [req for _, reqs in round_requests for req in reqs]
-            await execute_in_thread(
-                docs_service.documents()
-                .batchUpdate(documentId=doc_id, body={"requests": batch})
-                .execute,
-                docs_service,
-            )
+            await images.execute(batch)
         # No `break` here even when a round emits no requests (e.g. a degenerate
         # zero-column table skipped by the `num_rows > 0 and num_cols > 0` guard
         # above): cursors still advance every round for every non-done cell, so
@@ -1083,7 +1456,7 @@ async def _fill_children_recursive(
             # This performs its own batchUpdate(s), which shift indices for any
             # outer-cell content that comes after this nested table — the outer
             # loop's own doc_tables (re-fetched below) must reflect that.
-            await _fill_table_fully(docs_service, doc_id, child_resolve, table_child)
+            await _fill_table_fully(docs_service, doc_id, child_resolve, table_child, images)
 
         if pending:
             live_doc = await execute_in_thread(
@@ -1093,7 +1466,9 @@ async def _fill_children_recursive(
             doc_tables = resolve(live_doc)
 
 
-async def _fill_table_fully(docs_service, doc_id: str, resolve, ast_table: Table) -> None:
+async def _fill_table_fully(
+    docs_service, doc_id: str, resolve, ast_table: Table, images: CellImages
+) -> None:
     """Fill one (typically just-inserted) table's cells: merges first, then
     plain cells in bulk, then cells with a further nested table via the
     recursive round algorithm.
@@ -1117,21 +1492,16 @@ async def _fill_table_fully(docs_service, doc_id: str, resolve, ast_table: Table
 
     doc_tables = await _apply_merges(docs_service, doc_id, doc_tables, [ast_table], resolve)
 
-    fill_requests = _build_fill_requests(doc_tables, [ast_table])
+    fill_requests = _build_fill_requests(doc_tables, [ast_table], images)
     if fill_requests:
-        await execute_in_thread(
-            docs_service.documents()
-            .batchUpdate(documentId=doc_id, body={"requests": fill_requests})
-            .execute,
-            docs_service,
-        )
+        await images.execute(fill_requests)
         # The bulk fill just shifted indices — the recursive call must re-fetch.
-        await _fill_children_recursive(docs_service, doc_id, resolve, [ast_table])
+        await _fill_children_recursive(docs_service, doc_id, resolve, [ast_table], images)
     else:
         # Nothing changed since doc_tables was fetched above — reuse it instead
         # of having the recursive call redundantly re-fetch identical data.
         await _fill_children_recursive(
-            docs_service, doc_id, resolve, [ast_table], _doc_tables=doc_tables
+            docs_service, doc_id, resolve, [ast_table], images, _doc_tables=doc_tables
         )
 
 
@@ -1273,7 +1643,9 @@ def _build_merge_requests(doc_tables: list[dict], ast_tables: list[Table]) -> li
     return requests
 
 
-def _build_fill_requests(doc_tables: list[dict], ast_tables: list[Table]) -> list[dict]:
+def _build_fill_requests(
+    doc_tables: list[dict], ast_tables: list[Table], images: CellImages
+) -> list[dict]:
     """Build insertText + updateTextStyle requests for cells with no nested table,
     sorted high→low, so they can all be emitted in one batch. Cells that contain a
     nested table are skipped here — _fill_nested_cell_content handles those instead,
@@ -1302,10 +1674,6 @@ def _build_fill_requests(doc_tables: list[dict], ast_tables: list[Table]) -> lis
                 ast_cell = ast_row.cells[ast_cell_idx]
                 if any(isinstance(child, Table) for child in ast_cell.children):
                     continue  # handled by _fill_nested_cell_content instead
-                cell_runs = [child for child in ast_cell.children if isinstance(child, Run)]
-                cell_text = "".join(run.text for run in cell_runs)
-                if not cell_text:
-                    continue
                 cell_content = doc_cell.get("content", [])
                 if not cell_content:
                     continue
@@ -1313,8 +1681,9 @@ def _build_fill_requests(doc_tables: list[dict], ast_tables: list[Table]) -> lis
                 if para_start is None:
                     continue
 
-                cell_requests = _run_group_fill_requests(cell_runs, para_start)
-                all_requests.append((para_start, cell_requests))
+                cell_requests = _run_group_fill_requests(ast_cell.children, para_start, images)
+                if cell_requests:
+                    all_requests.append((para_start, cell_requests))
 
     all_requests.sort(key=lambda x: x[0], reverse=True)
     return [req for _, reqs in all_requests for req in reqs]
@@ -1442,16 +1811,17 @@ def _build_width_requests(live_doc: dict, ast_tables: list[Table]) -> list[dict]
 
 
 def _build_blank_para_before_table_collapses(live_doc: dict) -> list[dict]:
-    """Return updateParagraphStyle + updateTextStyle requests that collapse empty paragraphs
-    immediately before tables to zero visual height.
+    """Return requests that reset empty paragraphs immediately before tables to a plain
+    paragraph and collapse them to zero visual height.
 
     Phase-1 insertText displaces the doc's initial empty paragraph, leaving a blank line
     stranded between the preceding content and the table.  deleteContentRange is rejected by
     the Docs API for these paragraphs (a paragraph before a table is structurally required),
     so we shrink them instead: spaceAbove/Below = 0, lineSpacing = 1 (1% of normal),
     fontSize = 1 pt, namedStyleType = NORMAL_TEXT (the displaced paragraph inherits the
-    preceding heading's style, #1092).  Only paragraphs whose sole content is a newline are
-    affected.
+    preceding heading's style, #1092), no bullet and no indent or border (see below).  Only
+    paragraphs whose sole content is a newline are affected, and one sitting between two
+    tables is reset but keeps its height (#1098).
     """
     content = live_doc.get("body", {}).get("content", [])
     requests: list[dict] = []
@@ -1471,29 +1841,28 @@ def _build_blank_para_before_table_collapses(live_doc: dict) -> list[dict]:
         if start is None or end is None:
             continue
         rng = {"startIndex": start, "endIndex": end}
+        # insertTable gives the paragraph it adds the style of the paragraph at the
+        # insertion point. That's the table's plain placeholder now (#1097), but before
+        # it was the block after the table: a following list's bullet (a visible empty
+        # item, and the list numbered from 2 or 3), a following quote's indent and
+        # border. Reset all of it anyway, as a backstop. deleteParagraphBullets adds
+        # indent to keep a paragraph's visual level, so the indent reset must come after.
+        requests.append({"deleteParagraphBullets": {"range": rng}})
         requests.append(
             {
                 "updateParagraphStyle": {
                     "range": rng,
-                    "paragraphStyle": {
-                        "spaceAbove": {"magnitude": 0, "unit": "PT"},
-                        "spaceBelow": {"magnitude": 0, "unit": "PT"},
-                        "lineSpacing": 1,
-                        "namedStyleType": "NORMAL_TEXT",
-                    },
-                    "fields": "spaceAbove,spaceBelow,lineSpacing,namedStyleType",
+                    # Named in fields but absent from paragraphStyle: reset to default.
+                    "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                    "fields": "namedStyleType,indentStart,indentFirstLine,borderLeft",
                 }
             }
         )
-        requests.append(
-            {
-                "updateTextStyle": {
-                    "range": rng,
-                    "textStyle": {"fontSize": {"magnitude": 1, "unit": "PT"}},
-                    "fields": "fontSize",
-                }
-            }
-        )
+        if i >= 2 and "table" in content[i - 2]:
+            # The only thing between two tables: collapsed, the tables touched and read
+            # as one (#1098). Left at full height, it's the blank line between them.
+            continue
+        requests.extend(_collapse_paragraph_requests(rng))
     return requests
 
 

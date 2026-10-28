@@ -1337,6 +1337,38 @@ search_files("it's a test") → `[]` cleanly, no Drive API syntax error. Single-
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 1 (kai-oauth); folder/move/rename/copy/delete checks matched.
 
+**Result (2026-10-24) ✅ PASS — PR #1200 (#1127), QA round 1 (Sky)**
+OAuth (`mcp-gee-sweet-sky`, on the PR head): positive controls found both #1054 fixtures (all three searches), then after trashing both (`trashed: true` confirmed), `search_files('QA', max_results=100)` returned docs, spreadsheets and folders, each entry with id/name/mimeType/modified_time/web_link, and neither trashed id in either `QA-Trashed-1054` search. Service account (fresh interpreter in the QA worktree, this branch's registered `search_files` with a `service_account.Credentials` Drive client, run twice): `search_files('QA', max_results=100)` → 16 results spanning docs, spreadsheets and folders (the check that failed before #1127).
+
+**Result (2026-10-24) ✅ PASS — PR #1200 QA round 2 (Sky) @ 0073914c**
+Service account (fresh interpreter, this head): `search_files('QA', max_results=100)` → 16 results spanning docs, spreadsheets and folders, each with id/name/mimeType/modified_time/web_link. The round-2 commit doesn't touch `search_files`' query or trashed filter, so the OAuth trashed-fixture checks from round 1 weren't rerun.
+
+---
+
+### TC-D299: Unscoped search under a service account finds Shared Drive files it never opened (#1127)
+
+**Servers:** an OAuth server for setup and cleanup, and a service-account server (e.g. `mcp-gee-sweet-kai-sa`) for every check. Run on an OAuth server only, this case proves nothing: the bug was that Drive's default `user` corpus leaves out Shared Drive files the *service account* hasn't created or opened.
+
+**Setup:**
+1. On the OAuth server: `create_doc(title="QA-Untouched-1127-Doc", folder_id={FOLDER_ID})` and `create_spreadsheet(title="QA-Untouched-1127-Sheet", folder_id={FOLDER_ID})`; note both ids. From here until cleanup, call nothing on the service-account server that reads either file by id (`get_file_metadata`, `get_doc_content`, `get_sheet_data`, ...). Once the service account opens a file, the file enters its `user` corpus and the case stops reproducing the bug. Listing and search calls don't count as opening.
+2. Positive control, on the service-account server: `search_files(query="QA-Untouched-1127", folder_id={FOLDER_ID})` must return both ids. Drive's search index can lag a new file, so retry until it does; an unscoped check run before this proves nothing.
+
+**Checks** (all on the service-account server, none with a folder):
+- `search_files(query="QA-Untouched-1127")` returns both ids.
+- `search_spreadsheets(query="QA-Untouched-1127")` returns the spreadsheet's id.
+- `list_recent_files(days=1, mime_type="application/vnd.google-apps.spreadsheet", max_results=100)` includes the spreadsheet's id, and `list_recent_files(days=1, mime_type="application/vnd.google-apps.document", max_results=100)` includes the doc's id.
+- Before the fix, each of these returned neither id while the step-2 control found both.
+
+`list_spreadsheets()` and `list_folders()` have the same fix, but no team server reaches their unscoped path: each sets `DRIVE_FOLDER_ID`, so a call with no folder is scoped to it. `tests/drive/test_files.py::TestCorporaSelection` covers that path.
+
+**Cleanup:** on the OAuth server, `delete_file(file_id=<id>, permanent=True)` on both.
+
+**Result (2026-10-24) ✅ PASS — PR #1200 (#1127), QA round 1 (Sky)**
+Setup on `mcp-gee-sweet-sky` (OAuth); every check in a fresh interpreter in the QA worktree, calling this branch's registered tool functions with a `service_account.Credentials` Drive client (no live server runs this branch as a service account). The fixtures were never read by id from the service account. Positive control (folder-scoped `search_files`) found both on the first try. Bug reproduced first: the same raw `files().list` query without `corpora` returned neither id, and with `corpora="allDrives"` returned both (`incompleteSearch=False` both ways). Checks, run twice with identical results: unscoped `search_files` → both ids; `search_spreadsheets` → the spreadsheet; `list_recent_files(days=1, …spreadsheet, 100)` → the spreadsheet; `list_recent_files(days=1, …document, 100)` → the doc. Cleanup: both permanently deleted from OAuth.
+
+**Result (2026-10-24) ✅ PASS — PR #1200 QA round 2 (Sky) @ 0073914c**
+Rerun from scratch on the new head, because it moves the all-drives flags into `_list_drive_files`, which `list_recent_files` uses. Fresh fixtures, same method as round 1. Positive control found both. The raw query without `corpora` again returned neither, and with `allDrives` returned both. Unscoped `search_files` → both ids; `search_spreadsheets` → the spreadsheet; `list_recent_files` (spreadsheet / document, `days=1`, 100) → each id. Under OAuth, `list_recent_files(max_results=100)` → 41 results, no error. Cleanup: both permanently deleted.
+
 ---
 
 ## `get_file_metadata`
@@ -1553,6 +1585,9 @@ Run 1 (kai-oauth).
 **Result (2026-10-20) ⚠️ PARTIAL — v0.9.3 post-advisory re-check @ c90b88d3**
 `kai-sa` (service account) and `kai-oauth` (OAuth): `list_shared_with_me()` → `[]`, no error; per-entry checks had nothing to run on.
 
+**Result (2026-10-24) ⚠️ PARTIAL — PR #1200 (#1127) QA round 2 (Sky) @ 0073914c**
+This head adds `includeItemsFromAllDrives`/`supportsAllDrives` to `list_shared_with_me`. Run in a fresh interpreter on this branch's registered tool, under a service account and under OAuth (sky's credentials): `list_shared_with_me(max_results=200)` → `[]` with no error both times. A raw `sharedWithMe=true` list with and without the flags also returned 0 files under OAuth. Neither identity has a file shared with it directly, so the new non-member Shared Drive path and the per-entry checks weren't exercised.
+
 ---
 
 ### TC-D153: Filter shared files by MIME type
@@ -1649,6 +1684,9 @@ list_recent_files(max_results=10) → 10 items ordered by modified_time desc; ea
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 1 (kai-oauth).
 
+**Result (2026-10-24, PR #1222 round 1 @ 5a30c76, Sky) ✅ PASS**
+`mcp-gee-sweet-sky` (OAuth). `list_recent_files(max_results=10)` returned 10 items ordered by `modified_time` desc, each with id, name, mime_type, modified_time, web_link.
+
 ---
 
 ### TC-D157: Filter by days
@@ -1667,6 +1705,12 @@ list_recent_files(days=7) → all results modified 2026-09-04 (within 7 days), o
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 1 (kai-oauth).
+
+**Result (2026-10-24, PR #1222 round 1 @ 5a30c76, Sky) ✅ PASS**
+`mcp-gee-sweet-sky` (OAuth), exercising the `datetime.now(UTC)` cutoff (#1212). `days=7` returned only items modified 2026-10-24. `days=1, max_results=100` at about 2026-10-25T06:00Z returned 11 items, all modified between 2026-10-24T15:15Z and 19:29Z, inside the 24-hour window, ordered desc.
+
+**Result (2026-10-25, PR #1222 round 2 @ 7690b8c, Sky) ✅ PASS**
+After the pydantic 2.14.1 re-lock, reconnected. `days=1, max_results=3` at about 16:08Z returned 3 items modified 2026-10-24T19:05Z–19:29Z, inside the window, ordered desc.
 
 ---
 

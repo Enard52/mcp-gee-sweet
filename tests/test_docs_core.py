@@ -1,5 +1,7 @@
 """Tests for docs core — HTML/AST pipeline and emitter internals."""
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 from mcp_gee_sweet.tools.docs.ast import (
@@ -19,10 +21,12 @@ from mcp_gee_sweet.tools.docs.content import (
     _to_doc_requests,
 )
 from mcp_gee_sweet.tools.docs.emitter import (
+    CellImages,
     _build_blank_para_before_table_collapses,
     _build_fill_requests,
     _build_merge_requests,
     _build_phantom_set,
+    _inserted_table_length,
     _physical_to_ast_indices,
     _run_group_fill_requests,
     _text_offset_since_last_table,
@@ -42,6 +46,11 @@ def _cell(text: str, colspan: int = 1, rowspan: int = 1) -> Cell:
 
 def _row(*cells: Cell) -> Row:
     return Row(cells=list(cells))
+
+
+def _no_images() -> CellImages:
+    """A fill with no cell images, for the builders that only read `uris`."""
+    return CellImages({}, AsyncMock(), lambda _e: None, lambda *_: None)
 
 
 def _table(*rows: Row) -> Table:
@@ -187,13 +196,26 @@ class TestHtmlToDocRequests:
     def test_astral_characters_use_utf16_indices_inside_table_cells(self):
         runs = [Run("😀"), Run("X", bold=True)]
 
-        requests = _run_group_fill_requests(runs, para_start=10)
+        requests = _run_group_fill_requests(runs, para_start=10, images=_no_images())
         clear_range = requests[1]["updateTextStyle"]["range"]
         styled_x = requests[2]["updateTextStyle"]["range"]
 
         assert clear_range == {"startIndex": 10, "endIndex": 13}
         assert styled_x == {"startIndex": 12, "endIndex": 13}
         assert _text_offset_since_last_table(runs, cursor=2) == 3
+
+    def test_astral_characters_use_utf16_indices_for_table_cell_images(self):
+        # #1073: a cell image's offset counts UTF-16 units, and the image counts as one.
+        img = Image(src="a")
+        children = [Run("😀"), img, Run("X")]
+        images = CellImages({id(img): "uri-a"}, AsyncMock(), lambda _e: None, lambda *_: None)
+
+        requests = _run_group_fill_requests(children, para_start=10, images=images)
+        insert = next(r["insertInlineImage"] for r in requests if "insertInlineImage" in r)
+
+        assert insert["location"]["index"] == 12
+        assert _text_offset_since_last_table(children, cursor=3, image_uris=images.uris) == 4
+        assert _text_offset_since_last_table(children, cursor=3) == 3
 
     def test_heading_gets_delete_bullets(self):
         requests, _ = _html_to_doc_requests("<h1>Title</h1>")
@@ -844,7 +866,9 @@ class TestBlockquoteEmitter:
         bullet_pass = [
             i
             for i, r in enumerate(requests)
-            if "createParagraphBullets" in r or "deleteContentRange" in r
+            if "createParagraphBullets" in r
+            # an isolated run's anchor delete, not a table's placeholder delete (#1097)
+            or ("deleteContentRange" in r and "insertTable" not in requests[i - 1])
         ]
         inserts = [
             i for i, r in enumerate(requests) if "insertTable" in r or "insertInlineImage" in r
@@ -943,6 +967,202 @@ class TestBlockquoteEmitter:
         assert starts[8:] == [36 + 36 * 8 + 36] * 3
         assert first_lines[8:] == [18 + 36 * 8 + 36] * 3
         assert starts[7] == 36 + 36 * 7 + 36
+
+
+class TestBlockquotePath:
+    """html_parser gives each <blockquote> its own id, so adjacent quotes stay
+    distinguishable once flattened to blockquote_depth (#1098)."""
+
+    def test_separate_quotes_get_different_paths(self):
+        a, b = html_to_ast("<blockquote><p>a</p></blockquote><blockquote><p>b</p></blockquote>")
+        assert len(a.blockquote_path) == len(b.blockquote_path) == 1
+        assert a.blockquote_path != b.blockquote_path
+
+    def test_paragraphs_of_one_quote_share_a_path(self):
+        a, b = html_to_ast("<blockquote><p>a</p><p>b</p></blockquote>")
+        assert a.blockquote_path == b.blockquote_path
+
+    def test_nested_quote_path_extends_the_outer(self):
+        outer, inner, tail = html_to_ast(
+            "<blockquote><p>o</p><blockquote><p>i</p></blockquote><p>t</p></blockquote>"
+        )
+        assert inner.blockquote_path[:1] == outer.blockquote_path
+        assert inner.blockquote_depth == len(inner.blockquote_path) == 2
+        assert tail.blockquote_path == outer.blockquote_path
+
+    def test_every_quoted_node_type_gets_a_path(self):
+        nodes = html_to_ast(
+            "<blockquote><h2>h</h2><ul><li>l</li></ul><pre><code>c</code></pre>"
+            "<p>i<hr></p></blockquote>"
+        )
+        assert nodes
+        assert all(len(n.blockquote_path) == n.blockquote_depth == 1 for n in nodes)
+
+    def test_unquoted_node_has_empty_path(self):
+        (node,) = html_to_ast("<p>plain</p>")
+        assert node.blockquote_path == ()
+
+    def test_path_ignored_by_equality(self):
+        """The ids are arbitrary counters, so they don't make otherwise equal nodes
+        differ."""
+        a = Paragraph(runs=[Run("x")], blockquote_depth=1, blockquote_path=(1,))
+        b = Paragraph(runs=[Run("x")], blockquote_depth=1, blockquote_path=(7,))
+        assert a == b
+
+
+class TestBlockSeparation:
+    """Adjacent blocks stay apart (#1098): Docs joins the borders of adjacent paragraphs
+    styled alike, so separate quotes get an unbordered, collapsed separator paragraph;
+    quotes get space where they meet other content; code blocks get space around
+    them."""
+
+    @staticmethod
+    def _inserted_text(requests):
+        return requests[0]["insertText"]["text"]
+
+    @staticmethod
+    def _spacing(requests):
+        """{startIndex: {field: magnitude}} for every spaceAbove/spaceBelow > 0."""
+        found: dict[int, dict[str, int]] = {}
+        for r in requests:
+            ps = r.get("updateParagraphStyle")
+            if not ps:
+                continue
+            for field in ("spaceAbove", "spaceBelow"):
+                magnitude = ps["paragraphStyle"].get(field, {}).get("magnitude")
+                if magnitude:
+                    found.setdefault(ps["range"]["startIndex"], {})[field] = magnitude
+        return found
+
+    @staticmethod
+    def _collapsed_ranges(requests):
+        return [
+            r["updateTextStyle"]["range"]
+            for r in requests
+            if "updateTextStyle" in r
+            and r["updateTextStyle"]["textStyle"].get("fontSize", {}).get("magnitude") == 1
+        ]
+
+    def test_separate_quotes_get_a_collapsed_separator(self):
+        requests, _ = _html_to_doc_requests(
+            "<blockquote><p>a</p></blockquote><blockquote><p>b</p></blockquote>"
+        )
+        # "a\n" [1,3), separator "\n" [3,4), "b\n" [4,6).
+        assert self._inserted_text(requests) == "a\n\nb\n"
+        assert self._collapsed_ranges(requests) == [{"startIndex": 3, "endIndex": 4}]
+        bordered = [
+            r["updateParagraphStyle"]["range"]
+            for r in requests
+            if "borderLeft" in r.get("updateParagraphStyle", {}).get("paragraphStyle", {})
+        ]
+        assert {"startIndex": 3, "endIndex": 4} not in bordered
+        # spaceBelow targets each node's last character, its "\n". The separator is
+        # spaced on one side only: spaced on both, two quotes sat twice as far apart as
+        # a quote and a paragraph (PR #1199 QA round 1).
+        assert self._spacing(requests) == {
+            1: {"spaceAbove": 8},
+            2: {"spaceBelow": 8},
+            5: {"spaceBelow": 8},
+        }
+
+    def test_one_quote_gets_no_separator_and_no_inner_spacing(self):
+        requests, _ = _html_to_doc_requests(
+            "<p>x</p><blockquote><p>a</p><p>b</p></blockquote><p>y</p>"
+        )
+        assert self._inserted_text(requests) == "x\na\nb\ny\n"
+        assert self._collapsed_ranges(requests) == []
+        # "a\n" starts at 3, "b\n" at 5: space above the quote and below it only.
+        assert self._spacing(requests) == {3: {"spaceAbove": 8}, 6: {"spaceBelow": 8}}
+
+    def test_nested_quote_continuing_its_outer_quote_not_separated(self):
+        requests, _ = _html_to_doc_requests(
+            "<blockquote><p>o</p><blockquote><p>i</p></blockquote><p>t</p></blockquote>"
+        )
+        assert self._inserted_text(requests) == "o\ni\nt\n"
+
+    def test_separate_nested_quotes_inside_one_outer_quote_separated(self):
+        requests, _ = _html_to_doc_requests(
+            "<blockquote><blockquote><p>i</p></blockquote>"
+            "<blockquote><p>j</p></blockquote></blockquote>"
+        )
+        assert self._inserted_text(requests) == "i\n\nj\n"
+        assert self._collapsed_ranges(requests) == [{"startIndex": 3, "endIndex": 4}]
+
+    def test_unknown_paths_never_separated(self):
+        """doc_to_ast.py leaves blockquote_path empty: nothing to tell quotes apart by,
+        so the nodes render as before."""
+        nodes = [
+            Paragraph(runs=[Run("a")], blockquote_depth=1),
+            Paragraph(runs=[Run("b")], blockquote_depth=1),
+        ]
+        requests, _ = ast_to_requests(nodes)
+        assert self._inserted_text(requests) == "a\nb\n"
+
+    def test_separate_quoted_lists_are_separate_lists(self):
+        requests, _ = _html_to_doc_requests(
+            "<blockquote><ul><li>a</li></ul></blockquote>"
+            "<blockquote><ul><li>b</li></ul></blockquote>"
+        )
+        assert self._inserted_text(requests) == "a\n\nb\n"
+        bullets = [
+            r["createParagraphBullets"]["range"] for r in requests if "createParagraphBullets" in r
+        ]
+        assert sorted(b["startIndex"] for b in bullets) == [1, 4]
+
+    def test_quoted_bullet_spacing_follows_the_bullet_pass(self):
+        """Like its quote styling, a quoted bullet's spacing is emitted after the bullet
+        pass, on post-bullet positions."""
+        requests, _ = _html_to_doc_requests(
+            "<blockquote><ul><li>a<ul><li>b</li></ul></li></ul></blockquote>"
+        )
+        last_bullet = max(i for i, r in enumerate(requests) if "createParagraphBullets" in r)
+        spacing = [
+            (i, r["updateParagraphStyle"]["range"])
+            for i, r in enumerate(requests)
+            if "updateParagraphStyle" in r
+            and {"spaceAbove", "spaceBelow"} & set(r["updateParagraphStyle"]["paragraphStyle"])
+        ]
+        assert all(i > last_bullet for i, _ in spacing)
+        # Post-bullets: "a\n" [1,3), "b\n" [3,5) (its tab consumed).
+        assert self._spacing(requests) == {1: {"spaceAbove": 8}, 4: {"spaceBelow": 8}}
+
+    def test_spacing_lands_on_a_multi_paragraph_nodes_edges(self):
+        """A node whose text holds "\\n" becomes several Docs paragraphs (#1093); the
+        quote's space goes on the first and last of them, not between."""
+        nodes = [Paragraph(runs=[Run("one\ntwo")], blockquote_depth=1, blockquote_path=(1,))]
+        requests, _ = ast_to_requests(nodes)
+        # "one\n" [1,5), "two\n" [5,9).
+        assert self._spacing(requests) == {1: {"spaceAbove": 8}, 8: {"spaceBelow": 8}}
+
+    def test_code_blocks_get_space_around_them(self):
+        requests, _ = _html_to_doc_requests(
+            "<pre><code>c1</code></pre><pre><code>c2</code></pre><p>p</p>"
+        )
+        # "c1\n" [1,4), "c2\n" [4,7), "p\n" [7,9).
+        assert self._spacing(requests) == {
+            1: {"spaceAbove": 8},
+            3: {"spaceBelow": 8},
+            4: {"spaceAbove": 8},
+            6: {"spaceBelow": 8},
+        }
+
+    @pytest.mark.parametrize(
+        "html",
+        [
+            "<p>x</p><blockquote><h1>H</h1><p>q</p></blockquote>",
+            '<p>x</p><blockquote><p data-style="title">H</p><p>q</p></blockquote>',
+        ],
+    )
+    def test_quoted_named_style_keeps_its_own_spacing(self, html):
+        """An explicit quote-edge value would replace HEADING_1's or TITLE's own spacing
+        (PR #1199 QA round 1); the quote's other edge is still spaced."""
+        requests, _ = _html_to_doc_requests(html)
+        # "x\n" [1,3), "H\n" [3,5), "q\n" [5,7).
+        assert self._spacing(requests) == {6: {"spaceBelow": 8}}
+
+    def test_plain_paragraphs_and_lists_get_no_spacing(self):
+        requests, _ = _html_to_doc_requests("<h2>h</h2><p>p</p><ul><li>l</li></ul>")
+        assert self._spacing(requests) == {}
 
 
 class TestColspanNumCols:
@@ -1093,7 +1313,7 @@ class TestRowspanFill:
         # 2x2 table; A(rowspan=2) in col 0 → doc row 1 has 2 physical cells but col 0 is phantom
         ast_t = _table(_row(_cell("A", rowspan=2), _cell("B")), _row(_cell("C")))
         doc_t = {"tableRows": [self._doc_row(10, 20), self._doc_row(30, 40)]}
-        reqs = _build_fill_requests([doc_t], [ast_t])
+        reqs = _build_fill_requests([doc_t], [ast_t], _no_images())
         # para_start = startIndex + 1; check on those values
         insert_indices = [r["insertText"]["location"]["index"] for r in reqs if "insertText" in r]
         assert 31 not in insert_indices  # phantom cell — must not be filled
@@ -1112,7 +1332,7 @@ class TestRowspanFill:
                 {"tableCells": [self._doc_cell(40), self._doc_cell(30)]},  # real first
             ]
         }
-        reqs = _build_fill_requests([doc_t], [ast_t])
+        reqs = _build_fill_requests([doc_t], [ast_t], _no_images())
         insert_indices = [r["insertText"]["location"]["index"] for r in reqs if "insertText" in r]
         assert 31 not in insert_indices  # phantom — must not be filled even when listed last
         assert 41 in insert_indices  # real cell must be filled
@@ -1120,7 +1340,7 @@ class TestRowspanFill:
     def test_empty_cell_text_skipped(self):
         ast_t = _table(_row(_cell(""), _cell("B")))
         doc_t = {"tableRows": [self._doc_row(10, 20)]}
-        reqs = _build_fill_requests([doc_t], [ast_t])
+        reqs = _build_fill_requests([doc_t], [ast_t], _no_images())
         insert_indices = [r["insertText"]["location"]["index"] for r in reqs if "insertText" in r]
         assert 11 not in insert_indices  # para_start = startIndex + 1
         assert 21 in insert_indices
@@ -1131,7 +1351,7 @@ class TestRowspanFill:
         ast_t = _table(_row(_cell("Wide", colspan=2), _cell("C2")))
         # Row 0 post-merge: [merged_col0 at 10, colspan_phantom_col1 at 20, real_col2 at 30]
         doc_t = {"tableRows": [self._doc_row(10, 20, 30)]}
-        reqs = _build_fill_requests([doc_t], [ast_t])
+        reqs = _build_fill_requests([doc_t], [ast_t], _no_images())
         insert_indices = [r["insertText"]["location"]["index"] for r in reqs if "insertText" in r]
         assert 21 not in insert_indices  # colspan phantom — must not be filled
         assert 11 in insert_indices  # merged cell gets "Wide"
@@ -1140,7 +1360,7 @@ class TestRowspanFill:
     def test_requests_sorted_high_to_low(self):
         ast_t = _table(_row(_cell("A"), _cell("B")))
         doc_t = {"tableRows": [self._doc_row(10, 50)]}
-        reqs = _build_fill_requests([doc_t], [ast_t])
+        reqs = _build_fill_requests([doc_t], [ast_t], _no_images())
         insert_indices = [r["insertText"]["location"]["index"] for r in reqs if "insertText" in r]
         assert insert_indices == sorted(insert_indices, reverse=True)
 
@@ -1152,7 +1372,7 @@ class TestRowspanFill:
         inner = _table(_row(_cell("inner")))
         ast_t = Table(rows=[Row(cells=[Cell(children=[Run("Some label "), inner])])])
         doc_t = {"tableRows": [self._doc_row(10)]}
-        reqs = _build_fill_requests([doc_t], [ast_t])
+        reqs = _build_fill_requests([doc_t], [ast_t], _no_images())
         assert reqs == []
 
 
@@ -1170,7 +1390,7 @@ class TestFillRequestsFontSizeClear:
         # after its insertText so any heading-inherited fontSize is wiped out.
         ast_t = _table(_row(_cell("Hello")))
         doc_t = {"tableRows": [self._doc_row(10)]}
-        reqs = _build_fill_requests([doc_t], [ast_t])
+        reqs = _build_fill_requests([doc_t], [ast_t], _no_images())
 
         insert_idx = next(i for i, r in enumerate(reqs) if "insertText" in r)
         clear_idx = next(
@@ -1186,7 +1406,7 @@ class TestFillRequestsFontSizeClear:
     def test_fontSize_clear_covers_full_cell_text(self):
         ast_t = _table(_row(_cell("Hello")))
         doc_t = {"tableRows": [self._doc_row(10)]}
-        reqs = _build_fill_requests([doc_t], [ast_t])
+        reqs = _build_fill_requests([doc_t], [ast_t], _no_images())
 
         clear = next(
             r
@@ -1206,7 +1426,7 @@ class TestFillRequestsFontSizeClear:
         cell = Cell(children=[sized_run])
         ast_t = _table(_row(cell))
         doc_t = {"tableRows": [self._doc_row(10)]}
-        reqs = _build_fill_requests([doc_t], [ast_t])
+        reqs = _build_fill_requests([doc_t], [ast_t], _no_images())
 
         clear_idx = next(
             i
@@ -1389,10 +1609,10 @@ class TestNestedBulletDepthEmitsIndentation:
         requests, _ = ast_to_requests(nodes)
         insert = next(r for r in requests if "insertText" in r)
         table_req = next(r for r in requests if "insertTable" in r)
-        # As-inserted text is "Parent\n\tChild\n" (14 chars); table's raw position would
-        # be 1 + 14 = 15, but the 1 leading tab gets consumed ahead of it, so the real
-        # position is 14.
-        assert insert["insertText"]["text"] == "Parent\n\tChild\n"
+        # As-inserted text is "Parent\n\tChild\n" (14 chars) plus the table's placeholder
+        # (#1097); table's raw position would be 1 + 14 = 15, but the 1 leading tab gets
+        # consumed ahead of it, so the real position is 14.
+        assert insert["insertText"]["text"] == "Parent\n\tChild\n\n"
         assert table_req["insertTable"]["location"]["index"] == 14
 
     def test_table_before_nested_bullet_unaffected(self):
@@ -1454,9 +1674,10 @@ class TestBulletDepthEdgeCases:
         requests, _ = ast_to_requests(nodes)
         insert = next(r for r in requests if "insertText" in r)
         table_req = next(r for r in requests if "insertTable" in r)
-        # "\tChild\n" is 7 chars; table's raw position 1+7=8, minus the 1 synthetic
-        # tab consumed ahead of it by createParagraphBullets = 7.
-        assert insert["insertText"]["text"] == "\tChild\n"
+        # "\tChild\n" is 7 chars (then the table's placeholder, #1097); table's raw
+        # position 1+7=8, minus the 1 synthetic tab consumed ahead of it by
+        # createParagraphBullets = 7.
+        assert insert["insertText"]["text"] == "\tChild\n\n"
         assert table_req["insertTable"]["location"]["index"] == 7
 
     def test_literal_leading_tab_still_strips_at_depth_zero(self):
@@ -1699,20 +1920,38 @@ class TestBuildBlankParaBeforeTableCollapses:
     def test_blank_para_before_table_collapsed(self):
         doc = self._doc([self._blank_para(1, 2), self._table_elem(2)])
         result = _build_blank_para_before_table_collapses(doc)
-        # 2 requests: updateParagraphStyle + updateTextStyle
-        assert len(result) == 2
+        # 4 requests: delete bullets, reset style, collapse paragraph, 1pt font
+        assert len(result) == 4
         rng = {"startIndex": 1, "endIndex": 2}
-        ps = result[0]["updateParagraphStyle"]
+        assert result[0] == {"deleteParagraphBullets": {"range": rng}}
+        reset = result[1]["updateParagraphStyle"]
+        assert reset["range"] == rng
+        assert reset["paragraphStyle"] == {"namedStyleType": "NORMAL_TEXT"}
+        assert reset["fields"] == "namedStyleType,indentStart,indentFirstLine,borderLeft"
+        ps = result[2]["updateParagraphStyle"]
         assert ps["range"] == rng
         assert ps["paragraphStyle"]["spaceAbove"] == {"magnitude": 0, "unit": "PT"}
         assert ps["paragraphStyle"]["spaceBelow"] == {"magnitude": 0, "unit": "PT"}
         assert ps["paragraphStyle"]["lineSpacing"] == 1
-        assert ps["paragraphStyle"]["namedStyleType"] == "NORMAL_TEXT"
-        assert ps["fields"] == "spaceAbove,spaceBelow,lineSpacing,namedStyleType"
-        ts = result[1]["updateTextStyle"]
+        assert ps["fields"] == "spaceAbove,spaceBelow,lineSpacing"
+        ts = result[3]["updateTextStyle"]
         assert ts["range"] == rng
         assert ts["textStyle"]["fontSize"] == {"magnitude": 1, "unit": "PT"}
         assert ts["fields"] == "fontSize"
+
+    def test_style_inherited_from_following_block_reset(self):
+        """insertTable gives the paragraph before a table the following block's style
+        (#1097): a following list's bullet showed as an empty item and pushed the list's
+        numbering on; a following quote's indent and border came along too (PR #1199 QA
+        round 1). Bullets go first: deleteParagraphBullets adds indent, which the reset
+        must then clear."""
+        doc = self._doc([self._blank_para(1, 2), self._table_elem(2)])
+        result = _build_blank_para_before_table_collapses(doc)
+        assert "deleteParagraphBullets" in result[0]
+        fields = result[1]["updateParagraphStyle"]["fields"].split(",")
+        assert {"indentStart", "indentFirstLine", "borderLeft"} <= set(fields)
+        style = result[1]["updateParagraphStyle"]["paragraphStyle"]
+        assert not {"indentStart", "indentFirstLine", "borderLeft"} & set(style)
 
     def test_heading_blank_para_before_table_reset_to_normal_text(self):
         # #1092: the displaced initial paragraph inherits the preceding heading's style,
@@ -1727,7 +1966,7 @@ class TestBuildBlankParaBeforeTableCollapses:
         }
         doc = self._doc([heading, self._blank_para(12, 13), self._table_elem(13)])
         result = _build_blank_para_before_table_collapses(doc)
-        ps = result[0]["updateParagraphStyle"]
+        ps = result[1]["updateParagraphStyle"]
         assert ps["range"] == {"startIndex": 12, "endIndex": 13}
         assert ps["paragraphStyle"]["namedStyleType"] == "NORMAL_TEXT"
         assert "namedStyleType" in ps["fields"].split(",")
@@ -1740,7 +1979,7 @@ class TestBuildBlankParaBeforeTableCollapses:
         doc = self._doc([self._table_elem(1)])
         assert _build_blank_para_before_table_collapses(doc) == []
 
-    def test_multiple_blank_paras_before_tables_two_requests_each(self):
+    def test_multiple_blank_paras_before_tables_four_requests_each(self):
         doc = self._doc(
             [
                 self._blank_para(1, 2),
@@ -1751,14 +1990,10 @@ class TestBuildBlankParaBeforeTableCollapses:
             ]
         )
         result = _build_blank_para_before_table_collapses(doc)
-        # 2 requests per blank para = 4 total
-        assert len(result) == 4
-        # First pair: blank para at 1
-        assert result[0]["updateParagraphStyle"]["range"]["startIndex"] == 1
-        assert result[1]["updateTextStyle"]["range"]["startIndex"] == 1
-        # Second pair: blank para at 15
-        assert result[2]["updateParagraphStyle"]["range"]["startIndex"] == 15
-        assert result[3]["updateTextStyle"]["range"]["startIndex"] == 15
+        # 4 requests per blank para = 8 total
+        assert len(result) == 8
+        starts = [next(iter(r.values()))["range"]["startIndex"] for r in result]
+        assert starts == [1] * 4 + [15] * 4
 
     def test_para_before_non_table_not_collapsed(self):
         doc = self._doc([self._blank_para(1, 2), self._text_para(2, 5, "Hi\n")])
@@ -1767,6 +2002,24 @@ class TestBuildBlankParaBeforeTableCollapses:
     def test_table_preceded_by_table_not_touched(self):
         doc = self._doc([self._table_elem(1), self._table_elem(10)])
         assert _build_blank_para_before_table_collapses(doc) == []
+
+    def test_blank_para_between_two_tables_keeps_its_height(self):
+        """Collapsed, it let two tables touch and read as one (#1098). It is still reset:
+        left at full height, a following list's bullet showed as an empty item between
+        the tables (PR #1199 QA round 1)."""
+        doc = self._doc([self._table_elem(1), self._blank_para(9, 10), self._table_elem(10)])
+        result = _build_blank_para_before_table_collapses(doc)
+        rng = {"startIndex": 9, "endIndex": 10}
+        assert result == [
+            {"deleteParagraphBullets": {"range": rng}},
+            {
+                "updateParagraphStyle": {
+                    "range": rng,
+                    "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                    "fields": "namedStyleType,indentStart,indentFirstLine,borderLeft",
+                }
+            },
+        ]
 
 
 class TestImagePositionalInserts:
@@ -1783,13 +2036,18 @@ class TestImagePositionalInserts:
         ]
         assert extract_images(nodes) == [img1, img2]
 
-    def test_extract_images_skips_table_cell_content(self):
-        # Table-cell images are a deliberate gap (#333) — html_parser.py never
-        # actually puts one there, but extract_images must not crash or
-        # silently pick one up if it somehow did.
-        table = Table(rows=[Row(cells=[Cell(children=[Run("x")])])])
-        nodes = [table]
-        assert extract_images(nodes) == []
+    def test_extract_images_includes_table_cells_in_document_order(self):
+        # #1073: cell images, nested tables included, are resolved like body ones.
+        body1, cell1, nested, cell2, body2 = (Image(src=s) for s in "abcde")
+        inner = Table(rows=[Row(cells=[Cell(children=[nested])])])
+        table = Table(
+            rows=[
+                Row(cells=[Cell(children=[Run("x"), cell1]), Cell(children=[inner])]),
+                Row(cells=[Cell(children=[cell2])]),
+            ]
+        )
+        nodes = [Paragraph(runs=[body1]), table, Paragraph(runs=[body2])]
+        assert extract_images(nodes) == [body1, cell1, nested, cell2, body2]
 
     def test_unresolved_image_dropped_no_crash(self):
         nodes = [Paragraph(runs=[Run("before "), Image(src="a.png"), Run(" after")])]
@@ -1845,18 +2103,17 @@ class TestImagePositionalInserts:
         requests, tables = ast_to_requests(nodes, image_uris={id(img): "https://example.com/a.png"})
         assert tables == [table]
         insert = next(r for r in requests if "insertText" in r)
-        # "Before\n" (7 chars) then (table contributes 0 chars to text) then "\n"
+        # "Before\n" (7 chars), the table's placeholder paragraph (#1097), then "\n"
         # for the image's own now-empty paragraph.
-        assert insert["insertText"]["text"] == "Before\n\n"
+        assert insert["insertText"]["text"] == "Before\n\n\n"
         table_req = next(r for r in requests if "insertTable" in r)
         image_req = next(r for r in requests if "insertInlineImage" in r)
-        # Table lands right after "Before\n" (position 8); the image's own paragraph
-        # (computed in the same table-agnostic coordinate space) also starts at 8 —
-        # both requests target position 8, and since the image request is processed
-        # in the same combined descending pass, it isn't shifted by the table
-        # insertion despite appearing later in the document.
+        # Table lands at its placeholder right after "Before\n" (position 8); the
+        # image's own paragraph starts at 9. The image request is processed first in
+        # the combined descending pass, so it isn't shifted by the table insertion
+        # despite appearing later in the document.
         assert table_req["insertTable"]["location"]["index"] == 8
-        assert image_req["insertInlineImage"]["location"]["index"] == 8
+        assert image_req["insertInlineImage"]["location"]["index"] == 9
         # Descending-position ordering means the higher-position insertion (here,
         # a tie — image is emitted after its own node walk, so it appears after
         # the table in requests) must still not corrupt either target index.
@@ -2015,3 +2272,181 @@ class TestImageLinks:
                     "endIndex": index + 1,
                 }
                 assert following["updateTextStyle"]["textStyle"] == {"link": {"url": img.link_url}}
+
+
+class TestTablePlaceholder:
+    """Each table is inserted at a placeholder paragraph of its own, deleted right after
+    (#1097). Inserted at the next block instead, the table took that block's indent and
+    every empty cell its first character's text style."""
+
+    @staticmethod
+    def _table(rows: int = 1, cols: int = 1) -> Table:
+        return Table(
+            rows=[Row(cells=[Cell(children=[Run("x")]) for _ in range(cols)]) for _ in range(rows)]
+        )
+
+    def test_inserted_table_length_matches_live_counts(self):
+        # Confirmed live: 2x2 adds 13 indices, 2x3 adds 17.
+        assert _inserted_table_length(2, 2) == 13
+        assert _inserted_table_length(2, 3) == 17
+
+    def test_table_inserted_at_its_placeholder_then_placeholder_deleted(self):
+        nodes = [
+            Paragraph(runs=[Run("Before")]),
+            self._table(2, 3),
+            Paragraph(runs=[Run("Hotel:", bold=True), Run(" Casa")]),
+        ]
+        requests, _ = ast_to_requests(nodes)
+        insert = next(r for r in requests if "insertText" in r)
+        # "Before\n" (7), the placeholder at 8, then the following paragraph at 9.
+        assert insert["insertText"]["text"] == "Before\n\nHotel: Casa\n"
+        i = next(i for i, r in enumerate(requests) if "insertTable" in r)
+        assert requests[i]["insertTable"]["location"]["index"] == 8
+        # insertTable pushes the placeholder to 8 + 17; the next request deletes it.
+        assert requests[i + 1] == {
+            "deleteContentRange": {"range": {"startIndex": 25, "endIndex": 26}}
+        }
+        # The following paragraph's bold run starts after the placeholder.
+        bold = next(r for r in requests if "updateTextStyle" in r)
+        assert bold["updateTextStyle"]["range"] == {"startIndex": 9, "endIndex": 15}
+
+    @staticmethod
+    def _touching(requests: list[dict], rng: dict) -> list[int]:
+        return [
+            i
+            for i, r in enumerate(requests)
+            for v in r.values()
+            if isinstance(v, dict) and v.get("range") == rng
+        ]
+
+    @staticmethod
+    def _plain(rng: dict, paragraph_style: dict | None = None) -> list[dict]:
+        return [
+            {"deleteParagraphBullets": {"range": rng}},
+            {
+                "updateParagraphStyle": {
+                    "range": rng,
+                    "paragraphStyle": paragraph_style or {"namedStyleType": "NORMAL_TEXT"},
+                    "fields": "*",
+                }
+            },
+            {"updateTextStyle": {"range": rng, "textStyle": {}, "fields": "*"}},
+        ]
+
+    def test_placeholder_reset_to_plain_after_bullets_before_insert(self):
+        nodes = [self._table(), BulletItem(runs=[Run("one")], depth=0, ordered=True)]
+        requests, _ = ast_to_requests(nodes)
+        placeholder = {"startIndex": 1, "endIndex": 2}
+        touching = self._touching(requests, placeholder)
+        assert [requests[i] for i in touching] == self._plain(placeholder)
+        bullets = next(i for i, r in enumerate(requests) if "createParagraphBullets" in r)
+        assert requests[bullets]["createParagraphBullets"]["range"]["startIndex"] == 2
+        insert = next(i for i, r in enumerate(requests) if "insertTable" in r)
+        assert all(bullets < i < insert for i in touching)
+
+    def test_table_between_list_items_keeps_one_list_and_a_plain_placeholder(self):
+        # PR #1201 QA round 1: the bullet run skips Table nodes, so "1. a" / table /
+        # "2. b" is one createParagraphBullets range, placeholder included. Both items
+        # stay one list (one call), and the placeholder loses its bullet afterward.
+        nodes = [
+            BulletItem(runs=[Run("a")], depth=0, ordered=True),
+            BulletItem(runs=[Run("b")], depth=1, ordered=True),
+            self._table(),
+            BulletItem(runs=[Run("c")], depth=0, ordered=True),
+        ]
+        requests, _ = ast_to_requests(nodes)
+        insert = next(r for r in requests if "insertText" in r)
+        assert insert["insertText"]["text"] == "a\n\tb\n\nc\n"
+        bullet_calls = [i for i, r in enumerate(requests) if "createParagraphBullets" in r]
+        assert len(bullet_calls) == 1
+        assert requests[bullet_calls[0]]["createParagraphBullets"]["range"] == {
+            "startIndex": 1,
+            "endIndex": 9,
+        }
+        # The placeholder sits at 6 in the inserted text, 5 once b's tab is consumed.
+        placeholder = {"startIndex": 5, "endIndex": 6}
+        touching = self._touching(requests, placeholder)
+        assert [requests[i] for i in touching] == self._plain(placeholder)
+        table = next(i for i, r in enumerate(requests) if "insertTable" in r)
+        assert requests[table]["insertTable"]["location"]["index"] == 5
+        assert all(bullet_calls[0] < i < table for i in touching)
+
+    def test_consecutive_tables_each_get_a_placeholder(self):
+        nodes = [self._table(), self._table(1, 2)]
+        requests, _ = ast_to_requests(nodes)
+        insert = next(r for r in requests if "insertText" in r)
+        assert insert["insertText"]["text"] == "\n\n"
+        pairs = [
+            (r["insertTable"]["location"]["index"], requests[i + 1]["deleteContentRange"])
+            for i, r in enumerate(requests)
+            if "insertTable" in r
+        ]
+        # Latest first: the 1x2 table at its placeholder (2), then the 1x1 at 1.
+        assert pairs == [
+            (2, {"range": {"startIndex": 2 + 8, "endIndex": 2 + 9}}),
+            (1, {"range": {"startIndex": 1 + 6, "endIndex": 1 + 7}}),
+        ]
+
+    def test_degenerate_table_gets_no_placeholder(self):
+        nodes = [Paragraph(runs=[Run("a")]), Table(rows=[]), Paragraph(runs=[Run("b")])]
+        requests, tables = ast_to_requests(nodes)
+        assert tables == []
+        insert = next(r for r in requests if "insertText" in r)
+        assert insert["insertText"]["text"] == "a\nb\n"
+        assert not any("deleteContentRange" in r for r in requests)
+
+
+class TestQuotedTable:
+    """A table inside a blockquote is indented like the quote (#1097, PR #1201 QA round
+    1): inserted at the following quote paragraph it took that indent by accident, and at
+    a plain placeholder it lost it. No border: the table doesn't take one."""
+
+    def test_parser_records_quote_depth_on_a_top_level_table(self):
+        nodes = html_to_ast(
+            "<blockquote><p>a</p><table><tr><td>x</td></tr></table><p>b</p></blockquote>"
+            "<table><tr><td>y</td></tr></table>"
+        )
+        tables = [n for n in nodes if isinstance(n, Table)]
+        assert [t.blockquote_depth for t in tables] == [1, 0]
+
+    def test_markdown_quoted_table_gets_quote_depth(self):
+        md = "> quote a\n>\n> | Q | R |\n> |---|---|\n> | 1 | 2 |\n>\n> quote b\n"
+        nodes = html_to_ast(_md_to_html(md))
+        (table,) = [n for n in nodes if isinstance(n, Table)]
+        assert table.blockquote_depth == 1
+
+    def test_quoted_table_placeholder_indented_without_border(self):
+        table = Table(rows=[Row(cells=[Cell(children=[Run("x")])])], blockquote_depth=2)
+        requests, _ = ast_to_requests([Paragraph(runs=[Run("a")]), table])
+        rng = {"startIndex": 3, "endIndex": 4}
+        style = next(
+            r["updateParagraphStyle"]
+            for r in requests
+            if r.get("updateParagraphStyle", {}).get("range") == rng
+        )
+        assert style["paragraphStyle"] == {
+            "namedStyleType": "NORMAL_TEXT",
+            "indentStart": {"magnitude": 72, "unit": "PT"},
+            "indentFirstLine": {"magnitude": 72, "unit": "PT"},
+        }
+        assert style["fields"] == "*"
+
+    def test_quoted_table_is_not_quoted_for_separators_or_spacing(self):
+        # Table.blockquote_depth is indent only: two quotes around a table still get
+        # quote-edge spacing against it, and no separator is added next to it.
+        nodes = html_to_ast(
+            "<blockquote><p>a</p><table><tr><td>x</td></tr></table><p>b</p></blockquote>"
+        )
+        requests, _ = ast_to_requests(nodes)
+        spacing = [
+            r["updateParagraphStyle"]["paragraphStyle"]
+            for r in requests
+            if "updateParagraphStyle" in r
+            and set(r["updateParagraphStyle"]["paragraphStyle"]) & {"spaceAbove", "spaceBelow"}
+        ]
+        assert spacing == [
+            {"spaceAbove": {"magnitude": 8, "unit": "PT"}},
+            {"spaceBelow": {"magnitude": 8, "unit": "PT"}},
+            {"spaceAbove": {"magnitude": 8, "unit": "PT"}},
+            {"spaceBelow": {"magnitude": 8, "unit": "PT"}},
+        ]

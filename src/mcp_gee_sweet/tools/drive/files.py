@@ -2,7 +2,7 @@ import asyncio
 import csv
 import logging
 from contextlib import aclosing
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +28,18 @@ _CSV_IMPORT_CHUNK_ROWS = 5000
 _LIST_DRIVES_MAX_PAGES = 50
 
 
+def _corpora_kwargs(folder_id: str | None) -> dict[str, str]:
+    """files().list() corpus for a query that may or may not be folder-scoped.
+
+    Drive's default corpus is "user", which leaves out Shared Drive items the
+    caller hasn't created or opened, even with includeItemsFromAllDrives=True: a
+    service account's unscoped search found 2 of 14 matches (#1127). An
+    "in parents" query isn't affected (checked live under both identities), so it
+    keeps the default rather than paying for the slower allDrives corpus.
+    """
+    return {} if folder_id else {"corpora": "allDrives"}
+
+
 async def _list_drive_files(
     drive_service,
     q: str,
@@ -39,7 +51,9 @@ async def _list_drive_files(
 
     Both tools query files().list() against the same result field set and shape
     the response identically; only the query string, page size, and (for
-    list_recent_files) the cross-Drive flags differ, passed via extra_kwargs.
+    list_recent_files) the corpus differ, passed via extra_kwargs. Both include
+    Shared Drive items: without the all-drives flags, Drive leaves out a Shared
+    Drive file even when it was shared directly with the caller.
     """
     try:
         results = await execute_in_thread(
@@ -48,6 +62,8 @@ async def _list_drive_files(
                 q=q,
                 pageSize=max_results,
                 spaces="drive",
+                includeItemsFromAllDrives=True,
+                supportsAllDrives=True,
                 fields="files(id, name, mimeType, modifiedTime, owners, webViewLink)",
                 orderBy="modifiedTime desc",
                 **(extra_kwargs or {}),
@@ -394,8 +410,8 @@ def register(tool):
         List all spreadsheets in the specified Google Drive folder.
         If no folder is specified, uses the configured default folder; if that's
         also unset, searches across 'My Drive' AND every shared drive the
-        authenticated account can access (includeItemsFromAllDrives=True) — not
-        just 'My Drive'.
+        authenticated account can access (corpora='allDrives') — not just
+        'My Drive'.
 
         A strict, less-flexible special case of list_files pre-filtered to the
         spreadsheet MIME type. For a different result cap or other file types, use
@@ -431,6 +447,7 @@ def register(tool):
                 pageSize=max_results,
                 includeItemsFromAllDrives=True,
                 supportsAllDrives=True,
+                **_corpora_kwargs(target_folder_id),
                 fields="files(id, name)",
                 orderBy="modifiedTime desc",
             )
@@ -449,7 +466,7 @@ def register(tool):
         If no parent is specified, uses the configured default folder
         (DRIVE_FOLDER_ID); if that is also unset, searches across 'My Drive' AND
         every shared drive the authenticated account can access
-        (includeItemsFromAllDrives=True) — not just 'My Drive'.
+        (corpora='allDrives') — not just 'My Drive'.
 
         Args:
             parent_folder_id: Optional Google Drive folder ID to search within.
@@ -481,6 +498,7 @@ def register(tool):
                 pageSize=max_results,
                 includeItemsFromAllDrives=True,
                 supportsAllDrives=True,
+                **_corpora_kwargs(target_folder_id),
                 fields="files(id, name, parents)",
                 orderBy="name",
             )
@@ -651,7 +669,9 @@ def register(tool):
         ctx: Context = None,
     ) -> list[dict[str, Any]]:
         """
-        Search for files in Google Drive by name or content.
+        Search for files in Google Drive by name or content. Without folder_id,
+        searches 'My Drive' AND every shared drive the authenticated account can
+        access (corpora='allDrives').
 
         For a spreadsheet-only search, search_spreadsheets(query, max_results) is a
         narrower convenience wrapper around this same query pre-filtered to the
@@ -694,6 +714,7 @@ def register(tool):
                     spaces="drive",
                     includeItemsFromAllDrives=True,
                     supportsAllDrives=True,
+                    **_corpora_kwargs(folder_id),
                     fields="files(id, name, mimeType, createdTime, modifiedTime, owners, parents, webViewLink, starred)",
                     orderBy="modifiedTime desc",
                 )
@@ -725,7 +746,9 @@ def register(tool):
         query: str, max_results: int = 20, ctx: Context = None
     ) -> list[dict[str, Any]]:
         """
-        Search for spreadsheets in Google Drive by name or content.
+        Search for spreadsheets in Google Drive by name or content, across
+        'My Drive' AND every shared drive the authenticated account can access
+        (corpora='allDrives').
 
         A strict, less-flexible special case of search_files pre-filtered to the
         spreadsheet MIME type. For folder-scoped search or other file types, use
@@ -760,6 +783,7 @@ def register(tool):
                     spaces="drive",
                     includeItemsFromAllDrives=True,
                     supportsAllDrives=True,
+                    **_corpora_kwargs(None),
                     fields="files(id, name, createdTime, modifiedTime, owners, webViewLink, starred)",
                     orderBy="modifiedTime desc",
                 )
@@ -1176,7 +1200,8 @@ def register(tool):
         ctx: Context = None,
     ) -> list[dict[str, Any]]:
         """
-        List files explicitly shared with the authenticated user.
+        List files explicitly shared with the authenticated user, including
+        shared drive files shared with them directly.
 
         Args:
             mime_type: Optional MIME type filter, e.g.
@@ -1209,7 +1234,9 @@ def register(tool):
         ctx: Context = None,
     ) -> list[dict[str, Any]]:
         """
-        List recently modified files in Drive, newest first.
+        List recently modified files in Drive, newest first, across 'My Drive'
+        AND every shared drive the authenticated account can access
+        (corpora='allDrives').
 
         Args:
             max_results: Maximum number of files to return (default 20, max 100).
@@ -1225,9 +1252,7 @@ def register(tool):
 
         parts = ["trashed=false"]
         if days is not None and days > 0:
-            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
-                "%Y-%m-%dT%H:%M:%S"
-            )
+            cutoff = (datetime.now(UTC) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
             parts.append(f"modifiedTime > '{cutoff}'")
         if mime_type:
             safe_mime = _escape_drive_query_mime_type(mime_type)
@@ -1238,7 +1263,7 @@ def register(tool):
             " and ".join(parts),
             max_results,
             "List recent files",
-            extra_kwargs={"includeItemsFromAllDrives": True, "supportsAllDrives": True},
+            extra_kwargs=_corpora_kwargs(None),
         )
 
     @tool(annotations=ToolAnnotations(title="Get Storage Quota", readOnlyHint=True))

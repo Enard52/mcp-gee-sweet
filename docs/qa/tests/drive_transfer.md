@@ -242,6 +242,12 @@ Run 2 (kai-sa, SA on the Shared Drive); every check matched.
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 2 (kai-sa, SA on the Shared Drive); every check matched.
 
+**Result (2026-10-26) ✅ PASS — PR #1261 QA round 1 (Sky)**
+Regression check for `_upload_local_file`'s now-paged name lookup, run via `mcp-gee-sweet-sky` (OAuth) in a scratch folder on the Shared Drive. The second call returned the first call's `fileId` with `skipped: true`, and `list_files` showed a single `qa-test.png`.
+
+**Result (2026-10-26) ✅ PASS — PR #1261 QA round 2 (Sky)**
+Re-run at head `959ad211`, where the lookup now pages at `pageSize=1000` and requests `id`. Same outcome as round 1.
+
 ---
 
 ### TC-D95: skip_if_exists=False creates duplicate ⚠️ local-filesystem
@@ -376,6 +382,12 @@ Delete both files (raw `qa-convert-215.csv` and converted `qa-convert-215`) from
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 2 (kai-sa, SA on the Shared Drive); every check matched.
+
+**Result (2026-10-26) ✅ PASS — PR #1261 QA round 1 (Sky)**
+Regression check for the `convert=True` branch (which also reads `properties`) of `_upload_local_file`'s now-paged lookup. Run via `mcp-gee-sweet-sky` (OAuth) in a scratch folder on the Shared Drive. Step 2 returned `skipped: false` and a new Sheet named `qa-convert-215`, and `list_files` showed the raw CSV alongside the converted Sheet. An extra step 3 (the same `convert=True` call again) returned the Sheet's `fileId` with `skipped: true`.
+
+**Result (2026-10-26) ✅ PASS — PR #1261 QA round 2 (Sky)**
+Re-run at head `959ad211` with the same steps, including the extra step 3. Same outcome as round 1.
 
 ---
 
@@ -3039,6 +3051,18 @@ Trash `{FOLDER_ID}` and its contents. Remove `/tmp/qa-272/`.
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 2 (kai-sa, SA on the Shared Drive); every check matched.
 
+**Result (2026-10-24, PR #1222 round 1 @ 5a30c76, Sky) ✅ PASS**
+`mcp-gee-sweet-sky` (OAuth, Shared Drive scratch folder), exercising the `timezone.utc` → `UTC` change in `_local_mtime_dt` and `_converted_md_upload_properties` (#1212). After the setup upload, both Docs' `geeSweetSourceMtime`/`geeSweetUploadedAt` were `2026-10-25T05:59:0xZ` for files written at 22:59 PDT, so the stamps are UTC. The bidirectional setup sync recorded `geeSweetImportRevision: "1"` on both.
+- Call 1: `uploaded == ["x.md"]`, `y.md` skipped, same file ID. `x.md` had `geeSweetBaselineRevision: "1"` (its pre-upload latest per `list_revisions`), a new `geeSweetSourceMtime`, and no `geeSweetImportRevision`.
+- Call 2: both skipped, and `x.md` now carried `geeSweetImportRevision: "2"`.
+- Call 3 (dry run): `y.md` was a `conflict`, reason starting "edited both locally and in Drive"; `x.md` was `skip` ("in sync").
+- Call 4: `conflicts == ["y.md"]`, `uploaded == []`. `get_doc_content` on `y.md` contained "Drive edit" and not "local edit".
+- Call 5: `x.md` was a `conflict` with reason "local .md changed since the last upload but direction is download".
+Teardown done.
+
+**Result (2026-10-25, PR #1222 round 2 @ 7690b8c, Sky) ✅ PASS**
+Re-run after the fix commit re-locked pydantic 2.14.1 / pydantic-core 2.50.1 (confirmed in the worktree venv), `mcp-gee-sweet-sky` reconnected. Setup stamps were UTC (`16:08:00Z` source mtime for files written at 09:08 PDT). Call 1: `uploaded == ["x.md"]`, `geeSweetBaselineRevision: "1"`, no import revision. Call 2: both skipped, `x.md` `geeSweetImportRevision: "2"`. Call 3: `y.md` `conflict` ("edited both locally and in Drive …"), `x.md` "in sync". Call 4: `conflicts == ["y.md"]`, `uploaded == []`, `y.md` holds "Drive edit" and not "local edit". Call 5: `x.md` `conflict`, "local .md changed since the last upload but direction is download". Extra: `dry_run=True, resolve={"y.md": "keep_local"}` previewed `y.md` as `keep_local`, so the dict-typed parameter still validates under the new pydantic. Teardown done.
+
 ### TC-D273: `sync_folder(convert_markdown=True)` — recording the import revision leaves a Drive edit's `modifiedTime` alone, and a local save seconds after an upload still uploads (PR #854 QA round 1) ⚠️ destructive ⚠️ local-filesystem
 
 **Background:** PR #854 round 1 reproduced two bugs live. The first sync after an upload records the import's revision ID. It used to re-send the stamped source mtime as `modifiedTime` even on a Doc already edited in Drive, which reset the edit's real timestamp. Also, the local side was compared against its stamp with the 5s Drive clock-skew tolerance, so a save within 5s of the uploaded version never uploaded. The stamp now keeps microsecond precision and is compared exactly, and `modifiedTime` is re-sent only for an unedited Doc.
@@ -3334,3 +3358,34 @@ Run 2 (kai-sa, SA on the Shared Drive); every check matched.
 
 **Result (2026-10-17) ✅ PASS — v0.9.2 release pass**
 Run 2 (kai-sa, SA on the Shared Drive); every check matched.
+
+### TC-D300: Folder transfers see every child of a folder with more than 1,000 entries (issue #1165) ⚠️ local-filesystem
+
+**Background:** `download_folder`, `sync_folder`, and `upload_local_folder(skip_if_exists=True)` listed a folder with one `pageSize=1000` request and never followed `nextPageToken`. Past 1,000 children, `download_folder` silently skipped the rest, and the two upload paths treated files past the first page as missing and uploaded duplicates. Each listing now reads every page.
+
+**Setup:**
+1. `rm -rf /tmp/qa-300 && mkdir -p /tmp/qa-300/src && for i in $(seq -w 1 1005); do printf x > /tmp/qa-300/src/f$i.txt; done` (1,005 one-byte files, `f0001.txt` … `f1005.txt`).
+2. `create_folder(name="qa-300-pagination", parent_folder_id="{FOLDER_ID}")`; call the returned ID `{P}`.
+
+**Tool calls**
+1. `upload_local_folder(local_path="/tmp/qa-300/src", parent_folder_id="{P}")`
+2. `upload_local_folder(local_path="/tmp/qa-300/src", parent_folder_id="{P}")` (again; `skip_if_exists` defaults to `true`)
+3. `sync_folder(folder_id="{P}", local_path="/tmp/qa-300/src", direction="upload")`
+4. `download_folder(folder_id="{P}", local_path="/tmp/qa-300/dl/")`
+5. `ls /tmp/qa-300/dl | wc -l`
+
+**Checks**
+- Call 1: 1,005 entries in `uploaded`, `failed == []`.
+- Call 2: `uploaded == []` and all 1,005 names in `skipped`. Before the fix, the ~5 names past Drive's first page were uploaded again as duplicates.
+- Call 3: `uploaded == []`, `failed == []`, `conflicts == []`. A name in `failed` with a collision error means call 2 or 3 created a duplicate.
+- Call 4: 1,005 entries in `downloaded`, `failed == []`.
+- Step 5: `1005`.
+
+**Teardown**
+`delete_file(file_id="{P}")`, then `rm -rf /tmp/qa-300`.
+
+**Result (2026-10-26) ✅ PASS — PR #1261 QA round 1 (Sky)**
+Verified via `mcp-gee-sweet-sky` (OAuth) on the Shared Drive at head `601b0b3e`. Call 1: 1,005 `uploaded`, `failed == []`. Call 2: `uploaded == []`, 1,005 `skipped`. Call 3 (written with `result_local_path`, since the inline result is large): `uploaded`/`failed`/`conflicts` empty, 1,005 `skipped`. Call 4: 1,005 `downloaded`, `failed == []`, `size_bytes: 1005`. Step 5: `1005`. Call 1 takes over 2 minutes, so the client moves it to the background.
+
+**Result (2026-10-26) ✅ PASS — PR #1261 QA round 2 (Sky)**
+Re-run at head `959ad211` (dedupe by `id`, `pageSize` default 1000, clearer page-cap error) via `mcp-gee-sweet-sky` (OAuth) on the Shared Drive. Calls 1 to 4 and step 5 matched exactly as in round 1: 1,005 uploaded, then 1,005 skipped, 1,005 skipped by the sync with no conflicts or failures, then 1,005 downloaded, and `1005` files on disk.

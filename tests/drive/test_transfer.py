@@ -5,7 +5,7 @@ import json
 import os
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -21,6 +21,7 @@ from mcp_gee_sweet.tools.drive.transfer import (
     _upload_local_file,
     _xlsx_range_values,
 )
+from tests.conftest import IS_ROOT
 
 from ..fakes import as_service_account
 
@@ -470,9 +471,9 @@ class TestUploadLocalFileConvert:
         and compares mtimes, so every conversion type must restamp."""
         local_file = tmp_path / file_name
         local_file.write_text("a,b\n1,2\n")
-        expected_mtime = datetime.fromtimestamp(
-            local_file.stat().st_mtime, tz=timezone.utc
-        ).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        expected_mtime = datetime.fromtimestamp(local_file.stat().st_mtime, tz=UTC).strftime(
+            "%Y-%m-%dT%H:%M:%S.000Z"
+        )
         drive_svc = MagicMock()
         drive_svc.files.return_value.list.return_value.execute.return_value = {"files": []}
         drive_svc.files.return_value.create.return_value.execute.return_value = {
@@ -825,7 +826,7 @@ class TestUploadLocalFileConvert:
         }
         drive_svc.files.return_value.create.assert_not_called()
         list_kwargs = drive_svc.files.return_value.list.call_args.kwargs
-        assert "pageSize" not in list_kwargs
+        assert list_kwargs["pageSize"] == 1000
 
 
 class TestConvertSourceMarker:
@@ -1304,7 +1305,7 @@ class TestUploadLocalFolder:
         (tmp_path / "c.txt").write_text("c")
         drive_svc = MagicMock()
         drive_svc.files.return_value.list.return_value.execute.return_value = {
-            "files": [{"name": "a.txt", "mimeType": "text/plain"}]
+            "files": [{"id": "f1308", "name": "a.txt", "mimeType": "text/plain"}]
         }
         drive_svc.files.return_value.create.return_value.execute.return_value = {
             "id": "fid",
@@ -1368,7 +1369,7 @@ class TestUploadLocalFolder:
         (tmp_path / "archive.zip").write_bytes(b"fake")
         drive_svc = MagicMock()
         drive_svc.files.return_value.list.return_value.execute.return_value = {
-            "files": [{"name": "archive.zip", "mimeType": "application/zip"}]
+            "files": [{"id": "f1372", "name": "archive.zip", "mimeType": "application/zip"}]
         }
 
         result = await self._tool()(
@@ -1385,7 +1386,13 @@ class TestUploadLocalFolder:
         (tmp_path / "data.csv").write_text("a,b\n1,2")
         drive_svc = MagicMock()
         drive_svc.files.return_value.list.return_value.execute.return_value = {
-            "files": [{"name": "data.csv", "mimeType": "application/vnd.google-apps.spreadsheet"}]
+            "files": [
+                {
+                    "id": "f1389",
+                    "name": "data.csv",
+                    "mimeType": "application/vnd.google-apps.spreadsheet",
+                }
+            ]
         }
 
         result = await self._tool()(
@@ -1403,7 +1410,7 @@ class TestUploadLocalFolder:
         (tmp_path / "data.csv").write_text("a,b\n1,2")
         drive_svc = MagicMock()
         drive_svc.files.return_value.list.return_value.execute.return_value = {
-            "files": [{"name": "data.csv", "mimeType": "text/csv"}]
+            "files": [{"id": "f1407", "name": "data.csv", "mimeType": "text/csv"}]
         }
         drive_svc.files.return_value.create.return_value.execute.return_value = {
             "id": "fid-converted",
@@ -1435,6 +1442,7 @@ class TestUploadLocalFolder:
         drive_svc.files.return_value.list.return_value.execute.return_value = {
             "files": [
                 {
+                    "id": "f1438",
                     "name": "data",
                     "mimeType": "application/vnd.google-apps.spreadsheet",
                     "properties": {transfer_module._CONVERT_SOURCE_PROP: "data.csv"},
@@ -1461,7 +1469,13 @@ class TestUploadLocalFolder:
         (tmp_path / "report.csv").write_text("a,b\n1,2")
         drive_svc = MagicMock()
         drive_svc.files.return_value.list.return_value.execute.return_value = {
-            "files": [{"name": "report", "mimeType": "application/vnd.google-apps.spreadsheet"}]
+            "files": [
+                {
+                    "id": "f1465",
+                    "name": "report",
+                    "mimeType": "application/vnd.google-apps.spreadsheet",
+                }
+            ]
         }
 
         result = await self._tool()(
@@ -1490,6 +1504,7 @@ class TestUploadLocalFolder:
         drive_svc.files.return_value.list.return_value.execute.return_value = {
             "files": [
                 {
+                    "id": "f1493",
                     "name": "report",
                     "mimeType": "application/vnd.google-apps.spreadsheet",
                     "properties": {transfer_module._CONVERT_SOURCE_PROP: "report.xlsx"},
@@ -1518,8 +1533,13 @@ class TestUploadLocalFolder:
         drive_svc = MagicMock()
         drive_svc.files.return_value.list.return_value.execute.return_value = {
             "files": [
-                {"name": "data", "mimeType": "application/vnd.google-apps.spreadsheet"},
                 {
+                    "id": "f1522",
+                    "name": "data",
+                    "mimeType": "application/vnd.google-apps.spreadsheet",
+                },
+                {
+                    "id": "f1523",
                     "name": "data",
                     "mimeType": "application/vnd.google-apps.spreadsheet",
                     "properties": {transfer_module._CONVERT_SOURCE_PROP: "data.csv"},
@@ -1543,6 +1563,7 @@ class TestUploadLocalFolder:
         drive_svc.files.return_value.list.return_value.execute.return_value = {
             "files": [
                 {
+                    "id": "f1546",
                     "name": "notes",
                     "mimeType": "application/vnd.google-apps.document",
                     "properties": {transfer_module._CONVERT_MARKDOWN_SOURCE_PROP: "notes.md"},
@@ -1563,7 +1584,13 @@ class TestUploadLocalFolder:
         (tmp_path / "notes.md").write_text("# Heading")
         drive_svc = MagicMock()
         drive_svc.files.return_value.list.return_value.execute.return_value = {
-            "files": [{"name": "notes.md", "mimeType": "application/vnd.google-apps.document"}]
+            "files": [
+                {
+                    "id": "f1567",
+                    "name": "notes.md",
+                    "mimeType": "application/vnd.google-apps.document",
+                }
+            ]
         }
 
         result = await self._tool()(
@@ -1578,7 +1605,7 @@ class TestUploadLocalFolder:
         (tmp_path / "a.txt").write_text("a")
         drive_svc = MagicMock()
         drive_svc.files.return_value.list.return_value.execute.return_value = {
-            "files": [{"name": "a.txt", "mimeType": "text/plain"}]
+            "files": [{"id": "f1582", "name": "a.txt", "mimeType": "text/plain"}]
         }
 
         result = await self._tool()(str(tmp_path), "folder1", ctx=self._ctx(drive_svc))
@@ -1596,6 +1623,7 @@ class TestUploadLocalFolder:
         drive_svc.files.return_value.list.return_value.execute.return_value = {
             "files": [
                 {
+                    "id": "f1599",
                     "name": name[:-4],
                     "mimeType": "application/vnd.google-apps.spreadsheet",
                     "properties": transfer_module._convert_properties(name),
@@ -1622,8 +1650,9 @@ class TestUploadLocalFolder:
         drive_svc = MagicMock()
         drive_svc.files.return_value.list.return_value.execute.return_value = {
             "files": [
-                {"name": "data.csv", "mimeType": "text/csv"},
+                {"id": "f1626", "name": "data.csv", "mimeType": "text/csv"},
                 {
+                    "id": "f1627",
                     "name": "data",
                     "mimeType": "application/vnd.google-apps.spreadsheet",
                     "properties": {transfer_module._CONVERT_SOURCE_PROP: "data.csv"},
@@ -1655,8 +1684,12 @@ class TestUploadLocalFolder:
         drive_svc = MagicMock()
         drive_svc.files.return_value.list.return_value.execute.return_value = {
             "files": [
-                {"name": "data.csv", "mimeType": "application/vnd.google-apps.spreadsheet"},
-                {"name": "data.csv", "mimeType": "text/csv"},
+                {
+                    "id": "f1659",
+                    "name": "data.csv",
+                    "mimeType": "application/vnd.google-apps.spreadsheet",
+                },
+                {"id": "f1660", "name": "data.csv", "mimeType": "text/csv"},
             ]
         }
 
@@ -1740,7 +1773,7 @@ class TestUploadLocalFolder:
         (tmp_path / "a.txt").write_text("a")
         drive_svc = MagicMock()
         drive_svc.files.return_value.list.return_value.execute.return_value = {
-            "files": [{"name": "a.txt", "mimeType": "text/plain"}]
+            "files": [{"id": "f1744", "name": "a.txt", "mimeType": "text/plain"}]
         }
         ctx = self._ctx(drive_svc)
 
@@ -1936,9 +1969,7 @@ def _drive_file(
 
 def _precise_mtime(path: Path) -> str:
     """The microsecond-precision source-mtime stamp #814 writes for `path`."""
-    return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).strftime(
-        "%Y-%m-%dT%H:%M:%S.%fZ"
-    )
+    return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def _pop_uploaded_at(props: dict) -> str:
@@ -3269,9 +3300,9 @@ class TestSyncFolderConvertMarkdown:
         download the (unconvertible) Doc, and the file gets stuck 'failed' forever."""
         local_file = tmp_path / "notes.md"
         local_file.write_text("# Heading")
-        local_mtime_str = datetime.fromtimestamp(
-            local_file.stat().st_mtime, tz=timezone.utc
-        ).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        local_mtime_str = datetime.fromtimestamp(local_file.stat().st_mtime, tz=UTC).strftime(
+            "%Y-%m-%dT%H:%M:%S.000Z"
+        )
         fs = _FakeDriveFS({"root": []})
         ctx = self._ctx(fs)
 
@@ -3327,9 +3358,9 @@ class TestSyncFolderConvertMarkdown:
         its property regardless of this call's flag."""
         local_file = tmp_path / "notes.md"
         local_file.write_text("# Heading")
-        drive_mtime_str = datetime.fromtimestamp(
-            local_file.stat().st_mtime, tz=timezone.utc
-        ).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        drive_mtime_str = datetime.fromtimestamp(local_file.stat().st_mtime, tz=UTC).strftime(
+            "%Y-%m-%dT%H:%M:%S.000Z"
+        )
         fs = _FakeDriveFS(
             {
                 "root": [
@@ -3400,9 +3431,9 @@ class TestSyncFolderConvertMarkdown:
         sync_folder run."""
         local_file = tmp_path / "notes.md"
         local_file.write_text("# Heading")
-        drive_mtime_str = datetime.fromtimestamp(
-            local_file.stat().st_mtime, tz=timezone.utc
-        ).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        drive_mtime_str = datetime.fromtimestamp(local_file.stat().st_mtime, tz=UTC).strftime(
+            "%Y-%m-%dT%H:%M:%S.000Z"
+        )
         # Simulates the Doc upload_local_file(convert=True) would have created —
         # same marker property, same mechanism, different call site.
         fs = _FakeDriveFS(
@@ -3509,7 +3540,7 @@ class TestSyncFolderConvertedDocChangeDetection:
     edits). The local side compares against the stamped mtime, the Drive side
     against revision history."""
 
-    _LOCAL_MTIME = datetime(2025, 6, 1, tzinfo=timezone.utc)
+    _LOCAL_MTIME = datetime(2025, 6, 1, tzinfo=UTC)
     _STAMP = "2025-06-01T00:00:00.000Z"
 
     def _ctx(self, fs: _FakeDriveFS):
@@ -3935,7 +3966,7 @@ class TestSyncFolderResolve:
     re-uploads in place. Every name is checked against a read-only plan of
     the whole tree before anything is written."""
 
-    _LOCAL_MTIME = datetime(2025, 6, 1, tzinfo=timezone.utc)
+    _LOCAL_MTIME = datetime(2025, 6, 1, tzinfo=UTC)
     _STAMP = "2025-06-01T00:00:00.000Z"
     _DRIVE_MTIME = "2030-01-01T00:00:00.000Z"
 
@@ -4471,7 +4502,7 @@ class TestSyncFolderDownloadMtimeRoundTrip:
             ctx=self._ctx(fs),
         )
 
-        local_mtime = datetime.fromtimestamp((tmp_path / "a.pdf").stat().st_mtime, tz=timezone.utc)
+        local_mtime = datetime.fromtimestamp((tmp_path / "a.pdf").stat().st_mtime, tz=UTC)
         expected = datetime.fromisoformat(drive_mtime.replace("Z", "+00:00"))
         assert abs((local_mtime - expected).total_seconds()) < 1
 
@@ -4553,7 +4584,7 @@ class TestSyncFolderFailedDownloadLeavesNoPartial:
     async def test_failed_download_keeps_existing_local_file_intact(self, tmp_path, monkeypatch):
         local = tmp_path / "big.bin"
         local.write_bytes(b"old local content")
-        old_mtime = datetime(2020, 1, 1, tzinfo=timezone.utc).timestamp()
+        old_mtime = datetime(2020, 1, 1, tzinfo=UTC).timestamp()
         os.utime(local, (old_mtime, old_mtime))
         monkeypatch.setattr(transfer_module, "MediaIoBaseDownload", _FailingDownloader)
         fs = self._fs()
@@ -4618,7 +4649,7 @@ class TestSyncFolderFailedDownloadLeavesNoPartial:
         assert not (tmp_path / "big.bin").exists()
         assert _partial_files(tmp_path) == []
 
-    @pytest.mark.skipif(os.geteuid() == 0, reason="root can write a 0o444 file")
+    @pytest.mark.skipif(IS_ROOT, reason="root can write a 0o444 file")
     async def test_read_only_local_file_is_a_download_fail_not_replaced(
         self, tmp_path, monkeypatch
     ):
@@ -4626,7 +4657,7 @@ class TestSyncFolderFailedDownloadLeavesNoPartial:
         read-only local file the way the old in-place write did."""
         local = tmp_path / "big.bin"
         local.write_bytes(b"protected")
-        old_mtime = datetime(2020, 1, 1, tzinfo=timezone.utc).timestamp()
+        old_mtime = datetime(2020, 1, 1, tzinfo=UTC).timestamp()
         os.utime(local, (old_mtime, old_mtime))
         local.chmod(0o444)
 
@@ -4779,7 +4810,7 @@ class TestDownloadToolsFailedDownloadLeavesNoPartial:
         assert dest.read_bytes() == b"previous download"
         assert _partial_files(tmp_path) == []
 
-    @pytest.mark.skipif(os.geteuid() == 0, reason="root can write a 0o444 file")
+    @pytest.mark.skipif(IS_ROOT, reason="root can write a 0o444 file")
     async def test_download_file_refuses_read_only_destination(self, tmp_path, monkeypatch):
         """PR #884 QA round 1, the live repro: a read-only file was replaced by
         the Drive content and the call reported success."""

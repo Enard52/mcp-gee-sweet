@@ -27,6 +27,8 @@ Most infrastructure behaviours are verified by unit tests rather than live QA pr
 | TC-I29 (`server.json` registry manifest, issue #586) | Not reachable via any MCP tool or prompt — `server.json` is a static repo-root manifest consumed by the external `mcp-publisher` CLI and the official MCP registry, not the running server. Identity/consistency (name, PyPI identifier, `mcp-name` marker) is unit-tested in `tests/test_server_json.py`. Manual / live QA only — verify once, after each stable release that changes `server.json`'s `version` — see TC-I29 below |
 | TC-I41, I42 (lane context-size hook, issue #847) | `scripts/lane_context_hook.py` is a Claude Code hook, not an MCP tool. Transcript parsing, lane scoping, warning bands and resume gating are unit-tested in `tests/test_lane_context_hook.py`. Live QA runs a headless `claude -p` session from a lane worktree with `--include-hook-events`, so the hook's real input and output are visible in the stream |
 | TC-I66 (single publish workflow, issue #1124) | Not reachable via any MCP tool or unit test: it checks a GitHub Actions run and PyPI's attestation record. Manual / live QA only, once after #1124 merges and once at the next stable release — see TC-I66 below |
+| TC-I67 (socket timeout and resumable-upload 308, issue #1129) | Unit-tested in `tests/test_http_transport.py` (`TestSocketTimeout`, `TestResumableUploadStatus`) against local sockets that never answer or answer 308. Live QA for the real Drive upload path over 100 MB and the configured server's timeout message — see TC-I67 below |
+| TC-I68 (MCP Bundle install and OAuth, issue #1036) | `manifest.json`'s identity and `user_config` wiring, the build's version stamping, and its staging of committed files from an allowlist are unit-tested in `tests/test_mcpb_manifest.py`. The `MCP Bundle` workflow packs the bundle and installs it with uv on every PR that touches it. Consent needs a person at a browser, and the Claude Desktop install needs macOS with Claude Desktop, so both are manual — see TC-I68 below |
 
 ---
 
@@ -1682,6 +1684,12 @@ Fresh SSE subprocess on this head, explicit `LOCAL_FILE_ACCESS=full`, `LOG_FILE=
 **Result (2026-10-17) ⏭️ SKIP — v0.9.2 release pass**
 requires-oauth; step 5 covered by server://auth-status local_file_access mode "full".
 
+**Result (2026-10-24, PR #1222 round 1 @ 5a30c76, Sky) ⚠️ PARTIAL: steps 1 and 5 only, step 1 against `LOG_FILE`**
+`mcp-gee-sweet-sky` (stdio, defaulted `full`), run because #1212 changed `LocalFileAccess` from `str, Enum` to `StrEnum`. Step 1 against `LOG_FILE` (`/tmp/mcp-gee-sweet.log`, the same substitution as PR #1039's rounds): `... is one of this server's own credential, config, cache, or log files and can't be read by a tool`. Step 5: `local_file_access` is `{"mode": "full", "explicit": false, "roots": [], "unregistered_tools": []}`, so `.value` still serializes as before. Steps 2–4 and 6 not run (unaffected by the enum change).
+
+**Result (2026-10-25, PR #1222 round 2 @ 7690b8c, Sky) ⚠️ PARTIAL: steps 1 and 5 only, step 1 against `LOG_FILE`**
+After the pydantic 2.14.1 re-lock, reconnected. Step 1: the same `... can't be read by a tool` refusal. Step 5: `{"mode": "full", "explicit": false, "roots": [], "unregistered_tools": []}`.
+
 ---
 
 ### TC-I59: an invalid local-file setting stops the server at startup with a one-line message (issue #796) ⚠️ local-filesystem
@@ -1971,3 +1979,71 @@ Check 1: the two `publish.yml` push runs after #1124's merge, 39553304435 (74613
 
 **Result (2026-10-20) ✅ PASS (checks 3–5) — v0.9.3 stable release (Aziz) @ b5e2810b**
 Check 3: `publish.yml` run 39557996212, event `release`, on b5e2810b, concluded `success`, with `Run tests`, `Build distribution` and `Upload to PyPI` all `success`. Check 4: the `mcp_gee_sweet-0.9.3-py3-none-any.whl` provenance has one attestation bundle, publisher `{"kind": "GitHub", "repository": "khuisman/mcp-gee-sweet", "workflow": "publish.yml", "environment": null}`; the uploads just before it were `0.9.3.dev34` and `dev35`, both through `publish.yml`. Check 5 (Playwright, since `curl` gets PyPI's "Client Challenge" page): the 0.9.3 page's Provenance section reads "Full provenance — All 2 files in this release have provenance metadata", with no "Change of provenance" banner. Control: the 0.9.2 page, loaded the same way, still shows the "Change of provenance" banner.
+
+### TC-I67: uploads over 100 MB complete, and a request that gets no answer fails with a readable message (issue #1129)
+
+**Background:** `thread_http` built each per-thread transport as a bare `httplib2.Http()`, unlike the `build_http()` that `build()` gives the services' own transports. That left out two settings. First, there was no socket timeout, so a pooled connection that died silently (no RST or FIN) blocked a request until the OS gave up: 50–200 s, or a 30-minute hang seen live in the TC-MD301 run. Now each socket operation is bounded by `HTTP_TIMEOUT_SECONDS` (default 60, googleapiclient's own default). A timed-out read is resent once on a new connection; a timed-out write isn't resent, and its error says it may have landed. Second, 308 was still treated as a redirect. Drive answers each non-final chunk of a resumable upload with "308 Resume Incomplete" and no `Location`, so any upload larger than googleapiclient's 100 MB chunk failed with `Redirected but the response is missing a Location: header.` (reproduced live before the fix). Unit tests cover both against local sockets; this case checks the real Drive upload path and the configured server. Steps 3–5 need a server started with its own env, as `docs/qa/run.md` §"Running server-startup and CLI cases in a scoped lane pass" describes.
+
+**Setup:** a 150 MB file of random bytes, e.g. `head -c 157286400 /dev/urandom > /tmp/tc-i67-150mb.bin`. The steps say `/tmp`; a lane uses its own scratch directory instead.
+
+**Action**
+1. `upload_local_file(local_path="/tmp/tc-i67-150mb.bin", parent_folder_id="{TEST_FOLDER_ID}", skip_if_exists=false)`
+2. `get_file_metadata(file_id=<the id from step 1>)`
+3. Start a server with `HTTP_TIMEOUT_SECONDS=abc` and `CACHE_DB_PATH=:memory:` (so the call can't be answered from cache), and call `list_sheets(spreadsheet_id="{SPREADSHEET_ID}")`
+4. Start a server with `HTTP_TIMEOUT_SECONDS=0.001` and `CACHE_DB_PATH=:memory:`, and call `list_sheets(spreadsheet_id="{SPREADSHEET_ID}")`
+5. On the same server as step 4, call `create_folder(name="TC-I67 timeout write", parent_folder_id="{TEST_FOLDER_ID}")`
+6. Start a server with `HTTP_TIMEOUT_SECONDS=inf` and `CACHE_DB_PATH=:memory:`, and call `list_sheets(spreadsheet_id="{SPREADSHEET_ID}")`
+
+**Checks**
+- 1: the upload succeeds, with no `RedirectMissingLocation` or "missing a Location" error
+- 2: `size` is `157286400`
+- 3: the server log has one warning, `Ignoring HTTP_TIMEOUT_SECONDS='abc': not a positive number; using 60`, and `list_sheets` returns the sheet list
+- 4: the call fails within a few seconds, not minutes, and the error starts `Google API request timed out:`. It says the connection layer resent the read once on a new connection, and names `HTTP_TIMEOUT_SECONDS`
+- 5: the error starts `Google API request timed out:` and says it was a write the connection layer didn't resend, which may still have been applied. It doesn't say it was resent
+- 6: the server log has one warning, `HTTP_TIMEOUT_SECONDS='inf' is over the 86400 s maximum; using 86400`, and `list_sheets` returns the sheet list, with no `OverflowError`
+
+**Cleanup:** `delete_file` the step 1 upload, and any `TC-I67 timeout write` folder in `{TEST_FOLDER_ID}` (step 5 can time out before or after Drive creates it). Delete `/tmp/tc-i67-150mb.bin`.
+
+
+**Result (2026-10-24) ✅ PASS — PR #1198 round 1 (Sky) @ e9719f2b**
+Step 1: `upload_local_file` of a 157286400-byte random file into `{TEST_FOLDER_ID}` (Shared Drive, OAuth) succeeded, with no `RedirectMissingLocation`. Step 2: `size` `157286400`, `md5_checksum` matches the local file. Step 3 (stdio server, `HTTP_TIMEOUT_SECONDS=abc`, `CACHE_DB_PATH=:memory:`): one warning `Ignoring HTTP_TIMEOUT_SECONDS='abc': not a positive number; using 60`, and `list_sheets` returned `Sales | Notes & Misc | Empty`. Step 4 (`0.001`): `list_sheets` failed in 0.42 s with `Google API request timed out: no data from Google for 0.001 s. This was a read, so it was retried once on a new connection, which also failed. If Google needs longer to answer this request, raise HTTP_TIMEOUT_SECONDS.` Step 5: `create_folder` failed in 0.05 s with the write wording (`This was a write, so it wasn't retried, and Google may still have applied it ...`), and nothing about a retry. Cleanup: no `TC-I67 timeout write` folder in `{TEST_FOLDER_ID}`, since the connect timed out before the write was sent. Upload trashed. Off-case probe: `HTTP_TIMEOUT_SECONDS=inf` logs no warning, and every tool call then fails with a bare `Error executing tool list_sheets` (`OverflowError: timestamp out of range for platform time_t` from `sock.settimeout`). Sent back on the PR, not a TC-I67 check.
+
+**Result (2026-10-24) ✅ PASS — PR #1198 round 2 (Sky) @ 4324571d**
+Step 1: a fresh 157286400-byte upload into `{TEST_FOLDER_ID}` succeeded (OAuth, Shared Drive, after `/mcp reconnect`). Step 2: `size` `157286400`, md5 matches the local file. Step 3: warning `Ignoring HTTP_TIMEOUT_SECONDS='abc': not a positive number; using 60`, and `list_sheets` returned `Sales | Notes & Misc | Empty` (the first attempt got a transient Sheets `503 The service is currently unavailable` after 51 s, and the rerun passed). Step 4: failed in 0.42 s with `... This was a read, so the connection layer resent it once on a new connection, which also failed. ...`. Step 5: failed in 0.05 s with `... This was a write, so the connection layer didn't resend it, and Google may still have applied it ...`. Step 6: warning `HTTP_TIMEOUT_SECONDS='inf' is over the 86400 s maximum; using 86400`, and `list_sheets` returned the sheet list with no `OverflowError`. An extra `1e10` probe behaved the same. Cleanup: no `TC-I67 timeout write` folder; upload trashed.
+
+### TC-I68: the MCP Bundle installs, offers OAuth consent, and reuses its token after a restart (issue #1036)
+
+**Background:** `scripts/build_mcpb.py` builds `mcp-gee-sweet-<version>.mcpb` from `manifest.json` (MCPB manifest v0.4, `uv` server type). The bundle ships the source and `uv.lock`, staged from files committed at `HEAD` only (an uncommitted edit is left out of the bundle, so commit before building), with the version stamped from `server.json` or the release tag, and the host runs `uv run --frozen --no-dev python -m mcp_gee_sweet`. It's OAuth only: the install dialog asks for the OAuth client file (`CREDENTIALS_PATH`), and the token lives at `${HOME}/.mcp-gee-sweet-token.json`, outside the extension directory. With no token, the stdio server starts degraded and its first tool call offers the consent link (#873). Unit tests and the `MCP Bundle` workflow cover the manifest, the file allowlist, and a uv install of the built bundle. Two things only a person can check: completing consent in a browser (steps 2–4), and a real Claude Desktop install (steps 5–7). `scripts/qa_launch_mcpb.py` runs the bundle's `mcp_config` the way a host does, with `${HOME}` pointed at a scratch directory, so steps 2–4 never touch a real token.
+
+**Setup**
+- This slot's OAuth client JSON (the file its server's `CREDENTIALS_PATH` names). Below, `<client.json>`.
+- An empty scratch directory, `<scratch>`, e.g. under `$CLAUDE_JOB_DIR/tmp`. It must not hold `.mcp-gee-sweet-token.json` yet.
+- For steps 5–7: macOS with Claude Desktop, and no `mcp-gee-sweet` extension installed. Back up `~/.mcp-gee-sweet-token.json` if one exists, and move it aside.
+
+**Action**
+1. `uv run python scripts/build_mcpb.py --smoke`, then `unzip -l dist/mcp-gee-sweet-<version>.mcpb`
+2. `uv run python scripts/qa_launch_mcpb.py dist/mcp-gee-sweet-<version>.mcpb --credentials <client.json> --home <scratch> --wait-for-consent`. Open the printed `accounts.google.com` link in a browser and approve it before the deadline in the message.
+3. `ls -l <scratch>/.mcp-gee-sweet-token.json`
+4. Repeat step 2's command with the same `--home`, without `--wait-for-consent`.
+5. Open `dist/mcp-gee-sweet-<version>.mcpb` in Claude Desktop (double-click, or drag it onto Settings → Extensions). Pick `<client.json>` for **OAuth client file** and leave **Enabled tools** empty.
+6. In a new chat, ask Claude to call `list_spreadsheets`. Open the consent link from the result, approve it, and ask again.
+7. Quit and reopen Claude Desktop, then ask Claude to call `list_spreadsheets` once more.
+
+**Checks**
+- 1: `mcpb pack` reports `Manifest schema validation passes!`, and the build ends with `smoke: bundle installs and imports as mcp-gee-sweet <version>` and the bundle's path. `unzip -l` lists `manifest.json`, `pyproject.toml`, `uv.lock`, `README.md`, `LICENSE`, `icon.png` and `src/mcp_gee_sweet/...` only: no `credentials.json`, `token.json`, `service_account.json`, `.env`, `.venv/` or `tests/`
+- 2: `env` shows `AUTH_METHOD` `oauth`, `TOKEN_PATH` `<scratch>/.mcp-gee-sweet-token.json` and `ENABLED_TOOLS` empty; `server:` and the full tool count print; `token file before the call: False`; the first call's error contains the consent link; after approval, `token file written, mode 0o600`, and a `retry N` line (at most 3) has `is_error=False` with the spreadsheet list
+- 3: the file exists, mode `-rw-------`
+- 4: `token file before the call: True`, and the first call has `is_error=False`, with no consent link
+- 5: Claude Desktop installs the extension, shows its name, version and icon, asks for the OAuth client file before enabling it, and lists the server's tools
+- 6: the first result carries a Google consent link; after approval the second call returns the spreadsheet list, and `~/.mcp-gee-sweet-token.json` exists with mode `-rw-------`
+- 7: the call returns the spreadsheet list with no consent link
+
+**Cleanup:** delete `<scratch>`. After steps 5–7, uninstall the extension in Claude Desktop, delete `~/.mcp-gee-sweet-token.json`, and restore the backup from Setup. Revoke the test grants at https://myaccount.google.com/permissions if you don't keep them.
+
+**Re-run cadence:** steps 1–4 whenever `manifest.json`, `scripts/build_mcpb.py` or the server's OAuth startup changes. Steps 5–7 once before the first release that attaches the bundle, and again when `manifest.json`'s `server` or `user_config` changes.
+
+**Result (2026-10-25) ⚠️ PARTIAL — PR #1255 round 1 (Kit) @ 2454722f**
+Steps 1–4 PASS; steps 5–7 SKIP (need a person with Claude Desktop on macOS; owed before the first release that attaches the bundle). Step 1: `Manifest schema validation passes!`, `smoke: bundle installs and imports as mcp-gee-sweet 0.9.5`; `unzip -l` lists 53 files: `LICENSE`, `README.md`, `icon.png`, `manifest.json`, `pyproject.toml`, `uv.lock` and `src/mcp_gee_sweet/*.py` only (`.mcpbignore` dropped `.mcpbignore` itself and `src/mcp_gee_sweet/.env.template`). Step 2: `env` shows `AUTH_METHOD` `oauth`, `TOKEN_PATH` under the scratch home, `ENABLED_TOOLS` empty; uv built the bundle on CPython 3.15.1; `server: Google Spreadsheet` (empty `server_info.version`: `server.py` never passes one, pre-existing), `tools: 143`, `token file before the call: False`, consent link in the first error; approved in this slot's browser, then `token file written, mode 0o600` and the retried `list_spreadsheets` returned the fixture spreadsheet with `is_error=False`. Step 3: `-rw-------`. Step 4: `token file before the call: True`, `is_error=False`, no consent link. Run under an agent, step 2 printed nothing past the uv install with stdout redirected to a file (block-buffered), so the link never appeared; `python -u` worked around it (sent back). Cleanup: scratch home deleted; the grant is this slot's own OAuth client, so it was kept.
+
+**Result (2026-10-25) ⚠️ PARTIAL — PR #1255 round 2 (Kit) @ c16fcacd**
+Steps 1–4 PASS; steps 5–7 SKIP (need a person with Claude Desktop on macOS; owed before the first release that attaches the bundle). Step 1: `Manifest schema validation passes!`, `smoke: bundle installs and imports as mcp-gee-sweet 0.9.5` (stamped from `server.json`), 53 files, same list as round 1. Extra: `--version v9.8.7` with an uncommitted `README.md` edit warned `building from HEAD; these uncommitted changes aren't in the bundle: M README.md`, stamped `version` and `UV_DYNAMIC_VERSIONING_BYPASS` `9.8.7`, smoke reported `9.8.7`, and the bundled `README.md` had no trace of the edit. Step 2, run with stdout redirected to a file and no `python -u`: the `env:` block and consent link appeared in the file as printed; `tools: 143`, `token file before the call: False`; after approval `token file written, mode 0o600` and `retry 1 of list_spreadsheets: is_error=False` with the fixture spreadsheet. Step 3: `-rw-------`. Step 4: `token file before the call: True`, `is_error=False`, no consent link. Cleanup: scratch home deleted; the grant is this slot's own OAuth client, so it was kept.

@@ -4,6 +4,38 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## [Unreleased]
+
+### New tools
+
+- Gmail drafts can now be reviewed, edited, and discarded before sending: `list_drafts` (query and pagination; each draft's recipients, subject, and snippet), `get_draft` (same shape as `get_message`), `update_draft` (replaces the content and keeps the draft ID, the thread of a reply draft, and its send-as From; `keep_attachments=True` keeps the existing attachments), and `delete_draft`. None of them sends mail; `send_draft` is still the only way a draft goes out — #1205
+
+### New features
+
+- Each GitHub Release now carries an MCP Bundle, `mcp-gee-sweet-<version>.mcpb`, which installs the server in Claude Desktop in one click: the install dialog asks for the OAuth client file, and nothing goes into `claude_desktop_config.json` by hand. The bundle uses OAuth only and keeps its token at `~/.mcp-gee-sweet-token.json`. See [Install as a bundle](docs/client-setup.md#install-as-a-bundle) — #1036
+
+### Changed
+
+- **Behavior change: Gmail no longer sends on the agent's call alone.** With the new default `GMAIL_SEND=confirm`, `send_message` and `reply_to_message` save the email as a draft (a reply in its thread) and send it only after the user confirms it in a form the MCP client shows; `send_draft` asks the same way. Declining, cancelling, no answer, or a client that can't show the form leaves the draft unsent and returns `sent: false` with its `draft_id`. Confirmation needs a client on the 2025-11-25 handshake with form elicitation; on 2026-07-28 connections mail stays a draft. The confirmation and the result flag recipients outside a Workspace organization, more than `GMAIL_SEND_WARN_RECIPIENTS` (default 10) recipients, and any Bcc. A client hook that auto-accepts elicitations makes this the same as `direct`. Set `GMAIL_SEND=direct` for the old immediate delivery. Every send result now has a `sent` field — #1081
+- **Claude Code users: sends are held as drafts.** Claude Code currently connects on MCP 2026-07-28, where the server can't ask for confirmation, so under the new default every `send_message` and `reply_to_message` from Claude Code returns `sent: false` with the email saved in Gmail's Drafts folder, and `send_draft` refuses. Send from Drafts, or set `GMAIL_SEND=direct` to keep sending at once. Confirmation on 2026-07-28 connections is tracked in #1235 — #1081
+
+---
+
+## [0.9.5] — 2026-10-24
+
+Security hotfix on top of v0.9.4. No new tools.
+
+### Security
+
+- Requires `certifi>=2026.10.19`. Older certifi bundles still trust the eight eMudhra/emSign intermediate CAs, whose weak EC keys let a TLS chain through them be forged ([PSF notice](https://discuss.python.org/t/information-for-python-users-regarding-emudhra-emsign-ca-certificate-security-incident/109576)). certifi backs the TLS connection on every Google API call. v0.9.4's lock pinned certifi `2026.5.20`, and no earlier version set a minimum, so `pip install -U mcp-gee-sweet` kept whatever certifi an environment already had — #1217
+
+**What you need to do yourself.** A library can't upgrade your tooling for you:
+
+- Upgrade pip to 26.2.2 or later, and uv to 0.13.4 or later. Both shipped fixes for the same incident.
+- Rebuild any Docker image without the cache (`docker build --no-cache ...`), so a cached layer doesn't keep the old certifi.
+
+---
+
 ## [0.8.1] — 2026-07-05
 
 Defects and documentation cleanup. No new tools.

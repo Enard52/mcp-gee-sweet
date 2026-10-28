@@ -22,7 +22,10 @@ equivalent manual deletion.
 **Workaround:** The emitter collapses the blank paragraph to zero visual height using
 `updateParagraphStyle` (`spaceAbove/spaceBelow = 0`, `lineSpacing = 1`) and `updateTextStyle`
 (`fontSize = 1pt`). The paragraph remains in the document structure but is invisible in the
-rendered output. Related: #190.
+rendered output. The one exception is a paragraph between two tables: it keeps its height, as
+the blank line that keeps the tables from touching and reading as one (#1098). Every such
+paragraph is also reset to plain `NORMAL_TEXT`, with no bullet, indent, or border (#1097).
+Related: #190.
 
 ---
 
@@ -92,23 +95,6 @@ in both contexts above. Confirmed via direct execution of `_md_to_html` — a lo
 markdown→HTML conversion, not a live Google API round trip. CommonMark does allow an empty list
 item, so this stays open as #1075 (#692, closed, is the earlier triage). Related:
 `docs/qa/tests/docs_markdown.md` TC-MD301.
-
----
-
-### Images inside table cells are dropped
-
-**What:** An image in a table cell (Markdown `| ![alt](src) |` or HTML `<td><img …></td>`) is
-dropped: the cell renders empty, and the call reports no error and no per-image entry under
-`images`.
-
-**Why:** Image support (#333) covers body-level images only. The table fill
-(`emitter.py`'s `_fill_children_recursive`) has no handling for an `Image` among a cell's
-children, so the parser drops it before it gets there.
-
-**Workaround:** Insert the image into the cell afterwards with `insert_inline_image`, at the
-cell's `paragraphStartIndex` from `get_doc_structure`. Tracked in #1073;
-`docs/qa/tests/docs_markdown.md` IM-09 and `docs/qa/tests/docs_content.md` TC-DOC102/TC-DOC153
-cover it.
 
 ---
 
@@ -213,6 +199,41 @@ service account.
 use `write_doc_content` or `update_cells` to populate it. Alternatively, use OAuth authentication
 (`AUTH_METHOD=oauth`) which authenticates as the user and has full personal Drive access.
 Related: project memory `service_account_limit`.
+
+### Converting `.md` on upload uses Drive's Markdown import, which renders differently
+
+**What:** `upload_local_file(convert=True)`, `upload_local_folder(convert=True)`, and
+`sync_folder(convert_markdown=True)` hand a `.md` file to Drive's own Markdown importer. The
+Docs tools (`create_doc`, `write_doc_content`, `create_doc_from_file`, `update_doc_from_file`)
+use this server's converter instead. The same Markdown comes out differently:
+
+- **Bullets** use a `-` glyph at every level, not ● / ○ / ■.
+- **Numbered lists** use `1.` numbering at every level, not `a.` / `i.` for nested levels. A
+  `1)` list keeps the `)`. A top-level item after a nested numbered sub-list can repeat the
+  previous number (1, 2, 2).
+- **Code blocks** (fenced or indented) aren't monospace: each line becomes its own Arial
+  paragraph, with paragraph spacing between lines.
+- **Inline code** is green monospace rather than Courier New, so `get_doc_as_markdown` reads it
+  back as plain text, without backticks.
+- **Blockquotes** are indented but have no left border.
+- **Task lists** become native Docs checklists rather than `☐` / `☑` text. A numbered task list
+  loses its numbers.
+- **Sub-lists indented by 2 spaces** under a numbered item don't nest; 3 or more spaces do.
+- **Extra empty paragraphs** appear around paragraphs, rules, and lists.
+- **`<del>` and `<mark>`** inline HTML isn't rendered as strikethrough or highlight.
+- **Images** with a local path or `drive:` source aren't embedded. Only this server's converter
+  uploads and shares those.
+
+**Why:** The rendering is Drive's, not this server's. These tools upload the file and set a Google
+Doc as the target type, and Drive's importer converts it. QA recorded the differences above in
+the #1044 Markdown baselines (`docs/qa/results/2026-10-18-markdown.md`,
+`2026-10-18-markdown-phase2.md`, `2026-10-22-markdown-boundaries-state.md`). Routing these tools
+through this server's converter is a design question (#1113).
+
+**Workaround:** For a single file, use `create_doc_from_file`, and `update_doc_from_file` to
+refresh it. They render `.md` the same way as the other Docs tools. There's no equivalent for a
+whole folder or for `sync_folder`'s change tracking yet. Related: `get_doc_as_markdown` exports a
+Drive-imported list as blockquoted numbered items (#1104).
 
 ### `sync_folder` — renaming a long-named `convert_markdown` Doc in Drive unlinks it
 
@@ -362,3 +383,71 @@ operator limits tools to directories meant for them.
 
 **Workaround:** Use `LOCAL_FILE_ACCESS=roots` with roots that hold only files meant for the
 server.
+
+---
+
+## MCP clients
+
+### Some clients refuse the full tool set
+
+**What:** With every tool registered (the default), the server is over the tool cap of several
+MCP clients. VS Code with GitHub Copilot fails every agent request with "Cannot have more than
+128 tools per request". Windsurf allows 100 tools across all servers. Cursor's cap depends on the
+model and reports "Too many MCP tools are enabled for this mode", or uses only part of the list.
+Google Antigravity is reported to reject a server with more than 100 tools.
+
+**Why:** The caps are the clients' own, and the server registers every tool unless told
+otherwise, so it works out of the box on clients without a cap. A smaller default tool set is a
+separate design question.
+
+**Workaround:** Set `ENABLED_TOOLS` (or `--include-tools`) to one of the
+[suggested subsets](configuration.md#suggested-subsets), each under 100 tools. Per-client
+config is in [Clients with a tool limit](client-setup.md#clients-with-a-tool-limit).
+
+---
+
+## Google API requests
+
+### A write that times out may still have been applied
+
+**What:** A Google API request fails with `Google API request timed out:` once Google sends
+nothing for `HTTP_TIMEOUT_SECONDS` (default 60). A read is retried once on a new connection;
+a write (create, update, delete, a `batchUpdate`) is not. A timed-out write may still have been
+applied, since Google can finish it after the connection stops answering.
+
+**Why:** The client can't tell a dead connection from a request Google is still working on.
+Without the timeout, a silently dead connection hung a call for up to 30 minutes (#1129).
+Retrying a write automatically could apply it twice, such as a duplicate file or a repeated
+append.
+
+**Workaround:** After a timed-out write, check its result (e.g. `list_files`, `get_sheet_data`)
+before repeating it. If a request legitimately takes Google longer than the timeout to start
+answering, such as a very large export or `batchUpdate`, raise `HTTP_TIMEOUT_SECONDS`. See
+`docs/decisions/decision-http-socket-timeout.md`.
+
+## Gmail
+
+### A send confirmation can't ask on a 2026-07-28 connection
+
+**What:** Under the default `GMAIL_SEND=confirm`, a client connected on MCP 2026-07-28 never
+sees a confirmation: `send_message` and `reply_to_message` save the email as a draft and return
+`sent: false`, and `send_draft` refuses. This happens even when the client declares form
+elicitation. **Claude Code currently connects on 2026-07-28** (2.1.310, checked 2026-10-26),
+so every send from Claude Code is held as a draft.
+
+**Why:** Revision 2026-07-28 removed server-initiated requests. Asking there takes an
+`InputRequiredResult` round trip, which isn't implemented yet (#1235).
+
+**Workaround:** Send the draft from Gmail's Drafts folder, connect with a client on the
+2025-11-25 `initialize` handshake, or set `GMAIL_SEND=direct`.
+
+### The changed-draft check has a short window before the send
+
+**What:** After the user confirms, the server reads the draft again and sends it only if its
+message ID is unchanged. An edit that lands between that read and Gmail's `drafts.send` would
+still be sent.
+
+**Why:** `drafts.send` takes no precondition, so the check has to be a separate request. The
+window is the time between two back-to-back API calls.
+
+**Workaround:** Don't edit a draft while its send confirmation is open.

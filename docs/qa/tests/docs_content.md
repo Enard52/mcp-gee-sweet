@@ -2306,6 +2306,18 @@ Run 2 (ash).
 **Result (2026-10-19) ❌ FAIL — v0.9.3 release pass**
 `oauth`: create_doc_from_file(.html) returned 6 successes plus a per-image error for Case 8. Cases 1–5 render (tc-doc102.png). Case 6 and Case 7 table-cell images are dropped silently, with no images entry (tc-doc102b.png). Tracked in #1073 (open). Headings and the final paragraph are intact. Doc trashed.
 
+**Result (2026-10-24) ⚠️ PARTIAL — PR #1215 QA round 1 (Kit) @ 79f19d4**
+`kit`: create_doc_from_file(.html) returned no error, with 8 image successes plus the Case 8 per-image error (`doc edit failed: insertInlineImage: There was a problem retrieving the image…`). Raw `documents().get()`: Cases 1–5 as before; Case 6's image cell holds one `inlineObjectElement`; Case 7's nested cell holds one. All 8 headings and the final paragraph are present. Playwright (`2026-10-24-tc-doc102.png`): a logo in both table cells. **Defect:** Case 7's outer cell holds three paragraphs before the nested table (`""`, `""`, 10 spaces), from the fixture's indentation whitespace (`<td>\n      <table>`). They push the nested table onto the next page, away from its row. `html_to_ast` gives the cell the same `Run('\n      ')` on `develop`, so it predates #1073 (sent back on PR #1215, since `html_parser.py` is in its diff). Doc trashed.
+
+**Result (2026-10-24) ✅ PASS — PR #1215 QA round 2 (Kit) @ f9f6ee7**
+`kit`: create_doc_from_file(.html) returned no error, with 8 successes plus the Case 8 error. Raw read: Case 6's cell holds one image. Case 7's outer cell now holds only an empty paragraph, the nested table (`[IMG]`), and an empty paragraph (Docs' structural ones): the round-1 indentation paragraphs are gone. Playwright (`2026-10-24-tc-doc102-r2.png`): logos in both cells. In this doc the Case 7 row still breaks across a page boundary, but that's only where the page ends: the same table alone at the top of a doc renders as one row with the nested table beside "Outer cell…" (`2026-10-24-pr1215-case7-alone.png`). Docs trashed.
+
+**Result (2026-10-25) ✅ PASS — PR #1215 QA round 3 (Kit) @ e3a6e69**
+`kit`: create_doc_from_file(.html) returned no error, with 8 successes plus the Case 8 error. Raw read: Case 6's cell holds one image, and Case 7's outer cell holds only Docs' two structural empty paragraphs around the nested table (`[IMG]`). Docs trashed.
+
+**Result (2026-10-25) ✅ PASS — PR #1215 QA round 4 (Kit) @ 5d2b4e8**
+`kit`: 8 successes plus the Case 8 error, with no top-level error. Raw read: Case 6's cell holds one image, and Case 7's outer cell holds only Docs' structural empty paragraphs around the nested `[IMG]`. Doc trashed.
+
 ---
 
 ### TC-DOC103: Markdown image conversion shares the same drop as the HTML path ⚠️ requires-oauth ⚠️ destructive
@@ -2334,6 +2346,18 @@ Run 2 (ash).
 
 **Result (2026-10-19) ❌ FAIL — v0.9.3 release pass**
 `oauth`: create_doc_from_file(.md) returned 7 successes plus the Case 8 error. The Case 7 reference-style image renders (tc-doc103b.png), but the Case 6 table-cell image is dropped silently. Tracked in #1073. Doc trashed.
+
+**Result (2026-10-24) ✅ PASS — PR #1215 QA round 1 (Kit) @ 79f19d4**
+`kit`: create_doc_from_file(.md) returned no error, with 8 image successes plus the Case 8 per-image error. Raw `documents().get()`: Case 6's image cell holds one `inlineObjectElement`, Case 7 reads `Reference-style: [IMG]`, and headings and the final paragraph are intact. Playwright (`2026-10-24-tc-doc103.png`): logos in the Case 6 cell and Case 7. Doc trashed.
+
+**Result (2026-10-24) ✅ PASS — PR #1215 QA round 2 (Kit) @ f9f6ee7**
+`kit`: create_doc_from_file(.md) returned no error, with 8 successes plus the Case 8 error. Raw read: Case 6's cell holds one `inlineObjectElement`, and Case 7 reads `Reference-style: [IMG]`. Doc trashed.
+
+**Result (2026-10-25) ✅ PASS — PR #1215 QA round 3 (Kit) @ e3a6e69**
+`kit`: create_doc_from_file(.md) returned no error, with 8 successes plus the Case 8 error. Raw read: Case 6's cell holds one image, and Case 7 reads `Reference-style: [IMG]`. Doc trashed.
+
+**Result (2026-10-25) ✅ PASS — PR #1215 QA round 4 (Kit) @ 5d2b4e8**
+`kit`: 8 successes plus the Case 8 error. Raw read: Case 6's cell holds one image, and Case 7 reads `Reference-style: [IMG]`. Doc trashed.
 
 ---
 
@@ -3649,17 +3673,20 @@ Run 2 (ash).
 
 ---
 
-### TC-DOC153: Table-cell images remain a documented, non-crashing gap ⚠️ requires-oauth ⚠️ destructive
+### TC-DOC153: A table-cell image renders between two text cells ⚠️ requires-oauth ⚠️ destructive
 
-**Purpose:** confirm #333's explicit scope boundary (body-level images only) degrades gracefully rather than erroring or hanging — this is the same behavior TC-DOC102 Cases 6/7 already exercise, called out separately here since it's a deliberate design decision worth its own regression guard rather than being buried in an 8-case fixture.
+**Purpose:** an image in a table cell is embedded in its cell (#1073). Until #1073, #333's body-level-only image support dropped it silently: the cell came out empty, with no error and no `images` entry. The case also guards the cursor-never-advances hang an `Image` in `Cell.children` once risked (#509). The results before 2026-10-24 were recorded against the old checks (an empty image cell and no `images` key).
 
 **Prompt**
+**Playwright: required**
 > "Create a Google Doc from this HTML: `<table><tr><td>Before</td><td><img src=\"https://www.gstatic.com/images/branding/googlelogo/1x/googlelogo_color_92x30dp.png\"></td><td>After</td></tr></table>`"
 
 **Checks**
-- Call succeeds with no `error`, no timeout (guards specifically against the cursor-never-advances infinite-loop shape this could take if a future change lets an `Image` reach `Cell.children` without emitter-side handling — see `emitter.py`'s `_fill_children_recursive` cursor-walk comment)
-- The table's first and third cells show "Before"/"After" text; the second (image) cell is empty
-- `images` key is absent from the response (the image was never resolved at all — dropped at parse time, same as any other unsupported table-cell construct)
+- Call returns promptly, with no `error`
+- `images` has one entry, for the logo URL, with no `error`
+- `get_doc_structure`: cell 0 reads "Before" and cell 2 "After"
+- Raw `documents().get()` read: cell 1's paragraph holds one `inlineObjectElement` and no text
+- Playwright: the Google logo shows in the middle cell
 
 **Cleanup:** delete the created doc
 
@@ -3676,6 +3703,18 @@ Run 2 (ash).
 
 **Result (2026-10-19) ❌ FAIL — v0.9.3 release pass**
 `oauth`: All of the case's own checks are met: no error, no images key, cells "Before" / "" / "After", no hang. However, the table-cell image is dropped silently, which is the open known limitation #1073. Recorded as FAIL under the known-limitation rule; v0.9.2 recorded PASS.
+
+**Result (2026-10-24) ✅ PASS — PR #1215 QA round 1 (Kit) @ 79f19d4**
+`kit`: create_doc returned promptly with no error, and `images` held one entry for the logo URL, with no `error`. `get_doc_structure`: cells `Before` / `` / `After`. Raw `documents().get()`: cell 1's paragraph holds one `inlineObjectElement` and no text. Playwright (`2026-10-24-tc-doc153.png`): the logo shows in the middle cell. Doc trashed.
+
+**Result (2026-10-24) ✅ PASS — PR #1215 QA round 2 (Kit) @ f9f6ee7**
+`kit`: create_doc returned with no error; `images` held one logo entry with no `error`. Raw read: cells `Before` / `[IMG]` / `After`. Doc trashed.
+
+**Result (2026-10-25) ✅ PASS — PR #1215 QA round 3 (Kit) @ e3a6e69**
+`kit`: no error; one logo entry with no `error`. Raw read: `Before` / `[IMG]` / `After`. Doc trashed.
+
+**Result (2026-10-25) ✅ PASS — PR #1215 QA round 4 (Kit) @ 5d2b4e8**
+`kit`: no error; one logo entry with no `error`. Raw read: `Before` / `[IMG]` / `After`. Doc trashed.
 
 ---
 
@@ -6067,3 +6106,216 @@ Re-run after the `develop` merge (with #1088 and the google-auth bump), on a scr
 
 **Result (2026-10-19) ⚠️ PARTIAL — v0.9.3 release pass**
 `jay`: #1056 regression. No error. Export has `> - Quoted item one`, `>   - Quoted nested`, `> - Quoted item two`, `> 1. Quoted numbered`, each with one `>`; the plain items have none. Playwright (`tc-doc229.png`): "Quoted item one" glyph sits about 48px (36pt) right of "plain", "Quoted nested" right of "plain nested", with a gray bar left of each quoted glyph. Not run: the raw `documents().get()` indent/borderLeft read (scratch script).
+
+---
+
+### TC-DOC230: Adjacent separate quotes render as separate quotes, with space around each ⚠️ destructive
+**Purpose:** Regression test for #1098. Docs joins the left borders of adjacent paragraphs with the same border and indents, so two separate quotes in a row showed one continuous bar, and a quote touched the paragraphs around it. The emitter now puts a collapsed, unbordered paragraph between two separate quotes and gives each quote 8pt where it meets other content; a separator is spaced on one side only, below the quote before it. A quoted heading keeps its named style's own spacing. HTML input, because Python-Markdown merges `> a`, a blank line, `> b` into one quote before the emitter sees it (#1116). The quoted heading was added in round 2 (PR #1199 QA round 1 found its HEADING_1 spacing overwritten).
+
+**Prompt**
+**Playwright: required**
+1. `write_doc_content(doc_id="{DOC_ID}", content="<p>Before.</p><blockquote><p>Quote one</p></blockquote><blockquote><p>Quote two</p></blockquote><blockquote><p>Same quote, first</p><p>Same quote, second</p></blockquote><blockquote><blockquote><p>Inner one</p></blockquote><blockquote><p>Inner two</p></blockquote></blockquote><blockquote><ul><li>List one A</li><li>List one B</li></ul></blockquote><blockquote><ul><li>List two A</li></ul></blockquote><p>After.</p><blockquote><h1>Quoted H1</h1><p>Quoted para</p></blockquote><h1>Unquoted H1</h1>", content_format="html")`
+2. `get_doc_structure(doc_id="{DOC_ID}")`
+
+**Checks**
+- Step 1 returns no `error` key
+- Step 2 (and a raw `documents().get()` read, `paragraphStyle`): an empty paragraph with no `borderLeft` sits between "Quote one" and "Quote two", between "Quote two" and "Same quote, first", between "Same quote, second" and "Inner one", between "Inner one" and "Inner two", between "Inner two" and "List one A", and between "List one B" and "List two A". None sits between "Same quote, first" and "Same quote, second", or between "List one A" and "List one B"
+- Raw read: of the quoted paragraphs, only "Quote one" has `spaceAbove` 8pt (each other quote follows a separator, which is spaced on one side only). "Quote one", "Quote two", "Same quote, second", "Inner one", "Inner two", "List one B", "List two A", and "Quoted para" each have `spaceBelow` 8pt. "Same quote, first" has no `spaceBelow` and "Same quote, second" no `spaceAbove`
+- Raw read: "Quoted H1" has `namedStyleType` `HEADING_1`, a `borderLeft`, and no `spaceAbove`/`spaceBelow` of its own (it uses HEADING_1's)
+- "List one A"/"List one B" share a `listId`; "List two A" has a different one
+- 🔍 Playwright: "Quote one" and "Quote two" each have their own gray bar with a visible gap between the bars; "Same quote, first" and "Same quote, second" share one unbroken bar; "Inner one" and "Inner two" have separate bars; the two quoted lists have separate bars. "Before." and "After." have visible space between them and the quotes next to them. No empty line shows where a separator paragraph is: the gap between two separate quotes is about the same as between "Before." and "Quote one" (baseline to baseline, within a few px). The gap above "Quoted H1" is HEADING_1's own and visibly larger than the gap above "Quote one" (round 1 found it shrunk to the 8pt quote gap)
+
+**Cleanup:** write fixture content back
+
+**Result (2026-10-24) ❌ FAIL — PR #1199 QA round 1 (Kit) @ 7811da8**
+`kit`, on a scratch doc in the fixture folder (deleted afterward), not the fixture doc. Step 1: no error. Step 2 and raw read: an unbordered empty paragraph (`lineSpacing` 1, 1pt font) sits at each of the six expected places and nowhere else. `spaceAbove`/`spaceBelow` 8pt are exactly as listed. "List one A"/"B" share a `listId` and "List two A" has a different one. Playwright (`2026-10-24-tc-doc230.png`): each separate quote has its own bar, "Same quote, first/second" share one, and no separator line is visible. **Fails the last check:** baseline to baseline, "Before."→"Quote one" is 31px but "Quote one"→"Quote two" is 41px (a normal line is about 19px). Between two separate quotes, the 8pt `spaceBelow` and 8pt `spaceAbove` add up to about double the gap a quote has from plain text. Sent back on PR #1199. Side observation: `get_doc_as_markdown` reads each separator back as two extra blank lines between the quotes (`> Quote one\n\n\n\n> Quote two`). The Markdown is still valid.
+
+**Result (2026-10-24) ✅ PASS — PR #1199 QA round 2 (Kit) @ a211c94**
+`kit`, on a scratch doc in the fixture folder (deleted afterward), not the fixture doc, with the round-2 input. Step 1: no error. Raw read: the six unbordered collapsed separators are in place, and there is none inside "Same quote" or between "List one A"/"B". Of the quoted paragraphs, only "Quote one" has `spaceAbove` 8pt. `spaceBelow` 8pt is on exactly the listed ones, "Quoted para" included. "Quoted H1" is `HEADING_1` with a border and no `spaceAbove`/`spaceBelow` of its own. The list IDs are as expected. Playwright (`2026-10-24-tc-doc230-r2.png`): every separate quote has its own bar and "Same quote" has one bar. Baseline to baseline, "Before."→"Quote one" is 31px and "Quote one"→"Quote two" is 30px. The gap above "Quoted H1" is HEADING_1's, visibly larger than the one above "Quote one".
+
+---
+
+### TC-DOC231: Consecutive code blocks and consecutive tables stay separate ⚠️ destructive
+**Purpose:** Regression test for #1098. Two code blocks in a row read as one block, since neither had any spacing, and two tables in a row touched and read as one table, since the paragraph Docs requires between them was collapsed like the one before every table. Code blocks now get 8pt above and below, and the paragraph between two tables keeps its height. The numbered list after the tables was added in round 2: `insertTable` gives the paragraphs before each table the following block's style (#1097), so at full height the one between the tables showed as an empty numbered item, and the list started at 3 (PR #1199 QA round 1).
+
+**Prompt**
+**Playwright: required**
+1. `write_doc_content(doc_id="{DOC_ID}", content="Before.\n\n```\ncode one\nsecond line\n```\n\n```\ncode two\n```\n\nBetween.\n\n| K | V |\n|---|---|\n| k1 | v1 |\n\n| K | V |\n|---|---|\n| k2 | v2 |\n\n1. numbered one\n2. numbered two\n", content_format="markdown")`
+2. `get_doc_structure(doc_id="{DOC_ID}")`
+
+**Checks**
+- Step 1 returns no `error` key
+- Raw `documents().get()` read: the "code one…second line" paragraph (one paragraph, lines joined by a soft break) and the "code two" paragraph each have `spaceAbove` and `spaceBelow` 8pt; "Before." and "Between." have neither
+- Step 2 shows two tables with exactly one empty paragraph between them. Raw read: that paragraph's `namedStyleType` is `NORMAL_TEXT`, and it has no `lineSpacing` 1 and no 1pt `fontSize`. The empty paragraph before the first table is still collapsed (`lineSpacing` 1, 1pt `fontSize`)
+- Raw read: neither empty paragraph has a `bullet`, an `indentStart`/`indentFirstLine`, or a `borderLeft`
+- 🔍 Playwright: the two code blocks show a visible gap between them, and between each and the paragraph next to it. The two tables show a blank line between them (the first table's bottom border doesn't touch the second's top border), with no list glyph on it. No visible blank line shows above the first table. The list after the tables is numbered "1." and "2." Not a check here: both tables sit indented to the list's indent, which comes from the tables' own cells and is #1097
+
+**Cleanup:** write fixture content back
+
+**Result (2026-10-24) ✅ PASS — PR #1199 QA round 1 (Kit) @ 7811da8**
+`kit`, on a scratch doc in the fixture folder (deleted afterward), not the fixture doc. Step 1: no error. Raw read: "code one\vsecond line" (one paragraph) and "code two" each have `spaceAbove`/`spaceBelow` 8pt, and "Before." and "Between." have neither. Exactly one empty paragraph sits between the two tables. It is `NORMAL_TEXT`, with no `lineSpacing` and no font size set. The paragraph before the first table is still collapsed (`lineSpacing` 1, 1pt). Playwright (`2026-10-24-tc-doc231.png`): the code blocks have visible gaps, a blank line separates the tables, and nothing is visible above the first table. Beyond this case's checks, a probe on the same head found that when a list follows two tables, the paragraph between them keeps the list's bullet and shows a visible empty numbered item. It was sent back on PR #1199.
+
+**Result (2026-10-24) ✅ PASS — PR #1199 QA round 2 (Kit) @ a211c94**
+`kit`, on a scratch doc in the fixture folder (deleted afterward), not the fixture doc, with the round-2 input. Step 1: no error. Raw read: both code paragraphs have 8pt above and below, and "Before." and "Between." have neither. Exactly one empty paragraph sits between the tables. It is `NORMAL_TEXT` at full height. The paragraph before the first table is collapsed (`lineSpacing` 1, 1pt). Neither empty paragraph has a `bullet`, an indent or a `borderLeft`. Playwright (`2026-10-24-tc-doc231-r2.png`): the code blocks have visible gaps, and a blank line with no glyph separates the tables. Nothing is visible above the first table, and the list numbers "1." and "2." Both tables still sit indented to the list's indent. That is outside this case's checks and tracked in open #1097. Probe on the same head (`2026-10-24-pr1199-r2-probe.png`): with a quote after two tables, neither empty paragraph has a border or indent. A quote ending in an H2 is kept apart from the next quote by a separator, with the H2's own spacing intact.
+
+---
+
+### TC-DOC232: A table doesn't take the style of the block after it ⚠️ destructive
+**Purpose:** Regression test for #1097. `insertTable` gives a table its left indent, and every empty cell its text style, from the paragraph at the insertion point, which was the start of the next block. A table before a list or quote sat indented to it, and one before a bold, Courier New, or heading-styled first character showed that style in every cell (r13, r15, TC-MD202/203, TC-MD402). Each table is now inserted at a plain placeholder paragraph of its own, deleted right after.
+
+**Prompt**
+**Playwright: required**
+1. `write_doc_content(doc_id="{DOC_ID}", content="## Before\n\n| Day | City |\n|---|---|\n| Mon | Lisbon |\n\n**Hotel:** Casa do Bairro\n\n| Day | City |\n|---|---|\n| Tue | Porto |\n\n> **Note:** quoted text\n\n| Day | City |\n|---|---|\n| Wed | Braga |\n\n```\ncode here\n```\n\n| Day | City |\n|---|---|\n| Thu | Faro |\n\n#### After\n\n| K | V |\n|---|---|\n| k1 | v1 |\n\n| K | V |\n|---|---|\n| k2 | v2 |\n\n1. numbered one\n2. numbered two\n", content_format="markdown")`
+2. `get_doc_as_markdown(doc_id="{DOC_ID}")`
+
+**Checks**
+- Step 1 returns no `error` key
+- Raw `documents().get()` read: there are six tables. In each, the header cells' runs have `bold` true and nothing else set in `textStyle`, and the body cells' runs have an empty `textStyle` (no `bold`, no `weightedFontFamily`, no `foregroundColor`, no `fontSize`)
+- Raw read: "Hotel:" is still bold, "Note:" is bold inside a paragraph with a `borderLeft`, "code here" is Courier New, "After" is `HEADING_4`, and "numbered one"/"numbered two" share a `listId`
+- Raw read: no empty paragraph sits directly after any table. Each table is followed by its own next block's first paragraph, except the first of the two `K | V` tables, which is followed by the one full-height empty paragraph between them (TC-DOC231)
+- Drive HTML export (`export_file` to `text/html`, or `files().export`): no `<table>` has a `margin-left` in its `style`
+- Step 2: every body cell reads as plain text (no `**`, no backticks)
+- 🔍 Playwright: all six tables sit at the left margin, aligned with "Before" and "Hotel:", including the ones before the quote and before the numbered list. Only the header rows are bold; body cells are in the body font and color, not gray, not monospace. The numbered list starts at "1."
+
+**Cleanup:** write fixture content back
+
+**Result (2026-10-24) ✅ PASS — PR #1201 QA round 1 (Kit) @ cfc5a32**
+`kit`, on a scratch doc in the fixture folder (trashed afterward), not the fixture doc. Step 1: no error. Raw read: six tables; header runs `bold` only, body runs an empty `textStyle`. "Hotel:" bold, "Note:" bold with a `borderLeft`, "code here" Courier New, "After" `HEADING_4`, both numbered items share one `listId`. No empty paragraph follows any table, except the full-height one between the two `K | V` tables. HTML export: no `<table>` has `margin-left`. Step 2: body cells plain. Playwright (`2026-10-24-tc-doc232.png`): the tables are at the left margin, with only the header rows bold. Probes on the same head, all outside this case's checks: a table between two numbered items (`1. step one`, table, `2. step two`) exports with `margin-left:36pt`, because the list's `createParagraphBullets` range covers the placeholder. A table inside a quote renders at margin 0, between two indented, bordered quote paragraphs. `write_doc_content` over a doc whose final paragraph is an indented `HEADING_2` turns every replaced paragraph into `HEADING_2`, and a merged-away cell's empty paragraph gets `fontSize` 16. 1x1, 1x3, and 3x5-with-colspan HTML tables each lose their placeholder cleanly.
+
+**Result (2026-10-24) ✅ PASS — PR #1201 QA round 2 (Kit) @ f73ba2f**
+`kit`, re-run on a scratch doc in the fixture folder (trashed afterward). Every raw-read, HTML-export, and Markdown check holds as in round 1: six tables, none with `margin-left`, header runs `bold` only, body runs empty, and both numbered items share one `listId`. The round-1 probe gaps are covered by TC-DOC233.
+
+---
+
+### TC-DOC233: A table between list items, a table inside a quote, and a doc that ended in a heading ⚠️ destructive
+**Purpose:** Regression test for the three gaps PR #1201 QA round 1 found beyond TC-DOC232 (#1097). A table between two numbered items sat inside the list's one `createParagraphBullets` range, so its placeholder was bulleted and the table took the list's indent. A table inside a quote lost the quote's indent once it stopped taking the next quote paragraph's. And `write_doc_content` kept the doc's final paragraph style through the clear, so a doc that ended in an indented heading turned the new content, the table placeholder included, into that heading.
+
+**Prompt**
+**Playwright: required**
+1. `write_doc_content(doc_id="{DOC_ID}", content="Old body\n\nOld heading\n", content_format="markdown")`
+2. `get_doc_structure(doc_id="{DOC_ID}")`, and note the "Old heading" paragraph's `start_index` and the last paragraph's `end_index`. The last paragraph is the empty one after "Old heading", and it's the one whose style survives the clear, so styling "Old heading" alone doesn't exercise the fix
+3. `style_doc_range(doc_id="{DOC_ID}", ranges=[{"start_index": <Old heading start_index>, "end_index": <last paragraph end_index>, "named_style_type": "HEADING_2"}])`
+4. `write_doc_content(doc_id="{DOC_ID}", content="Intro para\n\n1. step one\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n2. step two\n\n> quote a\n>\n> | Q | R |\n> |---|---|\n> | 3 | 4 |\n>\n> quote b\n\nAfter **bold**\n", content_format="markdown")`
+5. `get_doc_as_markdown(doc_id="{DOC_ID}")`
+
+**Checks**
+- Steps 1, 3, and 4 return no `error` key
+- Raw `documents().get()` read after step 4: no paragraph is `HEADING_2`. "Intro para" and "After bold" are `NORMAL_TEXT` with no `indentStart`
+- Raw read: "step one" and "step two" share one `listId`; the empty paragraph before the `A | B` table has no `bullet`
+- Raw read: both tables' header runs have `bold` true and nothing else in `textStyle`; body runs have an empty `textStyle` (no `fontSize` either)
+- Raw read: "quote a" and "quote b" each have a `borderLeft` and a 36pt `indentStart`
+- Drive HTML export (`export_file` to `text/html`, or `files().export`): the `A | B` table's `<table>` style has no `margin-left`; the `Q | R` table's has `margin-left:36pt`. The list's two `<ol>` elements share one `lst-kix_…` class, with `start="1"` and `start="2"`
+- Step 5: "step one" and "step two" read as items 1 and 2
+- 🔍 Playwright: the `A | B` table sits at the left margin, aligned with "Intro para", not with the list text. The list numbers "1." and "2." The `Q | R` table is indented to the quote text's left edge, with no gray bar beside it. Nothing reads as a heading
+
+**Cleanup:** write fixture content back
+
+**Result (2026-10-24) ⚠️ PARTIAL — PR #1201 QA round 2 (Kit) @ f73ba2f**
+`kit`, on a scratch doc in the fixture folder (trashed afterward). Step 3 was run over "Old heading" through the final empty paragraph, which was also bulleted: as first written, step 3 styled only "Old heading", which isn't the paragraph that survives the clear (steps 2–3 fixed in this round). Steps 1, 3, 4: no error. Raw read after step 4: no `HEADING_2`; "Intro para" and "After bold" `NORMAL_TEXT` with no indent; "step one"/"step two" share one `listId`; the empty paragraph before `A | B` has no bullet; header runs `bold` only, body runs empty. "quote a"/"quote b" have a `borderLeft` and 36pt. HTML export: `A | B` has no `margin-left`, `Q | R` has `margin-left:36pt`; the two `<ol>` share one `lst-kix_` class with `start="1"`/`start="2"`. **Step 5 fails:** `get_doc_as_markdown` returns `1. step two`, since the read side writes every numbered item as `1.` and the table ends the Markdown list (#1208; outside PR #1201's diff). Playwright (`2026-10-24-tc-doc233.png`): `A | B` at the margin, list numbered 1 and 2, `Q | R` indented to the quote text with no bar, no headings. Probes (`create_doc`, HTML): a quoted table as the doc's first element exports at 36pt, one in a depth-2 quote at 72pt, and one inside a quoted list at 36pt (the quote's indent). A colspan table in a quote is clean.
+
+**Result (2026-10-25) ⚠️ PARTIAL — PR #1234 QA round 1 (Sky) @ 79a7a38, step 5 only**
+`sky`. Only step 5 was in scope for #1208. Step 4's content was written with `create_doc(content_format="markdown")` to a scratch doc (trashed afterward), not with `write_doc_content` over the fixture. Steps 1–3, the raw/HTML checks and Playwright were not re-run. Step 5: `get_doc_as_markdown` returns `1. step one`, the `A | B` table, then `2. step two`, so the #1208 failure from the 2026-10-24 round is fixed.
+
+**Result (2026-10-25) ⚠️ PARTIAL — PR #1234 QA round 2 (Sky) @ 2af4b0b, step 5 only**
+`sky`, after `/mcp reconnect`, with the same scope and method as round 1 (scratch doc, trashed afterward). Step 5: `1. step one`, the `A | B` table, `2. step two`.
+
+---
+
+### TC-DOC234: Table-cell images: text around one, a linked one, an unreachable one, and nested tables ⚠️ requires-oauth ⚠️ destructive
+**Purpose:** Regression test for #1073 beyond TC-DOC153's single image-only cell. A cell image goes in during the table fill, so this covers what the fill has to get right: an image's offset among the cell's text, two adjacent images keeping source order, a link on the image, an unfetchable image dropped without losing the rest of the table, and the position of a nested table after an image in the same cell.
+
+**Prompt**
+**Playwright: required**
+1. `create_doc(title="TC-DOC234", content=<HTML below>, content_format="html")`, where the HTML is (`LOGO` = `https://www.gstatic.com/images/branding/googlelogo/1x/googlelogo_color_92x30dp.png`):
+   ```html
+   <table>
+   <tr><td>Text then <img src="LOGO"> then text</td><td><img src="LOGO"><img src="LOGO"></td><td>After</td></tr>
+   <tr><td><a href="https://example.com/linked"><img src="LOGO"></a></td><td>bad: <img src="https://example.invalid/nope.png"> end</td><td>plain</td></tr>
+   </table>
+   <table><tr><td>Lead <img src="LOGO"><table><tr><td><img src="LOGO"> inner</td></tr></table>tail <img src="LOGO"></td></tr></table>
+   <p>Final paragraph</p>
+   ```
+2. `create_doc(title="TC-DOC234 md", content="| Name | Logo |\n|---|---|\n| Two | ![a](LOGO) and ![b](LOGO) |\n\ndone\n", content_format="markdown")`
+3. `get_doc_as_markdown(doc_id=<step 2's docId>)`
+
+**Checks**
+- Steps 1 and 2 return no `error` key
+- Step 1's `images` has 8 entries. The `example.invalid` one has an `error` starting `doc edit failed:` and naming the image fetch; the other 7 have no `error`
+- Raw `documents().get()` read of step 1's doc, writing each `inlineObjectElement` as `[IMG]`: row 0 cells read `Text then [IMG] then text`, `[IMG][IMG]`, `After`. Row 1 cells read `[IMG]`, `bad:  end` (two spaces, no image), `plain`. Row 1 cell 0's `inlineObjectElement` has `textStyle.link.url` `https://example.com/linked`
+- Raw read, second table's one cell: a paragraph `Lead [IMG]`, then the nested table, then a paragraph `tail [IMG]`. The nested table's one cell reads `[IMG] inner`
+- "Final paragraph" is present after the second table
+- Step 3: the `Two` row's cell holds two images with ` and ` between them
+- 🔍 Playwright (step 1's doc): a logo shows in every cell the raw read shows `[IMG]` in, and none in the `bad:` cell. Text sits on the expected side of each logo; the nested table sits between "Lead" and "tail"
+
+**Cleanup:** trash both docs
+
+**Result (2026-10-24) ✅ PASS — PR #1215 QA round 1 (Kit) @ 79f19d4**
+`kit`: steps 1 and 2 returned no error. Step 1's `images` held 8 entries: `example.invalid` had `doc edit failed: insertInlineImage: There was a problem retrieving the image…`, and the other 7 had no error. Raw read: row 0 is `Text then [IMG] then text` / `[IMG][IMG]` / `After`; row 1 is `[IMG]` (link `https://example.com/linked`) / `bad:  end` / `plain`. The second table reads `Lead [IMG]`, then the nested table (`[IMG] inner`), then `tail [IMG]`; "Final paragraph" follows. Step 2 raw read: `[IMG] and [IMG]`. Step 3: the `Two` row is `![](…) and ![](…)`. Playwright (`2026-10-24-tc-doc234.png`): logos match the raw read, none in `bad:`, and the nested table sits between Lead and tail. Probe (not a Check): a local-path PNG in a top-level cell and in a nested cell, on the Shared Drive default folder, uploaded, embedded at the right offset (`local: [IMG] end`, `nested [IMG]`), and reported `shared: false` after revoke. Both docs and both uploads trashed.
+
+**Result (2026-10-24) ✅ PASS — PR #1215 QA round 2 (Kit) @ f9f6ee7**
+`kit`: steps 1–2 returned no error; step 1's `images` held 8 entries, with only `example.invalid` carrying `doc edit failed:`. The raw reads match round 1 exactly, row by row, including the linked image and the nested table between `Lead [IMG]` and `tail [IMG]`; step 2 reads `[IMG] and [IMG]`. Probe (not a Check), batch split: one row of four cells, `A1 <bad> x` / `B1 <logo> y` / `C1 <bad> z` / `D1 <logo> w`, so two unfetchable images fall in one cell-fill batch. Both bad ones were reported with `doc edit failed:`, and the raw read is `A1  x` / `B1 [IMG] y` / `C1  z` / `D1 [IMG] w`, every good image at its offset. Docs trashed.
+
+**Result (2026-10-25) ✅ PASS — PR #1215 QA round 3 (Kit) @ e3a6e69**
+`kit`: steps 1–2 returned no error; 8 entries, with only `example.invalid` in error. The raw reads match rounds 1–2 row by row, and step 2 reads `[IMG] and [IMG]`. Probes (not Checks), one doc. Body retry, now on the shared `batch_retry` loop: five body paragraphs with three unfetchable images and a linked logo after them read `B1  one` / `B2 [IMG] two` / `B3  three` / `B4  four` / `B5 [IMG link=https://example.com/l] five`. Cell batch split: `A1  x` / `B1 [IMG] y` / `C1  z` / `D1 [IMG] w`. An image-only cell in a table after an `<h1>` carries no `fontSize` and renders the same height as its text neighbor (`2026-10-25-pr1215-r3-probe.png`). Docs trashed.
+
+**Result (2026-10-25) ✅ PASS — PR #1215 QA round 4 (Kit) @ 5d2b4e8**
+`kit`: steps 1–2 returned no error, and the `images` entries match round 3. The raw reads match rounds 1–3 row by row, and step 2 reads `[IMG] and [IMG]`. Playwright (`2026-10-25-tc-doc234-r4.png`) matches. Probes (not Checks): the body retry with three unfetchable images plus a linked logo, and the cell batch split, give the same raw reads as round 3. Docs trashed.
+
+---
+
+### TC-DOC235: Line breaks and block content inside a table cell survive HTML parsing ⚠️ requires-oauth ⚠️ destructive
+**Purpose:** Regression guard for PR #1215 round 2. Collapsing source whitespace in a cell, done to stop indentation before a nested table from becoming empty paragraphs, must not merge a cell's own block content or a `<pre>`'s lines, and must not leak a space past the table.
+
+**Prompt**
+1. `create_doc(title="TC-DOC235", content=<HTML below>, content_format="html")`:
+   ```html
+   <table><tr><td><p>para one</p>
+   <p>para two</p></td><td><pre>line1
+     line2</pre></td><td><a href="https://example.com/x">linked
+   </a>after</td></tr></table>
+   <table><tr><td>
+     <table><tr><td>inner</td></tr></table>
+   </td></tr></table>
+   <p>End</p>
+   ```
+
+**Checks**
+- No `error`
+- Raw `documents().get()` read, first table: cell 0 has `para one` and `para two` as two separate lines, not `para one para two`. Cell 1 keeps `line1` and `line2` on separate lines. Cell 2's `linked` keeps its link, and the source newline after it stays inside the link, as on `develop`. That newline is a line break, so `after` is on its own line: it's the cell's existing source-newline behavior, tracked separately, and not what this case checks
+- Second table: the outer cell holds the nested table with no paragraph made only of indentation spaces before or after it
+- `End` is its own paragraph after the second table
+
+**Cleanup:** trash the doc
+
+**Result (2026-10-24) ❌ FAIL — PR #1215 QA round 2 (Kit) @ f9f6ee7**
+`kit`: probe run of the same shapes (`<p>`, `<pre>`) in one `create_doc`. Raw read: cell 0 reads `para one para two` and the `<pre>` cell reads `line1 line2`, so both merged onto one line. On `develop`, `html_to_ast` keeps them as `a\nb` and `x\n  y`. The nested-table cell is correct (no indentation paragraphs). Sent back on PR #1215 round 2. Doc trashed.
+
+**Result (2026-10-25) ✅ PASS — PR #1215 QA round 3 (Kit) @ e3a6e69**
+`kit`: no error. Raw read: cell 0 is `para one` / `para two` (two paragraphs), cell 1 is `line1` / `  line2`, and cell 2's `linked` carries `https://example.com/x`. The second table's outer cell holds only the structural empty paragraphs around the nested table (`inner`), and `End` follows. Playwright (`2026-10-25-tc-doc235.png`) matches. Cell 2's check was reworded this round: it had assumed the source newline after `linked` collapses to a space, but on `develop` and here it's a line break (existing behavior, tracked separately). The newline itself is now unlinked where `develop` kept it in the link, which is sent back on PR #1215 round 3. Doc trashed.
+
+**Result (2026-10-25) ✅ PASS — PR #1215 QA round 4 (Kit) @ 5d2b4e8**
+`kit`: no error. Raw read: `para one` / `para two`, `line1` / `  line2`, and `linked` (link `https://example.com/x`) then `after`. The second table holds only the structural empty paragraphs around `inner`. Probe (added cell, not a Check): `<td>\n  Intro text\n  <table>…nested…</table>\n  tail\n</td>` reads `Intro text` / nested table / `tail`, with no stray paragraphs. The newline after `linked` reads unlinked in the doc although the parser now keeps it in the link (`html_to_ast`: `('\n', 'http://u')`). It's the paragraph's end marker, which Docs doesn't link. Playwright (`2026-10-25-tc-doc235-r4.png`) matches. Doc trashed.
+
+---
+
+### TC-DOC236: `get_doc_as_markdown` numbers each ordered item as Docs does, across an interrupting table and nested sublists (#1208) ⚠️ requires-oauth ⚠️ destructive
+**Purpose:** Regression test for #1208. The export wrote every numbered item as `1.`, so an item that continues a Docs list after a table read back as a second list starting at 1. It now writes each item's ordinal in its Docs list: counted per `listId` and nesting level, continuing across an interrupting block, and restarting a sublist under each new parent item. The ticket's own case (a table between two items) is TC-DOC233 step 5; this one adds nested sublists and a second, separate list.
+
+**Prompt**
+1. `create_doc(title="TC-DOC236", content="1. a\n    1. a1\n    1. a2\n1. b\n    1. b1\n\n| t |\n|---|\n| c |\n\n1. c\n\nAside\n\n1. x\n1. y\n", content_format="markdown")`
+2. `export_file(file_id=<docId>, export_format="txt")`
+3. `get_doc_as_markdown(doc_id=<docId>)`
+
+**Checks**
+- Step 1 returns no `error` key
+- Step 2, Docs' own numbering: `1. a`, `1. a1`, `2. a2`, `2. b`, `1. b1`, then the table, `3. c`, `Aside`, `1. x`, `2. y`. If Docs numbers any item differently, the case's premise has changed: report it rather than checking step 3 against this list
+- Raw `documents().get()` read: `a` through `c` share one `listId`, and `x`/`y` share a different one
+- Step 3: every list item's marker matches step 2's number for that item, including `3. c` after the table and `1. x` starting the second list. (The sublist's indent is #1128, not checked here)
+
+**Cleanup:** trash the doc
+
+**Result (2026-10-25) ✅ PASS — PR #1234 QA round 1 (Sky) @ 79a7a38**
+`sky`, doc created in the default folder (trashed afterward). Step 1: no error. Step 2 txt export: `1. a`, `1. a1`, `2. a2`, `2. b`, `1. b1`, the table, `3. c`, `Aside`, `1. x`, `2. y`. Docs' txt export writes level 1 as decimal (`1. a1`), not the preset's alpha glyph. `get_doc_structure` bullets: `a`/`a1`/`a2`/`b`/`b1`/`c` share one `listId`, and `x`/`y` share a different one. Step 3: `1. a`, `1. a1`, `2. a2`, `2. b`, `1. b1`, `3. c` after the table, `1. x`, `2. y`, all matching step 2.
+
+**Result (2026-10-25) ✅ PASS — PR #1234 QA round 2 (Sky) @ 2af4b0b**
+`sky`, after `/mcp reconnect`, on a fresh doc (trashed afterward). Steps 1–3 read the same as round 1: txt export `1. a`, `1. a1`, `2. a2`, `2. b`, `1. b1`, the table, `3. c`, `Aside`, `1. x`, `2. y`. `a`–`c` share one `listId` and `x`/`y` another. `get_doc_as_markdown` matches item for item. No sublist here starts past 1, so the new `1.` fallback isn't exercised live: the API can't write `startNumber`, and the case is unit-tested.
