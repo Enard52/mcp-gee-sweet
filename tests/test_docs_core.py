@@ -481,6 +481,49 @@ class TestLooseListItemKeepsItsBullet:
         nodes = html_to_ast("<ul><li><p>a</p><p>b</p></li></ul>")
         assert [type(n) for n in nodes] == [BulletItem, Paragraph]
 
+    # Once the `<li>` resumes after a nested block, its first paragraph is
+    # already used, so the next `<p>` must not join the item again: that would
+    # emit it as a new bullet (or a new number in an ordered list).
+
+    def test_paragraph_after_a_nested_list_is_not_a_new_item(self):
+        nodes = html_to_ast(_md_to_html("- a\n    - b\n\n    c\n"))
+        assert [type(n) for n in nodes] == [BulletItem, BulletItem, Paragraph]
+        assert [n.depth for n in nodes[:2]] == [0, 1]
+        assert nodes[2].runs[0].text == "c"
+
+    def test_third_paragraph_in_an_item_is_not_a_new_item(self):
+        nodes = html_to_ast(_md_to_html("- a\n\n    b\n\n    c\n"))
+        assert [type(n) for n in nodes] == [BulletItem, Paragraph, Paragraph]
+        assert [n.runs[0].text for n in nodes] == ["a", "b", "c"]
+
+    def test_paragraph_after_a_quote_in_an_ordered_item_is_not_a_new_number(self):
+        nodes = html_to_ast(_md_to_html("1. a\n\n    > q\n\n    c\n"))
+        assert [type(n) for n in nodes] == [BulletItem, Paragraph, Paragraph]
+        assert nodes[0].ordered is True
+        assert [n.blockquote_depth for n in nodes] == [0, 1, 0]
+        assert nodes[2].runs[0].text == "c"
+
+    def test_paragraph_after_a_code_block_in_an_ordered_item_is_not_a_new_number(self):
+        # An indented code block: python-markdown doesn't parse a fence inside a
+        # list item.
+        nodes = html_to_ast(_md_to_html("1. a\n\n        x\n\n    c\n"))
+        assert [type(n) for n in nodes] == [BulletItem, Paragraph, Paragraph]
+        assert nodes[0].ordered is True
+        assert nodes[2].runs[0].text == "c"
+
+    def test_loose_list_after_a_resumed_item_keeps_its_bullets(self):
+        # The guard only stops a resumed item's `<p>`; the next item's first
+        # paragraph is still transparent.
+        nodes = html_to_ast(_md_to_html("- a\n    - b\n\n    c\n\n- d\n\n- e\n"))
+        assert [type(n) for n in nodes] == [
+            BulletItem,
+            BulletItem,
+            Paragraph,
+            BulletItem,
+            BulletItem,
+        ]
+        assert [n.runs[0].text for n in nodes] == ["a", "b", "c", "d", "e"]
+
     def test_named_style_paragraph_inside_an_item_keeps_its_style(self):
         nodes = html_to_ast('<ul><li><p data-style="title">T</p></li></ul>')
         assert [type(n) for n in nodes] == [NamedBlock]

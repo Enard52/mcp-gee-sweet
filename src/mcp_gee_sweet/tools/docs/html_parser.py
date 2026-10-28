@@ -700,7 +700,10 @@ class _AstParser(HTMLParser):
             # loose item's text in `<p>`, so any blank line between items hits
             # this. Only the item's first paragraph stays transparent; a second
             # one still interrupts as before, because "content under a list
-            # item" is #1094's open question rather than this one's. A
+            # item" is #1094's open question rather than this one's. So does any
+            # `<p>` once the `<li>` has resumed after a nested list, quote, code
+            # block or paragraph: joining the resumed item would emit it as a
+            # new bullet, or a new number in an ordered list. A
             # `data-style` paragraph owns a NamedBlock identity, so it keeps
             # interrupting too.
             li_padding = "".join(self._run_buf)
@@ -708,6 +711,7 @@ class _AstParser(HTMLParser):
                 tag == "p"
                 and named_style is None
                 and self._block_tag == "li"
+                and not self._block_resumed
                 and not self._pending_runs
                 and (li_padding == "" or _is_formatting_whitespace(li_padding))
             ):
