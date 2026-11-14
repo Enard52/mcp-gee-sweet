@@ -26,6 +26,9 @@ style fields.
 `style_doc_range` call carrying only text-style fields. Setting text styles alone never
 takes the `namedStyleType` path.
 
+---
+
+### Blank paragraph before every table
 
 **What:** A blank paragraph always appears in the document structure immediately before each
 table, even when none was written in the source HTML/Markdown.
