@@ -2922,7 +2922,7 @@ def register(tool):
         Note:
             A service account has no My Drive storage, so it can only upload files to a
             Shared Drive; a user identity (OAuth, or ADC with user credentials) can
-            use either, though ADC may also resolve to a service identity, which cannot.
+            use either. ADC can also resolve to a service identity, which has the same Shared Drive-only limit.
             Check server://auth-status for your current auth method.
         """
         lc = ctx.request_context.lifespan_context
@@ -3047,7 +3047,7 @@ def register(tool):
         Note:
             A service account has no My Drive storage, so it can only upload files to a
             Shared Drive; a user identity (OAuth, or ADC with user credentials) can
-            use either, though ADC may also resolve to a service identity, which cannot.
+            use either. ADC can also resolve to a service identity, which has the same Shared Drive-only limit.
             Check server://auth-status for your current auth method.
         """
         lc = ctx.request_context.lifespan_context
@@ -3116,7 +3116,7 @@ def register(tool):
         Note:
             A service account has no My Drive storage, so it can only upload files to a
             Shared Drive; a user identity (OAuth, or ADC with user credentials) can
-            use either, though ADC may also resolve to a service identity, which cannot.
+            use either. ADC can also resolve to a service identity, which has the same Shared Drive-only limit.
             Check server://auth-status for your current auth method.
         """
         lc = ctx.request_context.lifespan_context
