@@ -808,7 +808,7 @@ def register(tool):
         explicit nesting depth.
 
         Wraps the Docs API's createParagraphBullets/deleteParagraphBullets
-        requests, working around two confirmed-live API quirks:
+        requests:
 
         - createParagraphBullets is a no-op on a paragraph that's already
           part of a list — it neither changes the existing nesting level nor

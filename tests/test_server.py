@@ -72,7 +72,7 @@ class TestAllToolsAreAsync:
 _INTERNAL_REF_PATTERNS = (
     re.compile(r"(?<![0-9a-fA-F])#\d{2,5}(?![0-9a-fA-F])"),
     re.compile(r"PR #"),
-    re.compile(r"confirmed live", re.IGNORECASE),
+    re.compile(r"confirmed[- ]live", re.IGNORECASE),
 )
 
 
@@ -123,6 +123,7 @@ class TestToolDocstringsCarryNoInternalRefs:
         assert _internal_refs("Fixed in #432 by the maintainer.") == ["#432"]
         assert _internal_refs("the same class of bug PR #432 fixed") == ["#432", "PR #"]
         assert _internal_refs("Confirmed live 2026-07-18.") == ["Confirmed live"]
+        assert _internal_refs("two confirmed-live API quirks") == ["confirmed-live"]
         assert _internal_refs("see _DownloadCandidate's docstring") == []
 
     def test_detector_ignores_hex_colours_and_number_formats(self):
